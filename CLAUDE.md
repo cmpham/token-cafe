@@ -1,12 +1,12 @@
 # token-cafe
 
-A Rust desktop app that shows the Claude Code and Codex sessions on this machine as patrons of a pixel-art night café. Linux only so far.
+A Rust desktop app that shows the Claude Code and Codex sessions on this machine as patrons of a pixel-art night café. Linux only so far; macOS and Windows ports are wanted (the README lists what they need).
 
 ## Commands
 
 - `cargo build --release`, then `target/release/token-cafe` (live), `--demo` (fixed list showing every pose), `--print` (sessions and month total as text), `--scale N` (initial size, default 3x). Keys: 1-6 window size, f / F11 fullscreen, Esc leave fullscreen, q quit.
 - `cargo test`, `cargo clippy --all-targets` (kept warning-free), `cargo fmt` (`rustfmt.toml`: width 120).
-- After editing `design/cafe.js`: `node tools/gen_assets.mjs`.
+- After editing `design/cafe.js`: `node tools/gen_assets.mjs`, then `cargo run --release --example screenshots` to refresh the README images in `docs/`.
 
 ## Layout
 
@@ -15,6 +15,7 @@ A Rust desktop app that shows the Claude Code and Codex sessions on this machine
 - `src/collect/`: which sessions are live. `procfs.rs` is the only Linux-specific code.
 - `src/usage.rs`: this month's tokens and list-price dollars from both tools' transcripts.
 - `src/main.rs`: CLI and two feeder threads (sessions every 1 s, usage every 60 s) sending `Update`s over a channel. `src/app.rs`: the winit 0.30 + softbuffer 0.4 window.
+- `examples/screenshots.rs`: renders `docs/cafe.png`, `docs/night.png` and `docs/arrivals.gif` from the scene (the GIF stores only changed pixels per frame).
 
 ## How it behaves
 
@@ -28,4 +29,4 @@ A Rust desktop app that shows the Claude Code and Codex sessions on this machine
 
 ## Conventions
 
-- Demo data and tests use made-up project names; keep real session names out of the repo.
+- Demo data, tests and screenshots use made-up project names; keep real session names out of the repo.

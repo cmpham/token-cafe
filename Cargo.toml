@@ -15,3 +15,7 @@ winit = "0.30"
 
 [profile.dev]
 opt-level = 1       # the renderer is per-pixel; unoptimized frames are slow
+
+[dev-dependencies]
+gif = "0.14.2"
+png = "0.18.1"

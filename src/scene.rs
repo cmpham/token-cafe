@@ -269,7 +269,8 @@ pub fn shorten(name: &str, n: usize) -> String {
     if let Some((base, suf)) = name.rsplit_once('-') {
         let sl = suf.chars().count();
         if !base.is_empty() && (1..=3).contains(&sl) {
-            return base.chars().take(n - 1 - sl).collect::<String>() + "-" + suf;
+            let cut: String = base.chars().take(n - 1 - sl).collect();
+            return format!("{}-{suf}", cut.trim_end_matches(['-', '_', ' ']));
         }
     }
     name.chars().take(n).collect()
@@ -929,5 +930,18 @@ impl Scene {
         self.draw_overlays(&mut g);
         g.noclip();
         self.draw_message(&mut g, now);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shorten;
+
+    #[test]
+    fn shorten_keeps_the_suffix() {
+        assert_eq!(shorten("esp-ee", 8), "esp-ee");
+        assert_eq!(shorten("mithrandir-1c", 8), "mithr-1c");
+        assert_eq!(shorten("checkout-flow-1c", 12), "checkout-1c"); // no "checkout--1c"
+        assert_eq!(shorten("observability", 12), "observabilit");
     }
 }
