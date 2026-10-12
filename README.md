@@ -153,3 +153,5 @@ Codex details come from the matched root rollout. Claude transcript filenames mu
 The macOS app icon reuses the café patron head. To regenerate it on macOS, run `swift tools/generate_icon.swift`, then `iconutil -c icns assets/TokenCafe.iconset -o assets/TokenCafe.icns`, and rebuild the bundle.
 
 On macOS, double-click or double-tap a patron to open its existing Codex or Claude Desktop session. Single clicks still select or clear focus. CLI-only sessions without a desktop mapping cannot be opened this way. Claude navigation uses the installed Desktop app's `code/continue` route, which may change between versions.
+
+On macOS, a pinned café becomes 60% opaque while unfocused, so the window behind it remains visible. Focusing the café or turning off pinning restores full opacity.

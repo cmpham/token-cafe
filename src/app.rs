@@ -288,6 +288,26 @@ impl App {
         }
     }
 
+    fn update_opacity(&self, focused: bool) {
+        #[cfg(target_os = "macos")]
+        {
+            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            let Some(shown) = &self.shown else { return };
+            let Ok(handle) = shown.window.window_handle() else { return };
+            let RawWindowHandle::AppKit(handle) = handle.as_raw() else { return };
+            // SAFETY: Winit supplies a live NSView, held alive by `shown.window`.
+            // This method runs only on the AppKit event-loop (main) thread.
+            unsafe {
+                let view = &*handle.ns_view.as_ptr().cast::<objc2_app_kit::NSView>();
+                if let Some(window) = view.window() {
+                    window.setAlphaValue(if self.always_on_top && !focused { 0.6 } else { 1.0 });
+                }
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = focused;
+    }
+
     fn window_level(&self) -> WindowLevel {
         if self.always_on_top { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal }
     }
@@ -385,6 +405,7 @@ impl App {
                 self.always_on_top = !self.always_on_top;
                 s.window.set_window_level(self.window_level());
                 s.window.set_title(self.window_title());
+                self.update_opacity(s.window.has_focus());
             }
             Key::Character("f") | Key::Named(NamedKey::F11) => {
                 let full = if s.window.fullscreen().is_some() { None } else { Some(Fullscreen::Borderless(None)) };
@@ -434,7 +455,9 @@ impl ApplicationHandler for App {
         match made {
             Ok(s) => {
                 s.window.request_redraw();
+                let focused = s.window.has_focus();
                 self.shown = Some(s);
+                self.update_opacity(focused);
                 self.stale = true;
             }
             Err(e) => {
@@ -496,7 +519,11 @@ impl ApplicationHandler for App {
             WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. } => {
                 self.dragging_scrollbar = false;
             }
-            WindowEvent::Focused(false) => {
+            WindowEvent::Focused(focused) => {
+                self.update_opacity(focused);
+                if focused {
+                    return;
+                }
                 self.dragging_scrollbar = false;
                 self.touch_scroll = None;
                 self.tap = Tap::default();
