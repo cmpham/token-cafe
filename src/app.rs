@@ -16,7 +16,7 @@ use token_cafe::assets::{H, W};
 use token_cafe::scene::Scene;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 #[cfg(target_os = "linux")]
@@ -72,6 +72,12 @@ fn fit(w: usize, h: usize) -> Fit {
     Fit { k, ox: w.saturating_sub(W * k) / 2, oy: h.saturating_sub(H * k) / 2 }
 }
 
+fn frame_point(x: f64, y: f64, width: usize, height: usize) -> Option<(i32, i32)> {
+    let f = fit(width, height);
+    let (x, y) = ((x - f.ox as f64) / f.k as f64, (y - f.oy as f64) / f.k as f64);
+    (x >= 0.0 && y >= 0.0 && x < W as f64 && y < H as f64).then_some((x as i32, y as i32))
+}
+
 /// Paint one area of the frame into a w x h window buffer, scaled by the fit;
 /// a full paint also blacks out the letterbox. Returns the window pixels
 /// touched, or None when the area falls outside the window.
@@ -107,6 +113,68 @@ struct Shown {
     surface: Surface<Rc<Window>, Rc<Window>>,
 }
 
+#[derive(Default)]
+struct Tap {
+    contact: Option<(u64, f64, f64, bool)>,
+}
+impl Tap {
+    fn event(&mut self, id: u64, phase: TouchPhase, x: f64, y: f64) -> Option<(f64, f64)> {
+        if phase == TouchPhase::Started && self.contact.is_none() {
+            self.contact = Some((id, x, y, true));
+            return None;
+        }
+        let (active, sx, sy, valid) = self.contact.as_mut()?;
+        if *active != id {
+            *valid = false; // multitouch is not a tap
+            return None;
+        }
+        if (x - *sx).hypot(y - *sy) > 12.0 {
+            *valid = false;
+        }
+        match phase {
+            TouchPhase::Ended => {
+                let result = (*valid).then_some((x, y));
+                self.contact = None;
+                result
+            }
+            TouchPhase::Cancelled => {
+                self.contact = None;
+                None
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Accumulate high-resolution trackpad deltas instead of paging for every pixel.
+#[derive(Default)]
+struct Wheel {
+    remainder: f64,
+    last: Option<Instant>,
+}
+impl Wheel {
+    fn steps(&mut self, delta: MouseScrollDelta, scale: f64) -> i32 {
+        let now = Instant::now();
+        let amount = match delta {
+            MouseScrollDelta::LineDelta(_, y) => y as f64,
+            MouseScrollDelta::PixelDelta(p) => p.y / scale / 40.0,
+        };
+        if !amount.is_finite() {
+            return 0;
+        }
+        if self.last.is_none_or(|last| now.duration_since(last) > Duration::from_millis(250))
+            || (self.remainder != 0.0 && self.remainder.signum() != amount.signum())
+        {
+            self.remainder = 0.0;
+        }
+        self.last = Some(now);
+        self.remainder += amount;
+        let steps = self.remainder.trunc().clamp(-16.0, 16.0) as i32;
+        self.remainder %= 1.0;
+        steps
+    }
+}
+
 struct App {
     rx: Receiver<Update>,
     scale: u32,
@@ -123,6 +191,12 @@ struct App {
     next: Instant,
     stale: bool,
     occluded: bool,
+    cursor: Option<(f64, f64)>,
+    dragging_scrollbar: bool,
+    wheel: Wheel,
+    tap: Tap,
+    touch_scroll: Option<u64>,
+    last_touch: Option<Instant>,
 }
 
 pub fn run(rx: Receiver<Update>, scale: u32) -> Result<(), Box<dyn Error>> {
@@ -142,6 +216,12 @@ pub fn run(rx: Receiver<Update>, scale: u32) -> Result<(), Box<dyn Error>> {
         next: now,
         stale: true,
         occluded: false,
+        cursor: None,
+        dragging_scrollbar: false,
+        wheel: Wheel::default(),
+        tap: Tap::default(),
+        touch_scroll: None,
+        last_touch: None,
     };
     event_loop.run_app(&mut app)?;
     Ok(())
@@ -153,6 +233,7 @@ impl App {
         while let Ok(u) = self.rx.try_recv() {
             match u {
                 Update::Sessions(list) => self.scene.set_sessions(&list),
+                Update::Details(details) => self.scene.set_details(details),
                 Update::Usage(u) => self.scene.set_usage(u),
             }
         }
@@ -236,7 +317,18 @@ impl App {
                 let full = if s.window.fullscreen().is_some() { None } else { Some(Fullscreen::Borderless(None)) };
                 s.window.set_fullscreen(full);
             }
-            Key::Named(NamedKey::Escape) => s.window.set_fullscreen(None),
+            Key::Named(NamedKey::Escape) => {
+                if s.window.fullscreen().is_some() {
+                    s.window.set_fullscreen(None);
+                } else {
+                    self.scene.clear_selection();
+                }
+            }
+            Key::Named(NamedKey::Tab) => self.scene.select_next(),
+            Key::Named(NamedKey::ArrowRight) => self.scene.select_patron(true),
+            Key::Named(NamedKey::ArrowLeft) => self.scene.select_patron(false),
+            Key::Named(NamedKey::ArrowDown) => self.scene.page_task_key(true),
+            Key::Named(NamedKey::ArrowUp) => self.scene.page_task_key(false),
             Key::Character(c) => {
                 if let Some(k) = c.parse::<u32>().ok().filter(|k| (1..=6).contains(k)) {
                     let _ = s.window.request_inner_size(LogicalSize::new(W as u32 * k, H as u32 * k));
@@ -288,14 +380,92 @@ impl ApplicationHandler for App {
                     s.window.request_redraw();
                 }
             }
+            WindowEvent::Touch(touch) => {
+                self.last_touch = Some(Instant::now());
+                if let Some(s) = &self.shown {
+                    let scale = s.window.scale_factor();
+                    let size = s.window.inner_size();
+                    let point =
+                        frame_point(touch.location.x, touch.location.y, size.width as usize, size.height as usize);
+                    let tap = self.tap.event(touch.id, touch.phase, touch.location.x / scale, touch.location.y / scale);
+                    if let Some(id) = self.touch_scroll {
+                        if id != touch.id || matches!(touch.phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+                            self.touch_scroll = None;
+                        } else if let Some((_, y)) = point {
+                            self.scene.scroll_task_to(y);
+                        }
+                    } else if touch.phase == TouchPhase::Started
+                        && self.tap.contact.is_some_and(|(id, _, _, valid)| id == touch.id && valid)
+                        && point.is_some_and(|(x, y)| self.scene.scrollbar_hit(x, y))
+                    {
+                        self.touch_scroll = Some(touch.id);
+                        self.scene.scroll_task_to(point.unwrap().1);
+                    } else if tap.is_some()
+                        && let Some((x, y)) = point
+                    {
+                        self.scene.click(x, y);
+                    }
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = Some((position.x, position.y));
+                if self.dragging_scrollbar
+                    && let Some(s) = &self.shown
+                {
+                    let size = s.window.inner_size();
+                    if let Some((_, y)) = frame_point(position.x, position.y, size.width as usize, size.height as usize)
+                    {
+                        self.scene.scroll_task_to(y);
+                    }
+                }
+            }
+            WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. } => {
+                self.dragging_scrollbar = false;
+            }
+            WindowEvent::Focused(false) => {
+                self.dragging_scrollbar = false;
+                self.touch_scroll = None;
+                self.tap = Tap::default();
+                self.wheel = Wheel::default();
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let (Some((x, y)), Some(s)) = (self.cursor, &self.shown) {
+                    let size = s.window.inner_size();
+                    if frame_point(x, y, size.width as usize, size.height as usize).is_some_and(|(_, y)| y >= 192) {
+                        let steps = self.wheel.steps(delta, s.window.scale_factor());
+                        for _ in 0..steps.abs() {
+                            self.scene.page_task_key(steps < 0);
+                        }
+                    }
+                }
+            }
+            WindowEvent::CursorLeft { .. } => {
+                self.cursor = None;
+                self.dragging_scrollbar = false;
+                self.wheel = Wheel::default();
+            }
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+                if self.last_touch.is_some_and(|t| t.elapsed() < Duration::from_millis(500)) {
+                    return;
+                }
+                if let (Some((x, y)), Some(s)) = (self.cursor, &self.shown) {
+                    let size = s.window.inner_size();
+                    if let Some((x, y)) = frame_point(x, y, size.width as usize, size.height as usize) {
+                        self.dragging_scrollbar = self.scene.scrollbar_hit(x, y);
+                        self.scene.click(x, y);
+                    }
+                }
+            }
             WindowEvent::Occluded(o) => {
                 self.occluded = o;
                 self.stale = true;
             }
             WindowEvent::KeyboardInput {
-                event: KeyEvent { logical_key, state: ElementState::Pressed, repeat: false, .. },
+                event: KeyEvent { logical_key, state: ElementState::Pressed, repeat, .. },
                 ..
-            } => self.key(el, logical_key),
+            } if !repeat || matches!(logical_key, Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown)) => {
+                self.key(el, logical_key);
+            }
             _ => {}
         }
     }
@@ -316,6 +486,47 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wheel_accumulates_retina_pixels_and_handles_direction_changes() {
+        use winit::dpi::PhysicalPosition;
+        let mut wheel = Wheel::default();
+        for _ in 0..7 {
+            assert_eq!(wheel.steps(MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, 10.0)), 2.0), 0);
+        }
+        assert_eq!(wheel.steps(MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, 10.0)), 2.0), 1);
+        assert_eq!(wheel.steps(MouseScrollDelta::LineDelta(0.0, -2.0), 2.0), -2);
+        assert_eq!(wheel.steps(MouseScrollDelta::LineDelta(0.0, 0.75), 1.0), 0);
+        assert_eq!(wheel.steps(MouseScrollDelta::LineDelta(0.0, -0.5), 1.0), 0);
+        assert_eq!(wheel.steps(MouseScrollDelta::LineDelta(0.0, -0.5), 1.0), -1);
+    }
+
+    #[test]
+    fn touch_taps_ignore_drag_cancel_and_second_finger() {
+        let mut tap = Tap::default();
+        assert_eq!(tap.event(1, TouchPhase::Started, 20., 30.), None);
+        assert_eq!(tap.event(1, TouchPhase::Ended, 22., 31.), Some((22., 31.)));
+        tap.event(1, TouchPhase::Started, 20., 30.);
+        tap.event(1, TouchPhase::Moved, 50., 30.);
+        assert_eq!(tap.event(1, TouchPhase::Ended, 20., 30.), None);
+        tap.event(1, TouchPhase::Started, 20., 30.);
+        tap.event(1, TouchPhase::Cancelled, 20., 30.);
+        assert_eq!(tap.event(1, TouchPhase::Ended, 20., 30.), None);
+        tap.event(1, TouchPhase::Started, 20., 30.);
+        tap.event(2, TouchPhase::Started, 20., 30.);
+        assert_eq!(tap.event(1, TouchPhase::Ended, 20., 30.), None);
+    }
+
+    #[test]
+    fn pointer_mapping_handles_retina_and_letterbox_edges() {
+        assert_eq!(frame_point(240.0, 160.0, 640, 480), Some((120, 80)));
+        assert_eq!(frame_point(720.0, 480.0, 1920, 1440), Some((120, 80)));
+        // 1000x600: scale 2, horizontal padding 180 and vertical padding 60.
+        assert_eq!(frame_point(420.0, 220.0, 1000, 600), Some((120, 80)));
+        assert_eq!(frame_point(179.0, 60.0, 1000, 600), None);
+        assert_eq!(frame_point(820.0, 60.0, 1000, 600), None);
+        assert_eq!(frame_point(180.0, 540.0, 1000, 600), None);
+    }
 
     fn frame() -> Vec<u32> {
         (0..W * H).map(|i| (i * 7 + i / W) as u32 & 0xffff).collect()

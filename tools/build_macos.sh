@@ -10,7 +10,9 @@ cargo build --locked --release
 build_dir="${CARGO_TARGET_DIR:-target}/release"
 app_dir="$build_dir/Token Café.app"
 mkdir -p "$app_dir/Contents/MacOS"
-cp "$build_dir/token-cafe" "$app_dir/Contents/MacOS/token-cafe"
+# Replace the executable inode so macOS does not reuse cached code-signing pages.
+cp "$build_dir/token-cafe" "$app_dir/Contents/MacOS/token-cafe.new"
+mv "$app_dir/Contents/MacOS/token-cafe.new" "$app_dir/Contents/MacOS/token-cafe"
 cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

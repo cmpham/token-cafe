@@ -174,6 +174,9 @@ fn sessions_at(
                 why,
                 since,
                 started: millis(&d, &["startedAt"]).unwrap_or(0.0) / 1000.0,
+                session_id: d.get("sessionId").and_then(Value::as_str).unwrap_or("").to_owned(),
+                project: cwd.to_owned(),
+                transcript: None,
             },
         );
     }
