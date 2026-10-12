@@ -175,11 +175,13 @@ impl Wheel {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Default)]
 struct DoubleClick {
     previous: Option<(String, i32, i32, Instant)>,
 }
 
+#[cfg(any(target_os = "macos", test))]
 impl DoubleClick {
     fn click(&mut self, id: Option<&str>, x: i32, y: i32, now: Instant, interval: Duration) -> bool {
         let previous = self.previous.take();
@@ -196,21 +198,21 @@ impl DoubleClick {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn double_click_interval() -> Duration {
-    #[cfg(target_os = "macos")]
-    {
-        Duration::from_secs_f64(unsafe { objc2_app_kit::NSEvent::doubleClickInterval() })
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Duration::from_millis(500)
-    }
+    Duration::from_secs_f64(unsafe { objc2_app_kit::NSEvent::doubleClickInterval() })
+}
+
+fn supports_pinning(display: winit::raw_window_handle::RawDisplayHandle) -> bool {
+    use winit::raw_window_handle::RawDisplayHandle;
+    matches!(display, RawDisplayHandle::AppKit(_) | RawDisplayHandle::Xlib(_) | RawDisplayHandle::Xcb(_))
 }
 
 struct App {
     rx: Receiver<Update>,
     scale: u32,
     always_on_top: bool,
+    pinning_supported: bool,
     shown: Option<Shown>,
     scene: Scene,
     fb: Vec<u32>,
@@ -230,17 +232,25 @@ struct App {
     tap: Tap,
     touch_scroll: Option<u64>,
     last_touch: Option<Instant>,
+    #[cfg(target_os = "macos")]
     double_click: DoubleClick,
+    #[cfg(target_os = "macos")]
     double_click_interval: Duration,
 }
 
 pub fn run(rx: Receiver<Update>, scale: u32, always_on_top: bool) -> Result<(), Box<dyn Error>> {
     let event_loop = EventLoop::new()?;
+    use winit::raw_window_handle::HasDisplayHandle;
+    let pinning_supported = event_loop.display_handle().is_ok_and(|handle| supports_pinning(handle.as_raw()));
+    if always_on_top && !pinning_supported {
+        eprintln!("token-cafe: pinning is unavailable on this window backend; use a compositor window rule");
+    }
     let now = Instant::now();
     let mut app = App {
         rx,
         scale,
-        always_on_top,
+        always_on_top: always_on_top && pinning_supported,
+        pinning_supported,
         shown: None,
         scene: Scene::new(),
         fb: vec![0; W * H],
@@ -258,7 +268,9 @@ pub fn run(rx: Receiver<Update>, scale: u32, always_on_top: bool) -> Result<(), 
         tap: Tap::default(),
         touch_scroll: None,
         last_touch: None,
+        #[cfg(target_os = "macos")]
         double_click: DoubleClick::default(),
+        #[cfg(target_os = "macos")]
         double_click_interval: double_click_interval(),
     };
     event_loop.run_app(&mut app)?;
@@ -273,25 +285,30 @@ impl App {
             shown.window.focus_window();
             self.update_window_appearance(true);
         }
-        let id = self.scene.patron_at(x, y).map(str::to_owned);
-        if cfg!(target_os = "macos")
-            && self.double_click.click(id.as_deref(), x, y, Instant::now(), self.double_click_interval)
+        #[cfg(target_os = "macos")]
         {
-            if let Some(id) = id {
-                self.scene.focus_patron(id.clone());
-                if let Some(url) = self.scene.session_target(&id).and_then(|target| target.url()) {
-                    // LaunchServices activates the registered app. Reap off the UI thread.
-                    std::thread::spawn(move || match std::process::Command::new("/usr/bin/open").arg(&url).status() {
-                        Ok(status) if status.success() => {}
-                        result => eprintln!("token-cafe: could not open session: {result:?}"),
-                    });
-                } else {
-                    eprintln!("token-cafe: this patron has no desktop session to open");
+            let id = self.scene.patron_at(x, y).map(str::to_owned);
+            if self.double_click.click(id.as_deref(), x, y, Instant::now(), self.double_click_interval) {
+                if let Some(id) = id {
+                    self.scene.focus_patron(id.clone());
+                    if let Some(url) = self.scene.session_target(&id).and_then(|target| target.url()) {
+                        // LaunchServices activates the registered app. Reap off the UI thread.
+                        std::thread::spawn(move || {
+                            match std::process::Command::new("/usr/bin/open").arg(&url).status() {
+                                Ok(status) if status.success() => {}
+                                result => eprintln!("token-cafe: could not open session: {result:?}"),
+                            }
+                        });
+                    } else {
+                        eprintln!("token-cafe: this patron has no desktop session to open");
+                    }
                 }
+            } else {
+                self.scene.click(x, y);
             }
-        } else {
-            self.scene.click(x, y);
         }
+        #[cfg(not(target_os = "macos"))]
+        self.scene.click(x, y);
     }
 
     fn update_window_appearance(&self, focused: bool) {
@@ -321,7 +338,13 @@ impl App {
     }
 
     fn window_title(&self) -> &'static str {
-        if self.always_on_top { "Token Café — Pinned (T)" } else { "Token Café — Pin: T" }
+        if !self.pinning_supported {
+            "Token Café — Pin via compositor"
+        } else if self.always_on_top {
+            "Token Café — Pinned (T)"
+        } else {
+            "Token Café — Pin: T"
+        }
     }
 
     /// Apply what the feeders sent, advance the scene and render it.
@@ -409,7 +432,7 @@ impl App {
         let Some(s) = &self.shown else { return };
         match key.as_ref() {
             Key::Character("q") => el.exit(),
-            Key::Character("t" | "T") => {
+            Key::Character("t" | "T") if self.pinning_supported => {
                 self.always_on_top = !self.always_on_top;
                 s.window.set_window_level(self.window_level());
                 s.window.set_title(self.window_title());
@@ -535,7 +558,10 @@ impl ApplicationHandler for App {
                 self.dragging_scrollbar = false;
                 self.touch_scroll = None;
                 self.tap = Tap::default();
-                self.double_click = DoubleClick::default();
+                #[cfg(target_os = "macos")]
+                {
+                    self.double_click = DoubleClick::default();
+                }
                 self.wheel = Wheel::default();
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -596,6 +622,17 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pinning_support_matches_native_backends() {
+        use winit::raw_window_handle::{
+            AppKitDisplayHandle, RawDisplayHandle, WaylandDisplayHandle, XcbDisplayHandle, XlibDisplayHandle,
+        };
+        assert!(supports_pinning(RawDisplayHandle::AppKit(AppKitDisplayHandle::new())));
+        assert!(supports_pinning(RawDisplayHandle::Xlib(XlibDisplayHandle::new(None, 0))));
+        assert!(supports_pinning(RawDisplayHandle::Xcb(XcbDisplayHandle::new(None, 0))));
+        assert!(!supports_pinning(RawDisplayHandle::Wayland(WaylandDisplayHandle::new(std::ptr::NonNull::dangling()))));
+    }
 
     #[test]
     fn double_click_requires_same_patron_time_and_position() {

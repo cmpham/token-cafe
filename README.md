@@ -84,6 +84,8 @@ The bundle is for local use; it is not signed for distribution or notarized. Fin
 
 On macOS, press `1` then `t` for a small floating café, or launch with `token-cafe --scale 1 --always-on-top`. It stays above ordinary windows when you switch apps in the same desktop Space. Press `t` again to unpin. The mode lasts until you quit; use the launch flag to start pinned.
 
+On Linux X11, pinning depends on window-manager support. Wayland does not expose the window-level API: the title shows “Pin via compositor”, `T` leaves the window unpinned, and `--always-on-top` prints an explanation. Configure a compositor window rule using the `token-cafe` app ID instead.
+
 The café is drawn at 320×240 and scaled by the largest whole number that fits, so the pixels stay crisp at any window size; the rest is letterboxed. Only what changes on screen is repainted, so a live café costs about 1% of a CPU core.
 
 > [!NOTE]
@@ -157,3 +159,15 @@ On macOS, double-click or double-tap a patron to open its existing Codex or Clau
 On macOS, a pinned café becomes 60% opaque while unfocused, so the window behind it remains visible. Focusing the café or turning off pinning restores full opacity.
 
 The macOS title bar hides while the café is unfocused and returns when you click back into the window.
+
+### Platform behavior
+
+| Feature | macOS | Linux X11 | Linux Wayland |
+|---|---|---|---|
+| Patron selection, task scrolling, keyboard and touch input | Yes | Yes | Yes |
+| Always on top (`T` / `--always-on-top`) | Yes | Window-manager dependent | Configure a compositor window rule |
+| Unfocused translucency and hidden title bar | Yes | Normal opaque window and decorations | Normal opaque window and decorations |
+| Double-click to open a desktop session | Yes, with a known desktop session | Regular selection only | Regular selection only |
+| Patron app-bundle icon | Yes | macOS bundle asset only | macOS bundle asset only |
+
+Wayland does not expose the window-level API used for pinning. The title shows “Pin via compositor” and `T` does not claim to enable pinning there. Use the `token-cafe` app ID for compositor rules. macOS AppKit dependencies and native navigation code are compiled only on macOS.
