@@ -60,9 +60,31 @@ pub struct Session {
     pub age_s: u32,
 }
 
+/// Only sessions associated with a desktop app receive a navigation target.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SessionTarget {
+    Claude(String),
+    Codex(String),
+}
+
+impl SessionTarget {
+    pub fn url(&self) -> Option<String> {
+        let (id, prefix) = match self {
+            Self::Claude(id) => (id.strip_prefix("local_")?, "claude://code/continue?session=local_"),
+            Self::Codex(id) => (id.as_str(), "codex://threads/"),
+        };
+        // Session IDs are data, never arbitrary URLs or shell arguments.
+        if id.is_empty() || id.len() > 64 || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-') {
+            return None;
+        }
+        Some(format!("{prefix}{id}"))
+    }
+}
+
 /// Short, evidence-backed display fields, separate from the animated session state.
 #[derive(Clone, Debug)]
 pub struct SessionDetail {
+    pub target: Option<SessionTarget>,
     pub id: String,
     pub task: String,
 }
@@ -590,6 +612,25 @@ impl Scene {
             let position = (y - a::WIN_Y - 6 - thumb_h / 2).clamp(0, travel);
             self.task_page = ((position * (n - 1) as i32 + travel / 2) / travel) as usize;
         }
+    }
+
+    pub fn patron_at(&self, x: i32, y: i32) -> Option<&str> {
+        if !(0..320).contains(&x) || !(FLOOR_Y..a::WIN_Y).contains(&y) {
+            return None;
+        }
+        let seat = ((y - FLOOR_Y) / STATION_H * COLS + x / STATION_W) as usize;
+        self.agents.iter().find(|ag| ag.seat == seat && ag.seen && ag.mode != Mode::Leaving).map(|ag| ag.id.as_str())
+    }
+
+    pub fn session_target(&self, id: &str) -> Option<&SessionTarget> {
+        self.details.iter().find(|d| d.id == id).and_then(|d| d.target.as_ref())
+    }
+
+    pub fn focus_patron(&mut self, id: String) {
+        if self.selected.as_ref() != Some(&id) {
+            self.task_page = 0;
+        }
+        self.selected = Some(id);
     }
 
     /// Coordinates are in the original 320x240 frame, after removing letterboxing.
@@ -1153,10 +1194,32 @@ mod tests {
     }
 
     #[test]
+    fn navigation_targets_validate_ids_and_exclude_empty_seats() {
+        assert_eq!(SessionTarget::Codex("abc-123".into()).url().as_deref(), Some("codex://threads/abc-123"));
+        for id in ["", "abc?x=y", "../x", "a b"] {
+            assert!(SessionTarget::Codex(id.into()).url().is_none());
+        }
+        assert!(SessionTarget::Claude("cli-uuid".into()).url().is_none());
+        let mut scene = Scene::new();
+        scene.set_sessions(&[session("a", State::Work)]);
+        assert_eq!(scene.patron_at(40, 80), Some("a"));
+        assert_eq!(scene.patron_at(140, 80), None);
+        assert_eq!(scene.patron_at(40, 220), None);
+        scene.click(40, 80);
+        scene.focus_patron("a".into());
+        assert_eq!(scene.selected.as_deref(), Some("a"));
+        scene.click(40, 80);
+        assert!(scene.selected.is_none());
+        scene.set_sessions(&[]);
+        assert_eq!(scene.patron_at(40, 80), None);
+    }
+
+    #[test]
     fn cached_pages_refresh_evict_and_clamp_scroll_boundaries() {
         let mut scene = Scene::new();
         scene.set_sessions(&[session("a", State::Work)]);
         let details = vec![SessionDetail {
+            target: None,
             id: "a".into(),
             task: "one two three four five six seven eight nine ten eleven twelve thirteen fourteen".into(),
         }];
@@ -1169,7 +1232,7 @@ mod tests {
         assert_eq!(scene.pages["a"].as_ptr(), allocation);
         scene.scroll_task_to(-999);
         assert_eq!(scene.task_page, 0);
-        scene.set_details(vec![SessionDetail { id: "a".into(), task: "Short".into() }]);
+        scene.set_details(vec![SessionDetail { target: None, id: "a".into(), task: "Short".into() }]);
         scene.scroll_task_to(999);
         assert_eq!(scene.task_page, 0);
         assert_eq!(scene.selected_task_pages(), ["Short"]);
@@ -1193,6 +1256,7 @@ mod tests {
         scene.click(40, 80);
         assert_eq!(scene.selected.as_deref(), Some("0"));
         scene.set_details(vec![SessionDetail {
+            target: None,
             id: "0".into(),
             task: "A long request that spans several pages of readable text".into(),
         }]);
@@ -1216,6 +1280,7 @@ mod tests {
         assert!(scene.selected.is_none());
         scene.set_sessions(&[session("a", State::Work), session("b", State::Idle)]);
         scene.set_details(vec![SessionDetail {
+            target: None,
             id: "a".into(),
             task: "One two three four five six seven eight nine ten eleven twelve".into(),
         }]);
@@ -1242,7 +1307,7 @@ mod tests {
         scene.clear_selection();
         scene.page_task_key(true);
         assert_eq!(scene.task_page, 0);
-        scene.set_details(vec![SessionDetail { id: "a".into(), task: "Short".into() }]);
+        scene.set_details(vec![SessionDetail { target: None, id: "a".into(), task: "Short".into() }]);
         scene.page_task_key(true);
         assert_eq!(scene.task_page, 0);
     }
@@ -1251,7 +1316,11 @@ mod tests {
     fn banner_and_arrows_keep_highlight_and_footer_on_same_identity() {
         let mut scene = Scene::new();
         scene.set_sessions(&[session("a", State::Work), session("b", State::Work), session("c", State::Idle)]);
-        scene.set_details(vec![SessionDetail { id: "b".into(), task: "Unique task for patron B".into() }]);
+        scene.set_details(vec![SessionDetail {
+            target: None,
+            id: "b".into(),
+            task: "Unique task for patron B".into(),
+        }]);
         scene.click(100, 220); // open A
         scene.click(100, 220); // next B
         assert_eq!(scene.selected.as_deref(), Some("b"));
@@ -1275,6 +1344,7 @@ mod tests {
         let mut scene = Scene::new();
         scene.set_sessions(&[session("a", State::Work), session("b", State::Idle)]);
         scene.set_details(vec![SessionDetail {
+            target: None,
             id: "b".into(),
             task: "A sufficiently long request to require multiple readable pages".into(),
         }]);
@@ -1286,7 +1356,7 @@ mod tests {
         scene.set_details(scene.details.clone());
         assert_eq!(scene.selected.as_deref(), Some("b"));
         assert_eq!(scene.task_page, 1);
-        scene.set_details(vec![SessionDetail { id: "b".into(), task: "New request".into() }]);
+        scene.set_details(vec![SessionDetail { target: None, id: "b".into(), task: "New request".into() }]);
         assert_eq!(scene.task_page, 0);
         scene.set_sessions(&[session("a", State::Work)]);
         assert!(scene.selected.is_none());

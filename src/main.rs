@@ -116,8 +116,11 @@ fn demo_feed(tx: Sender<Update>) {
         "Verify invoice rounding across supported currencies.",
         "Train the evaluation pipeline and compare the results with the previous baseline.",
     ];
-    let details =
-        list.iter().zip(tasks).map(|(s, task)| SessionDetail { id: s.id.clone(), task: task.into() }).collect();
+    let details = list
+        .iter()
+        .zip(tasks)
+        .map(|(s, task)| SessionDetail { target: None, id: s.id.clone(), task: task.into() })
+        .collect();
     let _ = tx.send(Update::Details(details));
     let _ = tx.send(Update::Usage(Usage { tokens: 1_624_000_000.0, usd: 693.70 }));
     while tx.send(Update::Sessions(list.clone())).is_ok() {

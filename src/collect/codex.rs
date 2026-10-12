@@ -352,6 +352,7 @@ impl Codex {
                         session_id: r.session.clone(),
                         project: cwd.to_owned(),
                         transcript: Some(r.path.clone()),
+                        target: Some(crate::scene::SessionTarget::Codex(r.session.clone())),
                     };
                     insert_session(&mut out, &r.session, found);
                 }
@@ -376,6 +377,7 @@ impl Codex {
                 since,
                 started: p.start,
                 session_id: uuid.clone(),
+                target: None,
                 project: p.cwd.clone(),
                 transcript: infos.iter().find(|r| !r.child && r.session == uuid).map(|r| r.path.clone()),
             };
@@ -407,14 +409,19 @@ fn session_name(cwd: &str, uuid: &str) -> String {
     format!("{}-{suffix}", if dir.is_empty() { "codex" } else { dir })
 }
 
-fn insert_session(out: &mut HashMap<String, Found>, uuid: &str, found: Found) {
+fn insert_session(out: &mut HashMap<String, Found>, uuid: &str, mut found: Found) {
     match out.entry(uuid.to_owned()) {
         std::collections::hash_map::Entry::Vacant(entry) => {
             entry.insert(found);
         }
         std::collections::hash_map::Entry::Occupied(mut entry) => {
             if found.since > entry.get().since {
+                if found.target.is_none() {
+                    found.target = entry.get().target.clone();
+                }
                 entry.insert(found);
+            } else if entry.get().target.is_none() {
+                entry.get_mut().target = found.target;
             }
         }
     }
@@ -541,6 +548,7 @@ mod tests {
         let mut collector = Codex::default();
         let found = collector.collect(1.0, vec![cli, server(&[path])], None);
         assert_eq!(found.len(), 1);
+        assert!(found[0].target.is_some());
         assert_eq!(found[0].name, "moon-cafe-ot");
     }
 }

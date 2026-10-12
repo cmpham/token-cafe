@@ -31,6 +31,7 @@ struct Found {
     session_id: String,
     project: String,
     transcript: Option<std::path::PathBuf>,
+    target: Option<crate::scene::SessionTarget>,
 }
 
 #[derive(Default)]
@@ -69,7 +70,15 @@ impl Collector {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
         let found = self.found();
         let info = self.info.collect(&found);
-        let details = found.iter().zip(info.iter()).map(|(f, i)| i.display(&f.id)).collect();
+        let details = found
+            .iter()
+            .zip(info.iter())
+            .map(|(f, i)| {
+                let mut detail = i.display(&f.id);
+                detail.target = f.target.clone();
+                detail
+            })
+            .collect();
         let sessions = found
             .into_iter()
             .map(|f| Session {

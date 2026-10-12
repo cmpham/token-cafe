@@ -175,6 +175,38 @@ impl Wheel {
     }
 }
 
+#[derive(Default)]
+struct DoubleClick {
+    previous: Option<(String, i32, i32, Instant)>,
+}
+
+impl DoubleClick {
+    fn click(&mut self, id: Option<&str>, x: i32, y: i32, now: Instant, interval: Duration) -> bool {
+        let previous = self.previous.take();
+        let Some(id) = id else {
+            return false;
+        };
+        if previous.is_some_and(|(old, px, py, at)| {
+            old == id && now.duration_since(at) <= interval && (x - px).abs() <= 4 && (y - py).abs() <= 4
+        }) {
+            return true;
+        }
+        self.previous = Some((id.to_owned(), x, y, now));
+        false
+    }
+}
+
+fn double_click_interval() -> Duration {
+    #[cfg(target_os = "macos")]
+    {
+        Duration::from_secs_f64(unsafe { objc2_app_kit::NSEvent::doubleClickInterval() })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Duration::from_millis(500)
+    }
+}
+
 struct App {
     rx: Receiver<Update>,
     scale: u32,
@@ -198,6 +230,8 @@ struct App {
     tap: Tap,
     touch_scroll: Option<u64>,
     last_touch: Option<Instant>,
+    double_click: DoubleClick,
+    double_click_interval: Duration,
 }
 
 pub fn run(rx: Receiver<Update>, scale: u32, always_on_top: bool) -> Result<(), Box<dyn Error>> {
@@ -224,12 +258,36 @@ pub fn run(rx: Receiver<Update>, scale: u32, always_on_top: bool) -> Result<(), 
         tap: Tap::default(),
         touch_scroll: None,
         last_touch: None,
+        double_click: DoubleClick::default(),
+        double_click_interval: double_click_interval(),
     };
     event_loop.run_app(&mut app)?;
     Ok(())
 }
 
 impl App {
+    fn click(&mut self, x: i32, y: i32) {
+        let id = self.scene.patron_at(x, y).map(str::to_owned);
+        if cfg!(target_os = "macos")
+            && self.double_click.click(id.as_deref(), x, y, Instant::now(), self.double_click_interval)
+        {
+            if let Some(id) = id {
+                self.scene.focus_patron(id.clone());
+                if let Some(url) = self.scene.session_target(&id).and_then(|target| target.url()) {
+                    // LaunchServices activates the registered app. Reap off the UI thread.
+                    std::thread::spawn(move || match std::process::Command::new("/usr/bin/open").arg(&url).status() {
+                        Ok(status) if status.success() => {}
+                        result => eprintln!("token-cafe: could not open session: {result:?}"),
+                    });
+                } else {
+                    eprintln!("token-cafe: this patron has no desktop session to open");
+                }
+            }
+        } else {
+            self.scene.click(x, y);
+        }
+    }
+
     fn window_level(&self) -> WindowLevel {
         if self.always_on_top { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal }
     }
@@ -419,7 +477,7 @@ impl ApplicationHandler for App {
                     } else if tap.is_some()
                         && let Some((x, y)) = point
                     {
-                        self.scene.click(x, y);
+                        self.click(x, y);
                     }
                 }
             }
@@ -442,6 +500,7 @@ impl ApplicationHandler for App {
                 self.dragging_scrollbar = false;
                 self.touch_scroll = None;
                 self.tap = Tap::default();
+                self.double_click = DoubleClick::default();
                 self.wheel = Wheel::default();
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -468,7 +527,7 @@ impl ApplicationHandler for App {
                     let size = s.window.inner_size();
                     if let Some((x, y)) = frame_point(x, y, size.width as usize, size.height as usize) {
                         self.dragging_scrollbar = self.scene.scrollbar_hit(x, y);
-                        self.scene.click(x, y);
+                        self.click(x, y);
                     }
                 }
             }
@@ -502,6 +561,21 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn double_click_requires_same_patron_time_and_position() {
+        let mut clicks = DoubleClick::default();
+        let now = Instant::now();
+        let interval = Duration::from_millis(400);
+        assert!(!clicks.click(Some("a"), 20, 80, now, interval));
+        assert!(clicks.click(Some("a"), 22, 81, now + Duration::from_millis(200), interval));
+        assert!(!clicks.click(Some("a"), 22, 81, now + Duration::from_millis(250), interval));
+        assert!(!clicks.click(Some("b"), 22, 81, now + Duration::from_millis(300), interval));
+        assert!(!clicks.click(Some("b"), 22, 81, now + Duration::from_millis(800), interval));
+        assert!(!clicks.click(Some("b"), 32, 81, now + Duration::from_millis(900), interval));
+        assert!(!clicks.click(None, 32, 220, now + Duration::from_millis(950), interval));
+        assert!(!clicks.click(Some("b"), 32, 81, now + Duration::from_millis(1000), interval));
+    }
 
     #[test]
     fn wheel_accumulates_retina_pixels_and_handles_direction_changes() {

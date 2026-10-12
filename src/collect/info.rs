@@ -40,7 +40,7 @@ impl SessionInfo {
     pub fn display(&self, id: &str) -> crate::scene::SessionDetail {
         let v = &self.0;
         let task = v["task"]["text"].as_str().unwrap_or("TASK UNAVAILABLE").to_owned();
-        crate::scene::SessionDetail { id: id.to_owned(), task }
+        crate::scene::SessionDetail { target: None, id: id.to_owned(), task }
     }
 
     pub fn json(&self) -> &Value {
@@ -461,6 +461,7 @@ mod tests {
     }
     fn found(path: &Path) -> Found {
         Found {
+            target: None,
             id: "root".into(),
             session_id: "root".into(),
             name: "Moon Café".into(),
