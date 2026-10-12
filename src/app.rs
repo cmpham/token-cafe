@@ -267,6 +267,12 @@ pub fn run(rx: Receiver<Update>, scale: u32, always_on_top: bool) -> Result<(), 
 
 impl App {
     fn click(&mut self, x: i32, y: i32) {
+        #[cfg(target_os = "macos")]
+        if let Some(shown) = &self.shown {
+            // Borderless floating windows may receive mouse events without becoming key.
+            shown.window.focus_window();
+            self.update_window_appearance(true);
+        }
         let id = self.scene.patron_at(x, y).map(str::to_owned);
         if cfg!(target_os = "macos")
             && self.double_click.click(id.as_deref(), x, y, Instant::now(), self.double_click_interval)
@@ -288,11 +294,13 @@ impl App {
         }
     }
 
-    fn update_opacity(&self, focused: bool) {
+    fn update_window_appearance(&self, focused: bool) {
         #[cfg(target_os = "macos")]
         {
             use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
             let Some(shown) = &self.shown else { return };
+            // Remove the native header, including its traffic-light buttons.
+            shown.window.set_decorations(focused);
             let Ok(handle) = shown.window.window_handle() else { return };
             let RawWindowHandle::AppKit(handle) = handle.as_raw() else { return };
             // SAFETY: Winit supplies a live NSView, held alive by `shown.window`.
@@ -405,7 +413,7 @@ impl App {
                 self.always_on_top = !self.always_on_top;
                 s.window.set_window_level(self.window_level());
                 s.window.set_title(self.window_title());
-                self.update_opacity(s.window.has_focus());
+                self.update_window_appearance(s.window.has_focus());
             }
             Key::Character("f") | Key::Named(NamedKey::F11) => {
                 let full = if s.window.fullscreen().is_some() { None } else { Some(Fullscreen::Borderless(None)) };
@@ -457,7 +465,7 @@ impl ApplicationHandler for App {
                 s.window.request_redraw();
                 let focused = s.window.has_focus();
                 self.shown = Some(s);
-                self.update_opacity(focused);
+                self.update_window_appearance(focused);
                 self.stale = true;
             }
             Err(e) => {
@@ -520,7 +528,7 @@ impl ApplicationHandler for App {
                 self.dragging_scrollbar = false;
             }
             WindowEvent::Focused(focused) => {
-                self.update_opacity(focused);
+                self.update_window_appearance(focused);
                 if focused {
                     return;
                 }
