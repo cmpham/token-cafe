@@ -21,7 +21,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 #[cfg(target_os = "linux")]
 use winit::platform::wayland::WindowAttributesExtWayland;
-use winit::window::{Fullscreen, Window, WindowId};
+use winit::window::{Fullscreen, Window, WindowId, WindowLevel};
 
 use crate::Update;
 
@@ -178,6 +178,7 @@ impl Wheel {
 struct App {
     rx: Receiver<Update>,
     scale: u32,
+    always_on_top: bool,
     shown: Option<Shown>,
     scene: Scene,
     fb: Vec<u32>,
@@ -199,12 +200,13 @@ struct App {
     last_touch: Option<Instant>,
 }
 
-pub fn run(rx: Receiver<Update>, scale: u32) -> Result<(), Box<dyn Error>> {
+pub fn run(rx: Receiver<Update>, scale: u32, always_on_top: bool) -> Result<(), Box<dyn Error>> {
     let event_loop = EventLoop::new()?;
     let now = Instant::now();
     let mut app = App {
         rx,
         scale,
+        always_on_top,
         shown: None,
         scene: Scene::new(),
         fb: vec![0; W * H],
@@ -228,6 +230,14 @@ pub fn run(rx: Receiver<Update>, scale: u32) -> Result<(), Box<dyn Error>> {
 }
 
 impl App {
+    fn window_level(&self) -> WindowLevel {
+        if self.always_on_top { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal }
+    }
+
+    fn window_title(&self) -> &'static str {
+        if self.always_on_top { "Token Café — Pinned (T)" } else { "Token Café — Pin: T" }
+    }
+
     /// Apply what the feeders sent, advance the scene and render it.
     fn step(&mut self) {
         while let Ok(u) = self.rx.try_recv() {
@@ -313,6 +323,11 @@ impl App {
         let Some(s) = &self.shown else { return };
         match key.as_ref() {
             Key::Character("q") => el.exit(),
+            Key::Character("t" | "T") => {
+                self.always_on_top = !self.always_on_top;
+                s.window.set_window_level(self.window_level());
+                s.window.set_title(self.window_title());
+            }
             Key::Character("f") | Key::Named(NamedKey::F11) => {
                 let full = if s.window.fullscreen().is_some() { None } else { Some(Fullscreen::Borderless(None)) };
                 s.window.set_fullscreen(full);
@@ -345,7 +360,8 @@ impl ApplicationHandler for App {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Token Café")
+            .with_title(self.window_title())
+            .with_window_level(self.window_level())
             .with_inner_size(LogicalSize::new(W as u32 * self.scale, H as u32 * self.scale))
             .with_min_inner_size(LogicalSize::new(W as u32, H as u32));
         // app_id (Wayland) / WM_CLASS (X11) "token-cafe", for window rules
