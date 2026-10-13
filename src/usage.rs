@@ -275,7 +275,7 @@ pub fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
 }
 
-/// Every *.jsonl under dir, like glob's `**/*.jsonl`: hidden names skipped.
+/// Every regular *.jsonl under dir: hidden names and symlinks are skipped.
 fn jsonl_under(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     for e in rd.flatten() {
@@ -285,9 +285,10 @@ fn jsonl_under(dir: &Path, out: &mut Vec<PathBuf>) {
             continue;
         }
         let path = e.path();
-        if path.is_dir() {
+        let Ok(kind) = e.file_type() else { continue };
+        if kind.is_dir() {
             jsonl_under(&path, out);
-        } else if name.ends_with(".jsonl") {
+        } else if kind.is_file() && name.ends_with(".jsonl") {
             out.push(path);
         }
     }
@@ -431,4 +432,22 @@ pub fn human(n: i64) -> String {
         }
     }
     n.to_string()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    #[test]
+    fn history_scan_does_not_follow_cycles_or_duplicate_symlinks() {
+        let root = crate::collect::TestDir::new();
+        let sub = root.0.join("project");
+        fs::create_dir(&sub).unwrap();
+        let transcript = sub.join("session.jsonl");
+        fs::write(&transcript, b"{}\n").unwrap();
+        std::os::unix::fs::symlink(&root.0, sub.join("loop")).unwrap();
+        std::os::unix::fs::symlink(&transcript, sub.join("duplicate.jsonl")).unwrap();
+        let mut files = Vec::new();
+        jsonl_under(&root.0, &mut files);
+        assert_eq!(files, vec![transcript]);
+    }
 }

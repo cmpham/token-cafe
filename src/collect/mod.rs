@@ -137,11 +137,11 @@ fn basename(p: &str) -> &str {
 }
 
 #[cfg(test)]
-struct TestDir(std::path::PathBuf);
+pub(crate) struct TestDir(pub(crate) std::path::PathBuf);
 
 #[cfg(test)]
 impl TestDir {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("token-cafe-{}-{unique}", std::process::id()));
