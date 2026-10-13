@@ -32,6 +32,8 @@ struct Found {
     project: String,
     transcript: Option<std::path::PathBuf>,
     target: Option<crate::scene::SessionTarget>,
+    cwd: String,
+    active_subagents: Option<usize>,
 }
 
 #[derive(Default)]
@@ -79,9 +81,12 @@ impl Collector {
                 detail
             })
             .collect();
+        let mut branches = std::collections::HashMap::new();
         let sessions = found
             .into_iter()
             .map(|f| Session {
+                branch: branches.entry(f.cwd.clone()).or_insert_with(|| git_branch(&f.cwd)).clone(),
+                active_subagents: f.active_subagents,
                 id: f.id,
                 name: f.name,
                 kind: f.kind,
@@ -96,9 +101,12 @@ impl Collector {
 
     pub fn sessions(&mut self) -> Vec<Session> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
+        let mut branches = std::collections::HashMap::new();
         self.found()
             .into_iter()
             .map(|f| Session {
+                branch: branches.entry(f.cwd.clone()).or_insert_with(|| git_branch(&f.cwd)).clone(),
+                active_subagents: f.active_subagents,
                 id: f.id,
                 name: f.name,
                 kind: f.kind,
@@ -154,3 +162,65 @@ impl Drop for TestDir {
 #[allow(dead_code)]
 #[path = "procfs.rs"]
 mod linux_identity_tests;
+
+/// Read the current checkout, including linked worktrees, without changing it.
+fn git_branch(cwd: &str) -> Option<String> {
+    if cwd.is_empty() {
+        return None;
+    }
+    let run = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .ok()?;
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            .filter(|s| !s.is_empty())
+    };
+    run(&["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .or_else(|| run(&["rev-parse", "--short", "HEAD"]).map(|sha| format!("DETACHED {sha}")))
+}
+
+#[cfg(test)]
+mod branch_tests {
+    use super::*;
+    use std::process::Command;
+
+    #[test]
+    fn reads_branch_changes_linked_worktrees_and_detached_heads() {
+        let dir = TestDir::new();
+        let repo = dir.0.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        let git = |args: &[&str]| {
+            assert!(Command::new("git").arg("-C").arg(&repo).args(args).output().unwrap().status.success());
+        };
+        git(&["init", "-b", "moon"]);
+        assert_eq!(git_branch(repo.to_str().unwrap()).as_deref(), Some("moon"));
+        git(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "fixture",
+        ]);
+        let linked = dir.0.join("linked");
+        git(&["worktree", "add", "-b", "stars", linked.to_str().unwrap()]);
+        assert_eq!(git_branch(linked.to_str().unwrap()).as_deref(), Some("stars"));
+        git(&["checkout", "--detach"]);
+        assert!(git_branch(repo.to_str().unwrap()).unwrap().starts_with("DETACHED "));
+        assert_eq!(git_branch(linked.to_str().unwrap()).as_deref(), Some("stars"));
+        assert!(git_branch(dir.0.to_str().unwrap()).is_none());
+        assert!(git_branch("").is_none());
+    }
+}

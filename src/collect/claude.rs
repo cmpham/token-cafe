@@ -169,6 +169,8 @@ fn sessions_at(
         out.insert(
             sid,
             Found {
+                cwd: cwd.to_owned(),
+                active_subagents: None,
                 id: sid8,
                 name,
                 kind: Kind::Claude,

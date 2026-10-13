@@ -58,6 +58,9 @@ pub struct Session {
     /// How long the session has been in this state, so a restarted app
     /// still knows who has been idle long enough to doze off.
     pub age_s: u32,
+    pub branch: Option<String>,
+    /// Active direct children observed in open rollout files; None when unavailable.
+    pub active_subagents: Option<usize>,
 }
 
 /// Only sessions associated with a desktop app receive a navigation target.
@@ -117,6 +120,8 @@ const WALK_SPEED: f64 = 60.0; // px per second
 const THINK_EVERY: i64 = 11000;
 const THINK_FOR: i64 = 2600;
 const FOCUS_MS: i64 = 3500;
+const TALK_MS: i64 = 4000;
+const QUIET_MS: i64 = 1000;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -147,6 +152,9 @@ struct Agent {
     id: String,
     name: String,
     codex: bool,
+    branch: Option<String>,
+    active_subagents: Option<usize>,
+    next_message: usize,
     state: State,
     why: Why,
     force: ForcedPose,
@@ -216,6 +224,10 @@ pub struct Scene {
     particles: Vec<Particle>,
     focus: usize,
     focus_at: i64,
+    speech: Option<(String, String)>,
+    speech_until: i64,
+    last_speaker: Option<String>,
+    last_message: Option<String>,
     overflow: usize,
     /// No list yet: the first one seats everyone at once.
     first: bool,
@@ -438,6 +450,10 @@ impl Scene {
             particles: Vec::new(),
             focus: 0,
             focus_at: 0,
+            speech: None,
+            speech_until: 0,
+            last_speaker: None,
+            last_message: None,
             overflow: 0,
             first: true,
             usage: None,
@@ -482,6 +498,9 @@ impl Scene {
                         id: s.id.clone(),
                         name: String::new(),
                         codex: false,
+                        branch: None,
+                        active_subagents: None,
+                        next_message: 0,
                         state: State::Work,
                         why: Why::None,
                         force: ForcedPose::Auto,
@@ -516,6 +535,8 @@ impl Scene {
                 a.since = self.t - s.age_s as i64 * 1000;
             }
             a.name = s.name.clone();
+            a.branch = s.branch.clone();
+            a.active_subagents = s.active_subagents;
             a.codex = s.kind == Kind::Codex;
             a.state = s.state;
             a.why = s.why;
@@ -672,6 +693,56 @@ impl Scene {
         w
     }
 
+    fn speaker(&self) -> Option<usize> {
+        let (id, _) = self.speech.as_ref()?;
+        if self.t >= self.speech_until || self.selected.is_some() || !self.waiting_list().is_empty() {
+            return None;
+        }
+        self.agents.iter().position(|a| a.id == *id && a.mode == Mode::Seated && a.state == State::Work)
+    }
+
+    fn tick_speech(&mut self) {
+        if self.speech.is_some() && self.speaker().is_none() {
+            self.speech = None;
+            self.speech_until = self.t + QUIET_MS;
+        }
+        if self.selected.is_some() || !self.waiting_list().is_empty() {
+            self.speech_until = self.t + QUIET_MS;
+            return;
+        }
+        if self.speech.is_some() || self.t < self.speech_until {
+            return;
+        }
+        let start =
+            self.last_speaker.as_ref().and_then(|id| self.agents.iter().position(|a| &a.id == id)).map_or(0, |i| i + 1);
+        let n = self.agents.len();
+        let Some(k) = (0..n)
+            .map(|i| (start + i) % n)
+            .find(|&i| self.agents[i].mode == Mode::Seated && self.agents[i].state == State::Work)
+        else {
+            return;
+        };
+        let ag = &mut self.agents[k];
+        let mut messages = vec!["I'M HARD AT WORK.".to_string()];
+        if let Some(branch) = &ag.branch {
+            messages.push(format!("BRANCH: {branch}"));
+        }
+        if let Some(count) = ag.active_subagents {
+            messages.push(format!("{count} ACTIVE SUB-AGENT{} OBSERVED", if count == 1 { "" } else { "S" }));
+        }
+        messages.push("ONE STEP AT A TIME.".to_string());
+        let next = (0..messages.len())
+            .map(|offset| (ag.next_message + offset) % messages.len())
+            .find(|&i| self.last_message.as_ref() != Some(&messages[i]))
+            .unwrap_or(0);
+        let message = messages[next].clone();
+        ag.next_message = (next + 1) % messages.len();
+        self.last_message = Some(message.clone());
+        self.last_speaker = Some(ag.id.clone());
+        self.speech = Some((ag.id.clone(), message));
+        self.speech_until = self.t + TALK_MS;
+    }
+
     pub fn tick(&mut self, dt: u32) {
         self.t += dt as i64;
         let t = self.t;
@@ -752,6 +823,7 @@ impl Scene {
                 self.particles.push(p);
             }
         }
+        self.tick_speech();
         let nw = self.waiting_list().len();
         if self.t - self.focus_at > FOCUS_MS {
             self.focus_at = self.t;
@@ -990,7 +1062,7 @@ impl Scene {
         let focused = if let Some(id) = &self.selected {
             self.agents.iter().position(|ag| &ag.id == id && ag.seen)
         } else {
-            wl.get(self.focus).copied()
+            wl.get(self.focus).copied().or_else(|| self.speaker())
         };
         for (k, ag) in self.agents.iter().enumerate() {
             if ag.mode != Mode::Seated {
@@ -1108,7 +1180,37 @@ impl Scene {
             g.rect(sx + 2, ty + thumb_h / 2 + 1, 4, 1, 0x536cab);
             return;
         }
-        // nobody waiting: party status
+        if let Some(k) = self.speaker() {
+            let ag = &self.agents[k];
+            let (fx, fy) = (x + 8, y + 7);
+            g.rect(fx, fy, 34, 34, c::WIN_BORDER_LO);
+            g.rect(fx + 1, fy + 1, 32, 32, c::WIN1);
+            g.blit_scaled(&a::HEAD_OPEN, fx + 3, fy + 5, Some(&ag.pal), 2, None);
+            let tx = fx + 42;
+            g.text(&ellipsize(&ag.name, 12).to_ascii_uppercase(), tx, y + 9, c::GOLD, 2, Some(c::TEXT_SHADOW));
+            let message = &self.speech.as_ref().unwrap().1;
+            // Two small-font lines leave room for branch names in the 320px scene.
+            let text: String = message
+                .chars()
+                .map(|c| if c.is_ascii_graphic() || c == ' ' { c.to_ascii_uppercase() } else { '?' })
+                .collect();
+            let mut chars: Vec<char> = text.chars().take(84).collect();
+            if text.chars().count() > 84 {
+                chars.splice(81.., ['.', '.', '.']);
+            }
+            for (line, chunk) in chars.chunks(42).enumerate() {
+                g.text(
+                    &chunk.iter().collect::<String>(),
+                    tx,
+                    y + 27 + line as i32 * 9,
+                    c::TEXT,
+                    1,
+                    Some(c::TEXT_SHADOW),
+                );
+            }
+            return;
+        }
+        // Between speaking turns: party status
         let (mut working, mut idle, mut seated) = (0, 0, 0);
         for ag in self.agents.iter().filter(|a| a.mode == Mode::Seated) {
             seated += 1;
@@ -1190,6 +1292,8 @@ mod tests {
             why: Why::None,
             pose: ForcedPose::Auto,
             age_s: 0,
+            branch: None,
+            active_subagents: None,
         }
     }
 
@@ -1409,5 +1513,104 @@ mod tests {
         assert_eq!(shorten("mithrandir-1c", 8), "mithr-1c");
         assert_eq!(shorten("checkout-flow-1c", 12), "checkout-1c"); // no "checkout--1c"
         assert_eq!(shorten("observability", 12), "observabilit");
+    }
+    fn patron(id: &str) -> Session {
+        Session {
+            id: id.into(),
+            name: "Moon Cafe".into(),
+            kind: Kind::Codex,
+            state: State::Work,
+            why: Why::None,
+            pose: ForcedPose::Auto,
+            age_s: 0,
+            branch: Some(format!("feature/{id}")),
+            active_subagents: Some(2),
+        }
+    }
+
+    #[test]
+    fn manual_focus_pauses_chatter_and_clearing_it_resumes_after_a_gap() {
+        let mut scene = Scene::new();
+        scene.set_sessions(&[patron("one"), patron("two")]);
+        scene.tick(1);
+        assert!(scene.speaker().is_some());
+        scene.focus_patron("two".into());
+        assert!(scene.speaker().is_none());
+        scene.tick(4000);
+        assert!(scene.speech.is_none());
+        scene.clear_selection();
+        scene.tick(999);
+        assert!(scene.speech.is_none());
+        scene.tick(1);
+        assert_eq!(scene.speech.as_ref().unwrap().0, "two");
+    }
+
+    #[test]
+    fn patrons_take_turns_with_a_quiet_gap_and_new_messages() {
+        let mut scene = Scene::new();
+        let list = [patron("one"), patron("two")];
+        scene.set_sessions(&list);
+        scene.tick(1);
+        assert_eq!(scene.speech.as_ref().unwrap().0, "one");
+        let initial = scene.speech.as_ref().unwrap().1.clone();
+        scene.tick(3999);
+        assert!(scene.speaker().is_some());
+        scene.tick(1);
+        assert!(scene.speech.is_none());
+        scene.tick(999);
+        assert!(scene.speech.is_none());
+        scene.tick(1);
+        assert_eq!(scene.speech.as_ref().unwrap().0, "two");
+        assert_ne!(scene.speech.as_ref().unwrap().1, initial);
+        scene.tick(4000);
+        scene.tick(1000);
+        assert_eq!(scene.speech.as_ref().unwrap().0, "one");
+        assert_ne!(scene.speech.as_ref().unwrap().1, initial);
+        assert_eq!(scene.speech.as_ref().unwrap().1, "BRANCH: feature/one");
+    }
+
+    #[test]
+    fn updates_do_not_restart_speech_and_waiting_or_departure_interrupts_it() {
+        let mut scene = Scene::new();
+        let mut list = [patron("one"), patron("two")];
+        scene.set_sessions(&list);
+        scene.tick(1);
+        let deadline = scene.speech_until;
+        scene.set_sessions(&list);
+        scene.tick(1000);
+        assert_eq!(scene.speech_until, deadline);
+        list[1].state = State::Wait;
+        scene.set_sessions(&list);
+        assert!(scene.speaker().is_none());
+        scene.tick(1);
+        assert!(scene.speech.is_none());
+        list[1].state = State::Work;
+        scene.set_sessions(&list);
+        scene.tick(1000);
+        assert_eq!(scene.speech.as_ref().unwrap().0, "two");
+        scene.set_sessions(&list[..1]);
+        assert!(scene.speaker().is_none());
+        scene.tick(1);
+        scene.tick(1000);
+        assert_eq!(scene.speech.as_ref().unwrap().0, "one");
+    }
+
+    #[test]
+    fn solo_patron_varies_messages_without_metadata_and_idle_cafe_stays_quiet() {
+        let mut scene = Scene::new();
+        let mut person = patron("solo");
+        person.branch = None;
+        person.active_subagents = None;
+        scene.set_sessions(&[person.clone()]);
+        scene.tick(1);
+        let first = scene.speech.as_ref().unwrap().1.clone();
+        scene.tick(4000);
+        scene.tick(1000);
+        assert_ne!(scene.speech.as_ref().unwrap().1, first);
+        person.state = State::Idle;
+        scene.set_sessions(&[person]);
+        scene.tick(4000);
+        scene.tick(1000);
+        assert!(scene.speech.is_none());
     }
 }

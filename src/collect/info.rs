@@ -461,6 +461,8 @@ mod tests {
     }
     fn found(path: &Path) -> Found {
         Found {
+            cwd: String::new(),
+            active_subagents: None,
             target: None,
             id: "root".into(),
             session_id: "root".into(),

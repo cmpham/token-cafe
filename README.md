@@ -35,7 +35,7 @@ New sessions walk in from the door, finished ones walk out, and a ninth waits ou
 <img src="docs/arrivals.gif" alt="Three new patrons walk in from the door and take their seats while one leaves" width="640">
 </div>
 
-Up on the wall, **the tab** keeps a running total for the calendar month: tokens used and what they'd cost at the vendors' list prices, Claude and Codex together. (If you're on a subscription, that's a measure of how much you've used, not a bill.) When nobody needs you, the message window shows who's working, who's on a break, and the time.
+Up on the wall, **the tab** keeps a running total for the calendar month: tokens used and what they'd cost at the vendors' list prices, Claude and Codex together. (If you're on a subscription, that's a measure of how much you've used, not a bill.) When nobody needs you, working patrons take turns speaking for four seconds, with a one-second pause showing the café totals and clock. Each patron rotates through work chatter, their current Git branch (including linked worktrees or a detached commit), and the number of active direct Codex sub-agents observed in open rollout files. Unavailable details are skipped; Claude sub-agent counts are not currently collected. Permission requests and questions take priority.
 
 <div align="center">
 <img src="docs/night.png" alt="A quiet night at 03:12: one patron working, two asleep, one with a coffee" width="640">
@@ -128,6 +128,7 @@ Changing the art means editing `design/cafe.js`, then:
 ```sh
 node tools/gen_assets.mjs                          # regenerate the sprites and the room
 cargo run --release --example screenshots          # refresh docs/*.png and docs/arrivals.gif
+cargo run --example screenshots -- --monologues    # preview rotation in target/monologues.gif
 ```
 
 ## Windows porting notes

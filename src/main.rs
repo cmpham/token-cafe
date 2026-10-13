@@ -94,6 +94,8 @@ fn demo_feed(tx: Sender<Update>) {
         why,
         pose,
         age_s: 0,
+        branch: Some("feature/moon-cafe".into()),
+        active_subagents: Some(2),
     };
     use {ForcedPose as P, Kind::*, State::*};
     let list = vec![
