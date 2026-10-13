@@ -175,6 +175,7 @@ fn usage_text() -> &'static str {
      \n  --demo     a fixed list that shows every pose\
      \n  --print    print the sessions and this month's usage, and exit\
      \n  --scale N  start at N times 320x240 (default 3)\
+     \n  --bluetooth --bluetooth-key PATH  mirror to your authenticated BLE companion\
      \n  --always-on-top  keep the café above other windows\
      \n\nkeys: 1-6 window size, f / F11 fullscreen, Esc leave fullscreen/clear selection, Tab next session, Left/Right select patron, Up/Down task page, t toggle always on top, q quit"
 }
@@ -183,11 +184,19 @@ fn main() {
     let (mut demo, mut print, mut scale) = (false, false, 3u32);
     let (mut session_info, mut watch) = (false, false);
     let mut always_on_top = false;
+    let mut bluetooth = false;
+    let mut bluetooth_key_path = None;
+    #[cfg(feature = "bluetooth")]
+    let mut bluetooth_test = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--session-info" => session_info = true,
             "--watch" => watch = true,
+            #[cfg(feature = "bluetooth")]
+            "--bluetooth-test" => bluetooth_test = Some(args.next().expect("--bluetooth-test needs an RGB565 file")),
+            "--bluetooth-key" => bluetooth_key_path = args.next(),
+            "--bluetooth" => bluetooth = true,
             "--always-on-top" => always_on_top = true,
             "--demo" => demo = true,
             "--print" => print = true,
@@ -209,6 +218,39 @@ fn main() {
         eprintln!("--watch requires --session-info; choose only one of --demo, --print, or --session-info");
         std::process::exit(2);
     }
+    #[cfg(feature = "bluetooth")]
+    let bluetooth_key = if bluetooth || bluetooth_test.is_some() {
+        let Some(path) = bluetooth_key_path.as_deref() else {
+            eprintln!("Use --bluetooth-key PATH to authenticate your board");
+            std::process::exit(2);
+        };
+        match token_cafe::companion::read_key(path) {
+            Ok(key) => Some(key),
+            Err(e) => {
+                eprintln!("Pairing key: {e}");
+                std::process::exit(2);
+            }
+        }
+    } else {
+        None
+    };
+    #[cfg(not(feature = "bluetooth"))]
+    let bluetooth_key: Option<[u8; 32]> = {
+        let _ = bluetooth_key_path;
+        if bluetooth {
+            eprintln!("Built without Bluetooth support");
+            std::process::exit(2);
+        }
+        None
+    };
+    #[cfg(feature = "bluetooth")]
+    if let Some(path) = bluetooth_test {
+        if let Err(e) = token_cafe::companion::hardware_test(&path, &bluetooth_key.unwrap()) {
+            eprintln!("Bluetooth test failed: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if session_info {
         return print_session_info(watch);
     }
@@ -223,7 +265,7 @@ fn main() {
         thread::spawn(move || sessions_feed(tx));
         thread::spawn(move || usage_feed(tx2));
     }
-    if let Err(e) = app::run(rx, scale, always_on_top) {
+    if let Err(e) = app::run(rx, scale, always_on_top, bluetooth_key) {
         eprintln!("token-cafe: {e}");
         std::process::exit(1);
     }

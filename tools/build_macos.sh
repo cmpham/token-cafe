@@ -26,6 +26,8 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
     <key>CFBundleVersion</key><string>1</string>
+    <key>NSBluetoothAlwaysUsageDescription</key><string>Mirror Token Café to your Bluetooth companion display.</string>
+    <key>NSBluetoothPeripheralUsageDescription</key><string>Connect to your Token Café companion display.</string>
     <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST

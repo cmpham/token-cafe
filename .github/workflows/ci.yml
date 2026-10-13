@@ -15,7 +15,7 @@ jobs:
           components: rustfmt, clippy
       - name: Linux window dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev libxcursor1 libxkbcommon-x11-0 xvfb
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev libxcursor1 libxkbcommon-x11-0 xvfb
       - run: cargo fmt --check
       - run: cargo test --locked --all-targets
       - run: cargo clippy --locked --all-targets -- -D warnings

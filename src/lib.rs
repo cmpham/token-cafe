@@ -8,3 +8,6 @@ pub mod collect;
 pub mod gfx;
 pub mod scene;
 pub mod usage;
+
+#[cfg(feature = "bluetooth")]
+pub mod companion;

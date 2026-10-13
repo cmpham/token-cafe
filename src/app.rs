@@ -209,10 +209,13 @@ fn supports_pinning(display: winit::raw_window_handle::RawDisplayHandle) -> bool
 }
 
 struct App {
+    #[cfg(feature = "bluetooth")]
+    companion: Option<token_cafe::companion::Mirror>,
     rx: Receiver<Update>,
     scale: u32,
     always_on_top: bool,
     pinning_supported: bool,
+    last_window_title: String,
     shown: Option<Shown>,
     scene: Scene,
     fb: Vec<u32>,
@@ -238,7 +241,16 @@ struct App {
     double_click_interval: Duration,
 }
 
-pub fn run(rx: Receiver<Update>, scale: u32, always_on_top: bool) -> Result<(), Box<dyn Error>> {
+pub fn run(
+    rx: Receiver<Update>,
+    scale: u32,
+    always_on_top: bool,
+    bluetooth: Option<[u8; 32]>,
+) -> Result<(), Box<dyn Error>> {
+    #[cfg(not(feature = "bluetooth"))]
+    if bluetooth.is_some() {
+        return Err("Built without Bluetooth support".into());
+    }
     let event_loop = EventLoop::new()?;
     use winit::raw_window_handle::HasDisplayHandle;
     let pinning_supported = event_loop.display_handle().is_ok_and(|handle| supports_pinning(handle.as_raw()));
@@ -247,10 +259,13 @@ pub fn run(rx: Receiver<Update>, scale: u32, always_on_top: bool) -> Result<(), 
     }
     let now = Instant::now();
     let mut app = App {
+        #[cfg(feature = "bluetooth")]
+        companion: bluetooth.map(token_cafe::companion::Mirror::start),
         rx,
         scale,
         always_on_top: always_on_top && pinning_supported,
         pinning_supported,
+        last_window_title: String::new(),
         shown: None,
         scene: Scene::new(),
         fb: vec![0; W * H],
@@ -337,14 +352,19 @@ impl App {
         if self.always_on_top { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal }
     }
 
-    fn window_title(&self) -> &'static str {
-        if !self.pinning_supported {
+    fn window_title(&self) -> String {
+        let base = if !self.pinning_supported {
             "Token Café — Pin via compositor"
         } else if self.always_on_top {
             "Token Café — Pinned (T)"
         } else {
             "Token Café — Pin: T"
+        };
+        #[cfg(feature = "bluetooth")]
+        if let Some(companion) = &self.companion {
+            return format!("{base} — BLE: {}", companion.status());
         }
+        base.into()
     }
 
     /// Apply what the feeders sent, advance the scene and render it.
@@ -356,6 +376,13 @@ impl App {
                 Update::Usage(u) => self.scene.set_usage(u),
             }
         }
+        let title = self.window_title();
+        if title != self.last_window_title {
+            if let Some(shown) = &self.shown {
+                shown.window.set_title(&title);
+            }
+            self.last_window_title = title;
+        }
         let now = Instant::now();
         let ms = (now - self.last).as_millis() as u64;
         self.last += Duration::from_millis(ms);
@@ -365,6 +392,10 @@ impl App {
             self.acc -= FRAME_MS;
         }
         self.scene.render(&mut self.fb, chrono::Local::now().time());
+        #[cfg(feature = "bluetooth")]
+        if let Some(companion) = &mut self.companion {
+            companion.publish(&self.fb);
+        }
         if let Some(s) = &self.shown
             && !self.occluded
             && (self.stale || self.fb != self.on_screen)
@@ -435,7 +466,7 @@ impl App {
             Key::Character("t" | "T") if self.pinning_supported => {
                 self.always_on_top = !self.always_on_top;
                 s.window.set_window_level(self.window_level());
-                s.window.set_title(self.window_title());
+                s.window.set_title(&self.window_title());
                 self.update_window_appearance(s.window.has_focus());
             }
             Key::Character("f") | Key::Named(NamedKey::F11) => {

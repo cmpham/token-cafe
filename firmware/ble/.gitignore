@@ -1,0 +1,5 @@
+/build/
+/sdkconfig
+/sdkconfig.old
+
+/main/pairing_key.h

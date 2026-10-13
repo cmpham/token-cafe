@@ -172,3 +172,18 @@ The macOS title bar hides while the café is unfocused and returns when you clic
 | Patron app-bundle icon | Yes | macOS bundle asset only | macOS bundle asset only |
 
 Wayland does not expose the window-level API used for pinning. The title shows “Pin via compositor” and `T` does not claim to enable pinning there. Use the `token-cafe` app ID for compositor rules. macOS AppKit dependencies and native navigation code are compiled only on macOS.
+
+## ESP32-S3 display prototype
+
+A QEMU-only ESP32-S3 firmware prototype can display the café on a virtual
+480×320 panel without a physical board or screen. See [firmware/README.md](firmware/README.md)
+for installation, build/run commands, protocol tests, and hardware limitations.
+
+### Bluetooth companion display
+
+An ESP32-S3 N16R8 can receive the app's rendered café over BLE, with no screen
+required for initial testing. Run the app with `--bluetooth --bluetooth-key PATH`
+after provisioning the board. The app shows BLE connection status in its window
+title, sends compressed changes without blocking rendering, and reconnects with
+a full frame resync. See [firmware/ble/README.md](firmware/ble/README.md) for setup,
+physical-board tests, platform dependencies and current display/security limits.
