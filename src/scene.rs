@@ -316,7 +316,7 @@ pub fn shorten(name: &str, n: usize) -> String {
     }
     if let Some((base, suf)) = name.rsplit_once('-') {
         let sl = suf.chars().count();
-        if !base.is_empty() && (1..=3).contains(&sl) {
+        if !base.is_empty() && (1..=3).contains(&sl) && n > sl + 1 {
             let cut: String = base.chars().take(n - 1 - sl).collect();
             return format!("{}-{suf}", cut.trim_end_matches(['-', '_', ' ']));
         }
@@ -530,6 +530,14 @@ impl Scene {
                 }
             };
             let a = &mut self.agents[k];
+            // Discovery can briefly omit a live process. Restore its occupied
+            // seat if it reappears before departure completes.
+            if a.mode == Mode::Leaving {
+                a.mode = Mode::Seated;
+                a.path.clear();
+                a.path_i = 0;
+                a.gone = false;
+            }
             a.seen = true;
             if fresh || a.state != s.state || a.why != s.why {
                 a.since = self.t - s.age_s as i64 * 1000;
@@ -645,6 +653,13 @@ impl Scene {
 
     pub fn session_target(&self, id: &str) -> Option<&SessionTarget> {
         self.details.iter().find(|d| d.id == id).and_then(|d| d.target.as_ref())
+    }
+
+    /// Resolve a patron activation shared by mouse double-click and companion double-tap.
+    pub fn activate_patron(&mut self, x: i32, y: i32) -> Option<String> {
+        let id = self.patron_at(x, y)?.to_owned();
+        self.focus_patron(id.clone());
+        self.session_target(&id).and_then(SessionTarget::url)
     }
 
     pub fn focus_patron(&mut self, id: String) {
@@ -1152,10 +1167,12 @@ impl Scene {
             let pages = self.selected_task_pages();
             let page = self.task_page % pages.len();
             let prefix = if session.state == State::Idle { "LAST" } else { "TASK" };
+            let outside = !self.agents.iter().any(|ag| ag.id == session.id && ag.seen);
+            let location = if outside { "OUTSIDE " } else { "" };
             let name = if wl.is_empty() {
-                format!("{prefix} {}", session.name)
+                format!("{location}{prefix} {}", session.name)
             } else {
-                format!("!{} WAIT {prefix} {}", wl.len(), session.name)
+                format!("!{} WAIT {location}{prefix} {}", wl.len(), session.name)
             };
             self.draw_dialogue(g, &session.id, session.state, &name, &pages[page]);
             // Vertical scrollbar; the surrounding 44x48 area is its hit target.
@@ -1298,6 +1315,24 @@ mod tests {
     }
 
     #[test]
+    fn reappearing_session_keeps_its_seat_and_remains_clickable() {
+        let mut scene = Scene::new();
+        scene.set_sessions(&[session("a", State::Work)]);
+        scene.set_sessions(&[]);
+        scene.tick(33);
+        assert_eq!(scene.patron_at(40, 80), None);
+        scene.set_sessions(&[session("a", State::Work)]);
+        for _ in 0..300 {
+            scene.tick(33);
+        }
+        assert_eq!(scene.patron_at(40, 80), Some("a"));
+        assert_eq!(scene.agents.len(), 1);
+        for n in 0..5 {
+            assert!(shorten("long-name-abc", n).chars().count() <= n);
+        }
+    }
+
+    #[test]
     fn navigation_targets_validate_ids_and_exclude_empty_seats() {
         assert_eq!(SessionTarget::Codex("abc-123".into()).url().as_deref(), Some("codex://threads/abc-123"));
         for id in ["", "abc?x=y", "../x", "a b"] {
@@ -1316,6 +1351,26 @@ mod tests {
         assert!(scene.selected.is_none());
         scene.set_sessions(&[]);
         assert_eq!(scene.patron_at(40, 80), None);
+    }
+
+    #[test]
+    fn activation_focuses_linked_patron_and_rejects_missing_or_invalid_targets() {
+        let mut scene = Scene::new();
+        scene.set_sessions(&[session("a", State::Work)]);
+        for (target, expected) in [
+            (Some(SessionTarget::Codex("abc-123".into())), Some("codex://threads/abc-123")),
+            (Some(SessionTarget::Claude("local_abc-123".into())), Some("claude://code/continue?session=local_abc-123")),
+            (Some(SessionTarget::Claude("terminal-id".into())), None),
+            (Some(SessionTarget::Codex("../bad".into())), None),
+            (None, None),
+        ] {
+            scene.set_details(vec![SessionDetail { id: "a".into(), task: "Task".into(), target }]);
+            scene.click(40, 80);
+            assert_eq!(scene.activate_patron(40, 80).as_deref(), expected);
+            assert_eq!(scene.selected.as_deref(), Some("a"));
+            assert_eq!(scene.activate_patron(140, 80), None);
+            assert_eq!(scene.activate_patron(140, 220), None);
+        }
     }
 
     #[test]
