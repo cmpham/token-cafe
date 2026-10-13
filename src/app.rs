@@ -292,6 +292,18 @@ pub fn run(
     Ok(())
 }
 
+/// Launch only on macOS; other platforms keep selection without attempting Mac URLs.
+#[cfg(any(target_os = "macos", feature = "bluetooth"))]
+fn open_session(url: String) {
+    #[cfg(target_os = "macos")]
+    std::thread::spawn(move || match std::process::Command::new("/usr/bin/open").arg(&url).status() {
+        Ok(status) if status.success() => eprintln!("token-cafe: opened session {url}"),
+        result => eprintln!("token-cafe: could not open session: {result:?}"),
+    });
+    #[cfg(not(target_os = "macos"))]
+    let _ = url;
+}
+
 impl App {
     fn click(&mut self, x: i32, y: i32) {
         #[cfg(target_os = "macos")]
@@ -304,19 +316,8 @@ impl App {
         {
             let id = self.scene.patron_at(x, y).map(str::to_owned);
             if self.double_click.click(id.as_deref(), x, y, Instant::now(), self.double_click_interval) {
-                if let Some(id) = id {
-                    self.scene.focus_patron(id.clone());
-                    if let Some(url) = self.scene.session_target(&id).and_then(|target| target.url()) {
-                        // LaunchServices activates the registered app. Reap off the UI thread.
-                        std::thread::spawn(move || {
-                            match std::process::Command::new("/usr/bin/open").arg(&url).status() {
-                                Ok(status) if status.success() => {}
-                                result => eprintln!("token-cafe: could not open session: {result:?}"),
-                            }
-                        });
-                    } else {
-                        eprintln!("token-cafe: this patron has no desktop session to open");
-                    }
+                if let Some(url) = self.scene.activate_patron(x, y) {
+                    open_session(url);
                 }
             } else {
                 self.scene.click(x, y);
@@ -390,6 +391,15 @@ impl App {
         while self.acc >= FRAME_MS {
             self.scene.tick(FRAME_MS as u32);
             self.acc -= FRAME_MS;
+        }
+        #[cfg(feature = "bluetooth")]
+        if let Some(companion) = &mut self.companion {
+            for input in companion.drain_input() {
+                input.trace(&self.scene);
+                if let Some(url) = input.apply(&mut self.scene) {
+                    open_session(url);
+                }
+            }
         }
         self.scene.render(&mut self.fb, chrono::Local::now().time());
         #[cfg(feature = "bluetooth")]
@@ -714,6 +724,12 @@ mod tests {
     fn pointer_mapping_handles_retina_and_letterbox_edges() {
         assert_eq!(frame_point(240.0, 160.0, 640, 480), Some((120, 80)));
         assert_eq!(frame_point(720.0, 480.0, 1920, 1440), Some((120, 80)));
+        // The desktop window keeps integer-scale letterboxing; the companion fills its panel.
+        assert_eq!(frame_point(80.0, 16.0, 480, 272), Some((0, 0)));
+        assert_eq!(frame_point(399.0, 255.0, 480, 272), Some((319, 239)));
+        for (x, y) in [(79.0, 16.0), (400.0, 16.0), (80.0, 15.0), (80.0, 256.0)] {
+            assert_eq!(frame_point(x, y, 480, 272), None);
+        }
         // 1000x600: scale 2, horizontal padding 180 and vertical padding 60.
         assert_eq!(frame_point(420.0, 220.0, 1000, 600), Some((120, 80)));
         assert_eq!(frame_point(179.0, 60.0, 1000, 600), None);
