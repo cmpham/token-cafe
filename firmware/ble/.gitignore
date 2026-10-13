@@ -3,3 +3,12 @@
 /sdkconfig.old
 
 /main/pairing_key.h
+
+/build-jc4827/
+/sdkconfig.jc4827
+/sdkconfig.jc4827.old
+/managed_components/
+
+/build-qa/
+/sdkconfig.qa
+/sdkconfig.qa.old

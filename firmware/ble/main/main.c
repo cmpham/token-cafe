@@ -1,6 +1,7 @@
-#include <assert.h>
+#include "check.h"
 #include <string.h>
 #include "protocol.h"
+#include "board.h"
 #include "pairing_key.h"
 #include "esp_random.h"
 #include "mbedtls/md.h"
@@ -8,6 +9,13 @@
 #include "esp_psram.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#if CONFIG_TC_QA_USB
+#include <stdio.h>
+#include <stdlib.h>
+#endif
 #include "nvs_flash.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -26,7 +34,7 @@ static void auth_tag(const char *role, uint8_t out[32]) {
     size_t len = strlen(role);
     memcpy(input, role, len);
     memcpy(input + len, challenge, sizeof(challenge));
-    assert(mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
+    TC_CHECK(mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
            pairing_key, sizeof(pairing_key), input, len + sizeof(challenge), out) == 0);
 }
 static int access_auth(uint16_t handle, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
@@ -59,6 +67,7 @@ static int access_auth(uint16_t handle, uint16_t attr, struct ble_gatt_access_ct
         challenge_pending = false;
         authenticated = diff == 0;
         if (!authenticated) return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
+        board_clear_input();
         ESP_LOGI("BLE", "AUTHENTICATED companion");
     }
     return 0;
@@ -69,6 +78,10 @@ static uint16_t conn = BLE_HS_CONN_HANDLE_NONE, tx_handle;
 static int64_t last_byte;
 static uint32_t frame_number;
 static uint8_t *display_frame;
+#if CONFIG_TC_QA_USB
+static SemaphoreHandle_t display_lock;
+static uint32_t display_ms;
+#endif
 static char name[24];
 static void advertise(void);
 
@@ -85,11 +98,22 @@ static void transmit(const uint8_t *data, size_t length) {
         data += n; length -= n;
     }
 }
+static void restore(uint8_t *frame) { memcpy(frame, display_frame, TC_FRAME_BYTES); }
 static void present(const uint8_t *frame) {
-    // Separate committed framebuffer is ready for a future LCD driver.
+    // Present a complete, committed frame on the physical panel.
+#if CONFIG_TC_QA_USB
+    xSemaphoreTake(display_lock,portMAX_DELAY);
+#endif
     memcpy(display_frame, frame, TC_FRAME_BYTES);
+    board_present(display_frame);
+#if CONFIG_TC_QA_USB
+    display_ms=esp_log_timestamp();
+#endif
     ESP_LOGI("BLE", "FRAME %lu CRC=%08lx", (unsigned long)++frame_number,
              (unsigned long)tc_crc32(0, display_frame, TC_FRAME_BYTES));
+#if CONFIG_TC_QA_USB
+    xSemaphoreGive(display_lock);
+#endif
 }
 static int access_rx(uint16_t handle, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg) {
     (void)handle; (void)attr; (void)arg;
@@ -109,7 +133,7 @@ static const struct ble_gatt_svc_def services[] = {
     {.type = BLE_GATT_SVC_TYPE_PRIMARY, .uuid = &service_uuid.u,
      .characteristics = (struct ble_gatt_chr_def[]) {
          {.uuid = &auth_uuid.u, .access_cb = access_auth, .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE},
-         {.uuid = &rx_uuid.u, .access_cb = access_rx, .flags = BLE_GATT_CHR_F_WRITE},
+         {.uuid = &rx_uuid.u, .access_cb = access_rx, .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP},
          {.uuid = &tx_uuid.u, .access_cb = access_rx, .flags = BLE_GATT_CHR_F_NOTIFY, .val_handle = &tx_handle},
          {0},
      }}, {0},
@@ -122,12 +146,27 @@ static int gap(struct ble_gap_event *event, void *arg) {
         conn = event->connect.conn_handle;
         authenticated = false; challenge_pending = false;
         tc_reset(&protocol);
+        board_clear_input();
         ESP_LOGI("BLE", "CONNECTED");
+        // Ask for interactive latency; the central may choose a slower interval.
+        struct ble_gap_upd_params params = {
+            .itvl_min = 12, .itvl_max = 24, .latency = 0, .supervision_timeout = 400,
+        };
+        ESP_LOGI("BLE", "interval request rc=%d", ble_gap_update_params(conn, &params));
         break;
+    case BLE_GAP_EVENT_CONN_UPDATE: {
+        struct ble_gap_conn_desc desc;
+        if (ble_gap_conn_find(event->conn_update.conn_handle, &desc) == 0) {
+            ESP_LOGI("BLE", "interval=%u x1.25ms latency=%u status=%d",
+                     desc.conn_itvl, desc.conn_latency, event->conn_update.status);
+        }
+        break;
+    }
     case BLE_GAP_EVENT_DISCONNECT:
         conn = BLE_HS_CONN_HANDLE_NONE;
         authenticated = false; challenge_pending = false;
         tc_reset(&protocol);
+        board_clear_input();
         ESP_LOGI("BLE", "DISCONNECTED reason=%d", event->disconnect.reason);
         advertise(); break;
     case BLE_GAP_EVENT_ADV_COMPLETE: advertise(); break;
@@ -141,22 +180,22 @@ static void advertise(void) {
     fields.uuids128 = (ble_uuid128_t *)&service_uuid;
     fields.num_uuids128 = 1;
     fields.uuids128_is_complete = 1;
-    assert(ble_gap_adv_set_fields(&fields) == 0);
+    TC_CHECK(ble_gap_adv_set_fields(&fields) == 0);
     struct ble_hs_adv_fields response = {0};
     response.name = (uint8_t *)name;
     response.name_len = strlen(name);
     response.name_is_complete = 1;
-    assert(ble_gap_adv_rsp_set_fields(&response) == 0);
+    TC_CHECK(ble_gap_adv_rsp_set_fields(&response) == 0);
     struct ble_gap_adv_params params = {0};
     params.conn_mode = BLE_GAP_CONN_MODE_UND;
     params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-    assert(ble_gap_adv_start(own_type, NULL, BLE_HS_FOREVER, &params, gap, NULL) == 0);
+    TC_CHECK(ble_gap_adv_start(own_type, NULL, BLE_HS_FOREVER, &params, gap, NULL) == 0);
     ESP_LOGI("BLE", "ADVERTISING %s", name);
 }
 static void sync_host(void) {
-    assert(ble_hs_id_infer_auto(0, &own_type) == 0);
+    TC_CHECK(ble_hs_id_infer_auto(0, &own_type) == 0);
     uint8_t addr[6];
-    assert(ble_hs_id_copy_addr(own_type, addr, NULL) == 0);
+    TC_CHECK(ble_hs_id_copy_addr(own_type, addr, NULL) == 0);
     snprintf(name, sizeof(name), "TokenCafe-%02X%02X", addr[1], addr[0]);
     ble_svc_gap_device_name_set(name);
     advertise();
@@ -166,18 +205,75 @@ static void host_task(void *arg) {
     nimble_port_run();
     nimble_port_freertos_deinit();
 }
+#if CONFIG_TC_QA_USB
+// USB diagnostics never carry live scene updates; those continue over authenticated BLE.
+static void qa_task(void *arg) {
+    (void)arg;
+    uint8_t *capture=heap_caps_malloc(TC_FRAME_BYTES,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    TC_CHECK(capture);
+    char line[96];size_t used=0;bool overflow=false;
+    for(;;) {
+        int ch=getchar();
+        if(ch==EOF) { clearerr(stdin);vTaskDelay(pdMS_TO_TICKS(10));continue; }
+        if(ch!='\n') {
+            if(used+1<sizeof(line)) line[used++]=(char)ch; else overflow=true;
+            continue;
+        }
+        line[used]=0;used=0;
+        unsigned id=0,count=0,x=0,y=0;char extra;
+        if(overflow) { overflow=false;printf("@QA ERROR overflow\n");continue; }
+        if(sscanf(line,"QA IN %u %u %u %u %c",&id,&count,&x,&y,&extra)==4 &&
+           count<=2 && x<=65535 && y<=65535) {
+            if(!board_test_sample(id,count,x,y)) printf("@QA ERROR queue\n");
+        } else if(sscanf(line,"QA MODE %u %u %c",&id,&count,&extra)==2 && count<=1) {
+            if(!board_test_sample(id,count?255:254,0,0)) printf("@QA ERROR queue\n");
+        } else if(sscanf(line,"QA SNAP %u %c",&id,&extra)==1) {
+            xSemaphoreTake(display_lock,portMAX_DELAY);
+            memcpy(capture,display_frame,TC_FRAME_BYTES);
+            uint32_t frame=frame_number,ms=display_ms;
+            xSemaphoreGive(display_lock);
+            uint32_t crc=tc_crc32(0,capture,TC_FRAME_BYTES);
+            printf("@QA SNAP %u %lu %lu %08lx %u\n",id,(unsigned long)frame,(unsigned long)ms,(unsigned long)crc,TC_FRAME_BYTES);
+            static const char digits[]="0123456789abcdef";
+            for(size_t offset=0;offset<TC_FRAME_BYTES;offset+=128) {
+                size_t n=TC_FRAME_BYTES-offset;if(n>128)n=128;
+                char hex[257];
+                for(size_t i=0;i<n;i++){hex[i*2]=digits[capture[offset+i]>>4];hex[i*2+1]=digits[capture[offset+i]&15];}
+                hex[n*2]=0;printf("@QA DATA %u %u %s\n",id,(unsigned)offset,hex);
+            }
+            printf("@QA END %u\n",id);
+        } else printf("@QA ERROR command\n");
+    }
+}
+#endif
 void app_main(void) {
-    ESP_ERROR_CHECK(nvs_flash_init());
-    assert(esp_psram_get_size() == 8 * 1024 * 1024);
+    esp_log_level_set("NimBLE", ESP_LOG_WARN);
+    esp_err_t nvs = nvs_flash_init();
+    if (nvs == ESP_ERR_NVS_NO_FREE_PAGES || nvs == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase()); nvs = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(nvs);
+    TC_CHECK(esp_psram_get_size() == 8 * 1024 * 1024);
     uint8_t *frame = heap_caps_malloc(TC_FRAME_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     display_frame = heap_caps_calloc(1, TC_FRAME_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    assert(frame && display_frame);
+    TC_CHECK(frame && display_frame);
     tc_init(&protocol, frame, transmit, present);
+    protocol.restore=restore;
+    protocol.scratch=heap_caps_malloc(TC_FRAME_BYTES,MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    TC_CHECK(protocol.scratch);
+#if CONFIG_TC_QA_USB
+    display_lock=xSemaphoreCreateMutex();TC_CHECK(display_lock);
+#endif
+    board_init();
+#if CONFIG_TC_QA_USB
+    TC_CHECK(xTaskCreate(qa_task,"usb_qa",6144,NULL,2,NULL)==pdPASS);
+#endif
+    protocol.input = board_input;
     ESP_ERROR_CHECK(nimble_port_init());
     ble_svc_gap_init();
     ble_svc_gatt_init();
-    assert(ble_gatts_count_cfg(services) == 0);
-    assert(ble_gatts_add_svcs(services) == 0);
+    TC_CHECK(ble_gatts_count_cfg(services) == 0);
+    TC_CHECK(ble_gatts_add_svcs(services) == 0);
     ble_hs_cfg.sync_cb = sync_host;
     nimble_port_freertos_init(host_task);
 }

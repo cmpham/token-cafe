@@ -1,1 +1,1 @@
-idf_component_register(SRCS "main.c" "../../main/protocol.c" INCLUDE_DIRS "../../main" REQUIRES mbedtls bt nvs_flash esp_psram esp_timer)
+idf_component_register(SRCS "main.c" "board.c" "../../main/protocol.c" INCLUDE_DIRS "../../main" REQUIRES mbedtls bt nvs_flash esp_psram esp_timer esp_driver_spi esp_driver_gpio esp_driver_i2c esp_lcd)

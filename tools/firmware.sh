@@ -21,6 +21,30 @@ case "${1:-build}" in
         cd build
         python -m esptool --chip esp32s3 merge_bin --fill-flash-size 16MB -o merged-binary.bin @flash_args
         ;;
+    qa-build|qa-flash)
+        python "$ROOT/tools/provision_ble.py"
+        cd ble
+        flash_args=(build)
+        if [[ "$1" == qa-flash ]]; then
+            [[ $# == 2 ]] || exit 2
+            flash_args=(-p "$2" -b 460800 flash)
+        fi
+        idf.py -B build-qa -D SDKCONFIG=sdkconfig.qa \
+            -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.jc4827.defaults;sdkconfig.qa.defaults' "${flash_args[@]}"
+        ;;
+    display-build|display-flash)
+        python "$ROOT/tools/provision_ble.py"
+        cd ble
+        flash_args=()
+        if [[ "$1" == display-flash ]]; then
+            [[ $# == 2 ]] || { echo 'display-flash requires an explicit serial port' >&2; exit 2; }
+            flash_args=(-p "$2" -b 460800 flash)
+        else
+            flash_args=(build)
+        fi
+        idf.py -B build-jc4827 -D SDKCONFIG=sdkconfig.jc4827 \
+            -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.jc4827.defaults' "${flash_args[@]}"
+        ;;
     ble-build)
         python "$ROOT/tools/provision_ble.py"
         cd ble
@@ -58,5 +82,5 @@ case "${1:-build}" in
     hardware-test) exec python "$ROOT/firmware/hardware.py" "${@:2}" ;;
     run) exec python "$ROOT/firmware/host.py" run "${@:2}" ;;
     test) exec python "$ROOT/firmware/host.py" test "${@:2}" ;;
-    *) echo 'usage: bash tools/firmware.sh {ble-build|ble-flash PORT|build|run|test|hardware-build|hardware-info PORT|hardware-flash PORT|hardware-test PORT} [host options]' >&2; exit 2 ;;
+    *) echo 'usage: bash tools/firmware.sh {display-build|display-flash PORT|ble-build|ble-flash PORT|build|run|test|hardware-build|hardware-info PORT|hardware-flash PORT|hardware-test PORT} [host options]' >&2; exit 2 ;;
 esac
