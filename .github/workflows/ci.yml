@@ -16,6 +16,14 @@ jobs:
       - name: Linux window dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev libxcursor1 libxkbcommon-x11-0 xvfb
+      - name: Portable firmware sanitizer tests
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined firmware/test_double_tap.c -o /tmp/tc-test-double-tap
+          /tmp/tc-test-double-tap
+          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Ifirmware/main firmware/test_touch_gesture.c -o /tmp/tc-test-touch
+          /tmp/tc-test-touch
+          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined firmware/test_protocol.c firmware/main/protocol.c -o /tmp/tc-test-protocol
+          /tmp/tc-test-protocol
       - run: cargo fmt --check
       - run: cargo test --locked --all-targets
       - run: cargo clippy --locked --all-targets -- -D warnings
