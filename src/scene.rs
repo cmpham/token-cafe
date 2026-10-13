@@ -489,7 +489,11 @@ impl Scene {
             let k = match self.agents.iter().position(|a| a.id == s.id) {
                 Some(k) => k,
                 None => {
-                    let Some(seat) = (0..SEATS).find(|&i| self.seat_free(i)) else {
+                    // Keep the two providers on opposite sides of the aisle.
+                    // Never spill into the other provider's seats.
+                    let right = s.kind == Kind::Codex;
+                    let Some(seat) = (0..SEATS).find(|&i| (i % COLS as usize >= 2) == right && self.seat_free(i))
+                    else {
                         overflow += 1;
                         continue;
                     };
@@ -1304,7 +1308,7 @@ mod tests {
         Session {
             id: id.into(),
             name: format!("Moon {id}"),
-            kind: Kind::Codex,
+            kind: if id.parse::<usize>().is_ok_and(|i| i % 4 >= 2) { Kind::Codex } else { Kind::Claude },
             state,
             why: Why::None,
             pose: ForcedPose::Auto,
@@ -1312,6 +1316,56 @@ mod tests {
             branch: None,
             active_subagents: None,
         }
+    }
+
+    #[test]
+    fn providers_keep_their_side_and_identity_across_refreshes() {
+        let mut scene = Scene::new();
+        let mut list: Vec<_> = (0..10).map(|i| session(&i.to_string(), State::Work)).collect();
+        list.reverse(); // Collector order must not determine provider side.
+        scene.set_sessions(&list);
+        assert_eq!(scene.agents.len(), 8);
+        assert_eq!(scene.overflow, 2);
+        scene.set_details(
+            list.iter()
+                .map(|s| SessionDetail {
+                    id: s.id.clone(),
+                    task: String::new(),
+                    target: Some(if s.kind == Kind::Codex {
+                        SessionTarget::Codex(s.id.clone())
+                    } else {
+                        SessionTarget::Claude(format!("local_{}", s.id))
+                    }),
+                })
+                .collect(),
+        );
+        let seats: Vec<_> = scene.agents.iter().map(|a| (a.id.clone(), a.seat)).collect();
+        for a in &scene.agents {
+            assert_eq!(a.seat % 4 >= 2, a.codex);
+            let x = (a.seat % 4) as i32 * 80 + 40;
+            let y = (a.seat / 4) as i32 * 72 + 80;
+            assert_eq!(scene.patron_at(x, y), Some(a.id.as_str()));
+        }
+        for (id, seat) in &seats {
+            let expected = scene.session_target(id).unwrap().url();
+            assert_eq!(scene.activate_patron((*seat % 4) as i32 * 80 + 40, (*seat / 4) as i32 * 72 + 80), expected);
+        }
+        scene.focus_patron(seats[0].0.clone());
+        list.reverse();
+        scene.set_sessions(&list);
+        assert_eq!(scene.selected.as_ref(), Some(&seats[0].0));
+        for (id, seat) in seats {
+            assert_eq!(scene.agents.iter().find(|a| a.id == id).unwrap().seat, seat);
+        }
+        // A single provider cannot occupy the other half, even if it is empty.
+        let mut solo = Scene::new();
+        for s in &mut list {
+            s.kind = Kind::Codex;
+        }
+        solo.set_sessions(&list);
+        assert_eq!(solo.agents.len(), 4);
+        assert_eq!(solo.overflow, 6);
+        assert!(solo.agents.iter().all(|a| a.seat % 4 >= 2));
     }
 
     #[test]

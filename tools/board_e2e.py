@@ -277,10 +277,10 @@ def suite(r):
         assert r.command('state')['activations']==[url], 'Expected exactly one desktop activation'
         return result
     case('36-double-claude',lambda:double_case(0,40,'claude://code/continue?session=local_qa'))
-    case('37-double-codex',lambda:double_case(1,120,'codex://threads/qa-codex'))
+    case('37-double-codex',lambda:double_case(2,200,'codex://threads/qa-codex'))
     def unlinked():
-        r.reset(targets=True);base=r.command('state')['inputs'];r.expected('focus',id='qa-2')
-        r.tap(200,80);r.tap(200,80)
+        r.reset(targets=True);base=r.command('state')['inputs'];r.expected('focus',id='qa-1')
+        r.tap(120,80);r.tap(120,80)
         result=r.snap('38-double-unlinked',base+2)
         assert not r.command('state')['activations']
         return result

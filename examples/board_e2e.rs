@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 } else {
                     format!("project-{i}")
                 },
-                kind: if i % 2 == 0 { Kind::Claude } else { Kind::Codex },
+                kind: if i % 4 < 2 { Kind::Claude } else { Kind::Codex },
                 state: if v["attention"].as_bool() == Some(true) && (i == 1 || i == 5) {
                     State::Wait
                 } else {
@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             })
             .collect();
         s.set_sessions(&sessions);
-        s.set_details(sessions.iter().enumerate().map(|(i,p)| SessionDetail {id:p.id.clone(),target: if v["targets"].as_bool()==Some(true) && i<2 {Some(if i==0 {SessionTarget::Claude("local_qa".into())} else {SessionTarget::Codex("qa-codex".into())})} else {None},
+        s.set_details(sessions.iter().enumerate().map(|(i,p)| SessionDetail {id:p.id.clone(),target: if v["targets"].as_bool()==Some(true) && (i==0 || i==2) {Some(if i==0 {SessionTarget::Claude("local_qa".into())} else {SessionTarget::Codex("qa-codex".into())})} else {None},
             task:if i==2 {String::new()} else if i==3 {"Unicode café 日本語 👋 and SupercalifragilisticexpialidociousABCDEFGHIJKLMNOPQRSTUVWXYZ".into()}
             else {format!("Patron {i}: Implement the Bluetooth companion display. Check selection, scrolling, attention, and final page boundaries carefully.")}
         }).collect());

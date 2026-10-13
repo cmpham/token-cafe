@@ -37,7 +37,7 @@ fn main() {
         .map(|i| Session {
             id: format!("qa-{i}"),
             name: format!("project-{i}"),
-            kind: if i % 2 == 0 { Kind::Claude } else { Kind::Codex },
+            kind: if i % 4 < 2 { Kind::Claude } else { Kind::Codex },
             state: State::Work,
             why: Why::None,
             pose: ForcedPose::Auto,
