@@ -155,7 +155,7 @@ Codex details come from the matched root rollout. Claude transcript filenames mu
 
 The macOS app icon reuses the café patron head. To regenerate it on macOS, run `swift tools/generate_icon.swift`, then `iconutil -c icns assets/TokenCafe.iconset -o assets/TokenCafe.icns`, and rebuild the bundle.
 
-On macOS, double-click or double-tap a patron to open its existing Codex or Claude Desktop session. Single clicks still select or clear focus. CLI-only sessions without a desktop mapping cannot be opened this way. Claude navigation uses the installed Desktop app's `code/continue` route, which may change between versions.
+On macOS, double-click a patron in the app, or double-tap a patron on the Bluetooth companion screen, to open its existing Codex or Claude Desktop session. On the board, make two short taps at the same spot within 450 ms; slower taps select and clear focus. Single clicks still select or clear focus. CLI-only sessions without a desktop mapping cannot be opened this way. Claude navigation uses the installed Desktop app's `code/continue` route, which may change between versions.
 
 On macOS, a pinned café becomes 60% opaque while unfocused, so the window behind it remains visible. Focusing the café or turning off pinning restores full opacity.
 
@@ -176,7 +176,7 @@ Wayland does not expose the window-level API used for pinning. The title shows �
 ## ESP32-S3 display prototype
 
 A QEMU-only ESP32-S3 firmware prototype can display the café on a virtual
-480×320 panel without a physical board or screen. See [firmware/README.md](firmware/README.md)
+480×272 panel without a physical board or screen. See [firmware/README.md](firmware/README.md)
 for installation, build/run commands, protocol tests, and hardware limitations.
 
 ### Bluetooth companion display

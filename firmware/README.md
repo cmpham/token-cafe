@@ -4,8 +4,8 @@ The default build is **QEMU-only** and must not be flashed to a physical board.
 A separate **screenless hardware build** supports ESP32-S3 N16R8 bring-up (below).
 It runs ESP-IDF on an emulated ESP32-S3 with 16 MB flash and 8 MB octal PSRAM.
 The host renders the existing café scene; firmware receives RGB565 rectangles into
-PSRAM and presents them on a 480×320 virtual panel. The existing 320×240 scene is
-centered at (80, 40), preserving its pixels without stretching.
+PSRAM and presents them on a 480×272 virtual panel. The existing 320×240 scene is
+scaled with nearest-neighbor sampling to fill the complete panel.
 
 ## Install on macOS
 
@@ -100,7 +100,7 @@ opcode. Invalid requests must not mutate the framebuffer.
 | 1 HELLO | Empty | Width u16, height u16, max payload u16, pixel format u8 (`1` = RGB565 LE) |
 | 2 RECT | x/y/width/height as u16, then packed RGB565 LE pixels | Empty |
 | 3 PRESENT | Empty | CRC32 of the entire staged framebuffer; also displays it |
-| 4 INJECT_TAP | Panel x/y as u16 | Scene x/y as u16; rejects letterbox coordinates |
+| 4 INJECT_TAP | Panel x/y as u16 | Scene x/y as u16; scales full-panel coordinates and rejects out-of-bounds input |
 | 5 CLEAR | Empty | Empty; zeros staging buffer, requires PRESENT to display |
 
 `INJECT_TAP` is a simulator test hook, not a real touch driver or unsolicited
