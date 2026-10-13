@@ -14,7 +14,7 @@ import time
 import zlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-WIDTH, HEIGHT = 480, 320
+WIDTH, HEIGHT = 480, 272
 FRAME_BYTES = WIDTH * HEIGHT * 2
 
 
@@ -166,7 +166,7 @@ def integration(client, process, serial, qmp, frame):
     client.upload(frame)
     print("PASS: full café frame transferred; framebuffer CRC matches", flush=True)
     baseline = client.request(3)
-    for rect in [(479, 0, 2, 1), (0, 319, 1, 2), (0, 0, 0, 1), (65535, 0, 2, 1)]:
+    for rect in [(479, 0, 2, 1), (0, HEIGHT - 1, 1, 2), (0, 0, 0, 1), (65535, 0, 2, 1)]:
         client.request(2, struct.pack("<4H", *rect) + b"\0\0", status=1)
     client.request(2, struct.pack("<4H", 0, 0, 2, 1) + b"\0\0", status=1)
     client.seq += 1
@@ -196,10 +196,10 @@ def integration(client, process, serial, qmp, frame):
         resumed = Client(sock)
         resumed.request(1)
         assert resumed.request(3) == baseline
-        for x, y, expected in [(80, 40, (0, 0)), (399, 279, (319, 239)), (200, 250, (120, 210))]:
+        for x, y, expected in [(0, 0, (0, 0)), (479, 271, (319, 239)), (240, 136, (160, 120))]:
             assert struct.unpack("<HH", resumed.request(4, struct.pack("<HH", x, y))) == expected
-        resumed.request(4, struct.pack("<HH", 79, 40), status=1)
-        resumed.request(4, struct.pack("<HH", 400, 280), status=1)
+        for x, y in [(480, 0), (0, 272), (65535, 0), (0, 65535)]:
+            resumed.request(4, struct.pack("<HH", x, y), status=1)
         for n in range(30):
             patch = struct.pack("<4H", 0, 0, 1, 1) + struct.pack("<H", n)
             resumed.request(2, patch)
@@ -212,7 +212,7 @@ def integration(client, process, serial, qmp, frame):
         # Validate the virtual panel itself, not only its staging buffer.
         with output.open("rb") as image:
             assert image.readline().strip() == b"P6"
-            assert image.readline().strip() == b"480 320"
+            assert image.readline().strip() == f"{WIDTH} {HEIGHT}".encode()
             assert image.readline().strip() == b"255"
             actual = image.read()
         expected_rgb = bytearray()

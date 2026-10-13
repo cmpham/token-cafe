@@ -1,4 +1,4 @@
-//! Export the real desktop renderer as RGB565 LE, centered on a 480x320 panel.
+//! Export the real desktop renderer as RGB565 LE, scaled to fill a 480x272 panel.
 //! cargo run --example firmware_frame -- target/cafe.rgb565 [scene-x scene-y]
 use std::error::Error;
 use token_cafe::assets::{H, W};
@@ -44,12 +44,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let mut pixels = vec![0; W * H];
     scene.render(&mut pixels, chrono::NaiveTime::from_hms_opt(20, 0, 0).unwrap());
-    let mut frame = vec![0u8; 480 * 320 * 2];
-    for y in 0..H {
-        for x in 0..W {
-            let p = pixels[y * W + x];
+    let mut frame = vec![0u8; 480 * 272 * 2];
+    for y in 0..272 {
+        for x in 0..480 {
+            let p = pixels[(y * H / 272) * W + x * W / 480];
             let rgb565 = (((p >> 19) & 31) << 11) | (((p >> 10) & 63) << 5) | ((p >> 3) & 31);
-            let i = ((y + 40) * 480 + x + 80) * 2;
+            let i = (y * 480 + x) * 2;
             frame[i..i + 2].copy_from_slice(&(rgb565 as u16).to_le_bytes());
         }
     }

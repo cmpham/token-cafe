@@ -1,9 +1,12 @@
 #pragma once
 #include <stddef.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #define TC_WIDTH 480
-#define TC_HEIGHT 320
+#define TC_HEIGHT 272
+#define TC_SCENE_WIDTH 320
+#define TC_SCENE_HEIGHT 240
 #define TC_FRAME_BYTES (TC_WIDTH * TC_HEIGHT * 2)
 #define TC_MAX_PAYLOAD 4096
 #define TC_HEADER 16
@@ -14,8 +17,11 @@ typedef struct {
     uint8_t packet[TC_HEADER + TC_MAX_PAYLOAD];
     size_t used;
     uint8_t *frame;
+    uint8_t *scratch; // Optional TC_FRAME_BYTES buffer for compressed XOR.
     tc_write_fn write;
     tc_present_fn present;
+    bool (*input)(uint8_t out[5]);
+    void (*restore)(uint8_t *frame); // Restore last committed frame on preemption.
 } tc_protocol;
 
 uint32_t tc_crc32(uint32_t crc, const uint8_t *data, size_t size);
