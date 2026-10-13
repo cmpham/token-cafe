@@ -300,3 +300,24 @@ one double tap per occupied seat, and ten header/footer points. It stops if the
 live seat map changes. Keep its logs/captures local: they contain real session
 identities and task text. Afterwards restore production firmware and relaunch
 without `TC_TOUCH_QA`. Injected samples do not verify physical sensor calibration.
+
+### Screen idle timeout
+
+The integrated LCD backlight turns off after 10 minutes without touch. Bluetooth
+and framebuffer updates continue, so the current view is ready on wake. Touching
+the panel wakes it immediately; that entire waking contact is consumed to avoid
+accidentally selecting or opening a patron. The next touch works normally.
+A held contact counts as activity. Reboot starts a fresh idle period.
+
+Diagnostic firmware additionally accepts `QA IDLE <id> <age-ms>` (0–600000),
+which ages the last-touch clock on the touch task and responds with
+`@QA IDLE <id> <awake:0|1>`. This command is absent from production firmware.
+Run `python tools/test_board_idle.py --port PORT` while the diagnostic board is
+connected to the running desktop mirror. It tests the 10-minute boundary with
+an accelerated clock, continued frames while asleep, wake-only contacts, normal
+subsequent taps, held activity, and repeat sleep/wake. Portable
+`firmware/test_screen_idle.c` also covers exact boundaries and clock rollover.
+
+Validated on the connected JC4827W543: all four hardware checks and the portable
+ASan/UBSan test passed. The hardware test accelerated the idle clock; it was not
+a ten-minute wall-clock soak or an optical brightness measurement.

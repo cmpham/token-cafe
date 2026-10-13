@@ -19,6 +19,7 @@
 #include "nv3041a_init.h"
 #include "touch_gesture.h"
 #include "touch_coordinates.h"
+#include "screen_idle.h"
 static spi_device_handle_t lcd;
 static esp_lcd_touch_handle_t touch;
 static QueueHandle_t events;
@@ -56,7 +57,23 @@ static void emit(uint8_t kind,uint16_t x,uint16_t y,uint32_t epoch) {
     if(xQueueSend(events,&event,0)!=pdTRUE) ESP_LOGW("TOUCH","input queue full");
     ESP_LOGI("TOUCH","%s %u,%u",kind==1?"TAP":kind==3?"DOUBLE_TAP":"SCROLL",x,y);
 }
+static ScreenIdle screen;
+static bool touch_active;
+static bool screen_activity(bool pressed) {
+    bool was_asleep=screen.asleep;
+    bool accept=screen_idle_sample(&screen,pressed,esp_log_timestamp());
+    if (screen.asleep!=was_asleep) {
+        ESP_ERROR_CHECK(gpio_set_level(1,!screen.asleep));
+        ESP_LOGI("LCD","BACKLIGHT %s",screen.asleep?"OFF":"ON");
+    }
+    return accept;
+}
 static void sample(TouchGesture *g,uint8_t count,uint16_t x,uint16_t y) {
+    touch_active=count>0;
+    if (!screen_activity(touch_active)) {
+        if (count) touch_cancel(g); else memset(g,0,sizeof(*g));
+        return;
+    }
     if(count && !g->down) ESP_LOGI("TOUCH","DOWN %u,%u",x,y);
     uint16_t out_x,out_y;
     uint32_t epoch=atomic_load(&input_epoch);
@@ -82,8 +99,12 @@ static void touch_task(void *arg) {
 #if CONFIG_TC_QA_USB
         TestSample s;
         if(xQueueReceive(samples,&s,0)==pdTRUE) {
-            if(s.count>=254) {
-                test_mode=s.count==255;memset(&gesture,0,sizeof(gesture));board_clear_input();
+            if(s.count==253) {
+                screen.last_touch=esp_log_timestamp()-s.x;
+                screen_activity(touch_active);
+                printf("@QA IDLE %u %u\n",s.id,!screen.asleep);
+            } else if(s.count>=254) {
+                test_mode=s.count==255;touch_active=false;memset(&gesture,0,sizeof(gesture));board_clear_input();
             } else if(test_mode) sample(&gesture,s.count,s.x,s.y);
             printf("@QA INPUT %u %lu %u\n",s.id,(unsigned long)esp_log_timestamp(),test_mode);
         }
@@ -97,6 +118,7 @@ static void touch_task(void *arg) {
                 else sample(&gesture,pressed ? count : 0,x[0],y[0]);
             } else touch_cancel(&gesture);
         }
+        screen_activity(touch_active);
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
@@ -156,6 +178,7 @@ void board_init(void) {
     esp_lcd_touch_config_t tc={.x_max=TC_WIDTH,.y_max=TC_HEIGHT,.rst_gpio_num=-1,.int_gpio_num=-1};
     ESP_ERROR_CHECK(esp_lcd_touch_new_i2c_gt911(io,&tc,&touch));
     ESP_LOGI("TOUCH","GT911 ready address=0x%02x",addr);
+    screen.last_touch=esp_log_timestamp();
     TC_CHECK(xTaskCreate(touch_task,"touch",4096,NULL,3,NULL)==pdPASS);
 }
 #else

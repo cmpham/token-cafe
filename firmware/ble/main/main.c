@@ -225,6 +225,8 @@ static void qa_task(void *arg) {
         if(sscanf(line,"QA IN %u %u %u %u %c",&id,&count,&x,&y,&extra)==4 &&
            count<=2 && x<=65535 && y<=65535) {
             if(!board_test_sample(id,count,x,y)) printf("@QA ERROR queue\n");
+        } else if(sscanf(line,"QA IDLE %u %u %c",&id,&x,&extra)==2 && x<=600000) {
+            if(!board_test_sample(id,253,x,0)) printf("@QA ERROR queue\n");
         } else if(sscanf(line,"QA MODE %u %u %c",&id,&count,&extra)==2 && count<=1) {
             if(!board_test_sample(id,count?255:254,0,0)) printf("@QA ERROR queue\n");
         } else if(sscanf(line,"QA SNAP %u %c",&id,&extra)==1) {

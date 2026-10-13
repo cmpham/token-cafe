@@ -22,6 +22,8 @@ jobs:
           /tmp/tc-test-double-tap
           cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Ifirmware/main firmware/test_touch_gesture.c -o /tmp/tc-test-touch
           /tmp/tc-test-touch
+          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined firmware/test_screen_idle.c -o /tmp/tc-test-idle
+          /tmp/tc-test-idle
           cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined firmware/test_protocol.c firmware/main/protocol.c -o /tmp/tc-test-protocol
           /tmp/tc-test-protocol
       - run: cargo fmt --check
