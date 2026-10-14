@@ -196,7 +196,7 @@ def integration(client, process, serial, qmp, frame):
         resumed = Client(sock)
         resumed.request(1)
         assert resumed.request(3) == baseline
-        for x, y, expected in [(0, 0, (0, 0)), (479, 271, (319, 239)), (240, 136, (160, 120))]:
+        for x, y, expected in [(0, 0, (0, 0)), (479, 271, (479, 271)), (240, 136, (240, 136))]:
             assert struct.unpack("<HH", resumed.request(4, struct.pack("<HH", x, y))) == expected
         for x, y in [(480, 0), (0, 272), (65535, 0), (0, 65535)]:
             resumed.request(4, struct.pack("<HH", x, y), status=1)

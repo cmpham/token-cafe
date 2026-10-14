@@ -1,4 +1,4 @@
-//! Export the real desktop renderer as RGB565 LE, scaled to fill a 480x272 panel.
+//! Export the real desktop renderer as RGB565 LE, at native 480x272 panel resolution.
 //! cargo run --example firmware_frame -- target/cafe.rgb565 [scene-x scene-y]
 use std::error::Error;
 use token_cafe::assets::{H, W};

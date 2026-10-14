@@ -75,7 +75,7 @@ class Rig:
         raise TimeoutError('USB sample acknowledgment')
     def mode(self,on):return self.ack(self.usb('MODE {id} '+str(int(on))))
     def sample(self,count,x=0,y=0):return self.ack(self.usb(f'IN {{id}} {count} {x} {y}'))
-    def point(self,x,y):return math.ceil(x*480/320),math.ceil(y*272/240)
+    def point(self,x,y):return x,y
     def tap(self,x,y,hold=.08):
         x,y=self.point(x,y);down=self.sample(1,x,y);time.sleep(hold);up=self.sample(0,x,y);return down,up
     def expected(self,action,**kw):return self.command('expect',action=action,**kw)
@@ -135,19 +135,19 @@ def suite(r):
         results.append(result);(r.out/'results.json').write_text(json.dumps(results,indent=2));print(json.dumps(result),flush=True)
     def fresh():r.reset()
     case('01-initial-full-sync',lambda:(fresh(),r.snap('01-initial-full-sync'))[1])
-    for i,(x,y) in enumerate([(40,80),(120,80),(200,80),(280,80),(40,160),(120,160),(200,160),(280,160)]):
+    for i,(x,y) in enumerate([(60,80),(180,80),(300,80),(420,80),(60,160),(180,160),(300,160),(420,160)]):
         def selection(i=i,x=x,y=y):
             fresh();before=r.command('state')['inputs'];r.expected('click',x=x,y=y);_,up=r.tap(x,y)
             return r.snap(f'select-{i}',before+1,up)
         case(f'02-select-seat-{i}',selection)
     def toggle():
-        fresh();r.expected('click',x=40,y=80);r.tap(40,80);r.wait();r.expected('click',x=40,y=80);r.tap(40,80)
+        fresh();r.expected('click',x=60,y=80);r.tap(60,80);r.wait();r.expected('click',x=60,y=80);r.tap(60,80)
         return r.snap('03-toggle-off')
     case('03-toggle-off',toggle)
     def hold():
-        fresh();base=r.command('state')['inputs'];x,y=r.point(40,80);r.sample(1,x,y);time.sleep(.5)
+        fresh();base=r.command('state')['inputs'];x,y=r.point(60,80);r.sample(1,x,y);time.sleep(.5)
         assert r.command('state')['inputs']==base,'Long hold activated before release'
-        r.snap('04-held-no-activation');r.expected('click',x=40,y=80);up=r.sample(0,x,y)
+        r.snap('04-held-no-activation');r.expected('click',x=60,y=80);up=r.sample(0,x,y)
         return r.snap('04-long-hold-release',base+1,up)
     case('04-long-hold-release',hold)
     for name,samples in [
@@ -164,17 +164,17 @@ def suite(r):
             return r.snap(name)
         case(name,negative)
     def footer():
-        fresh();r.expected('click',x=40,y=80);r.tap(40,80);r.wait();r.expected('click',x=140,y=220);_,up=r.tap(140,220)
+        fresh();r.expected('click',x=60,y=80);r.tap(60,80);r.wait();r.expected('click',x=210,y=252);_,up=r.tap(210,252)
         return r.snap('10-footer-next',release=up)
     case('10-footer-next',footer)
     def scroll():
-        fresh();r.expected('click',x=40,y=80);r.tap(40,80);r.wait();r.expected('scroll',y=239)
-        x,y=r.point(310,220);r.sample(1,x,y);x,y=r.point(310,239);r.sample(1,x,y);r.sample(0,x,y)
-        r.snap('11-scroll-last');r.expected('scroll',y=192);x,y=r.point(310,192);r.sample(1,x,y);r.sample(0,x,y)
+        fresh();r.expected('click',x=60,y=80);r.tap(60,80);r.wait();r.expected('scroll',y=271)
+        x,y=r.point(470,252);r.sample(1,x,y);x,y=r.point(470,271);r.sample(1,x,y);r.sample(0,x,y)
+        r.snap('11-scroll-last');r.expected('scroll',y=224);x,y=r.point(470,224);r.sample(1,x,y);r.sample(0,x,y)
         return r.snap('11-scroll-first')
     case('11-scroll-endpoints',scroll)
     def open_scroll():
-        fresh();r.expected('next');r.expected('scroll',y=239);x,y=r.point(310,239);r.sample(1,x,y);r.sample(0,x,y)
+        fresh();r.expected('next');r.expected('scroll',y=271);x,y=r.point(470,271);r.sample(1,x,y);r.sample(0,x,y)
         return r.snap('12-scroll-opens-focus')
     case('12-scroll-opens-focus',open_scroll)
     for name,config,action in [
@@ -189,7 +189,7 @@ def suite(r):
             return r.snap(name)
         case(name,content)
     def replace():
-        fresh();r.command('both',action='focus',id='qa-0');r.command('both',action='scroll',y=239);r.wait();r.command('both',action='replace')
+        fresh();r.command('both',action='focus',id='qa-0');r.command('both',action='scroll',y=271);r.wait();r.command('both',action='replace')
         return r.snap('20-task-replaced')
     case('20-task-replaced',replace)
     def remove():
@@ -198,13 +198,13 @@ def suite(r):
     def burst():
         fresh();base=r.command('state')['inputs']
         for i in range(12):
-            x=40+(i%4)*80;y=80 if i%8<4 else 160;r.expected('click',x=x,y=y);r.tap(x,y,hold=0)
+            x=60+(i%4)*120;y=80 if i%8<4 else 160;r.expected('click',x=x,y=y);r.tap(x,y,hold=0)
         return r.snap('22-rapid-12-taps',base+12)
     case('22-rapid-12-taps',burst)
     def cycles():
         fresh();base=r.command('state')['inputs']
         for _ in range(10):
-            r.expected('click',x=40,y=80);r.tap(40,80,hold=.02);r.wait()
+            r.expected('click',x=60,y=80);r.tap(60,80,hold=.02);r.wait()
         return r.snap('23-repeat-toggle-10',base+10)
     case('23-repeat-toggle-10',cycles)
     def reconnect():
@@ -212,24 +212,24 @@ def suite(r):
         return r.snap('24-host-reconnect')
     case('24-host-reconnect',reconnect)
     def post():
-        r.expected('click',x=40,y=80);_,up=r.tap(40,80);return r.snap('25-touch-after-reconnect',release=up)
+        r.expected('click',x=60,y=80);_,up=r.tap(60,80);return r.snap('25-touch-after-reconnect',release=up)
     case('25-touch-after-reconnect',post)
     def corners():
         fresh()
-        for x,y in [(0,0),(319,0),(0,239),(319,239)]:
+        for x,y in [(0,0),(319,0),(0,271),(319,271)]:
             base=r.command('state')['inputs'];r.expected('click',x=x,y=y);r.tap(x,y);r.wait(base+1)
         return r.snap('26-four-corners')
     case('26-four-corners',corners)
     def clamp():
-        fresh();r.command('both',action='focus',id='qa-0');r.command('both',action='scroll',y=239);r.wait()
+        fresh();r.command('both',action='focus',id='qa-0');r.command('both',action='scroll',y=271);r.wait()
         base=r.command('state')['inputs']
         for _ in range(3):
-            x,y=r.point(310,239);r.sample(1,x,y);r.sample(0,x,y)
+            x,y=r.point(470,271);r.sample(1,x,y);r.sample(0,x,y)
         return r.snap('27-scroll-clamped',base+3)
     case('27-scroll-clamped',clamp)
     def rail_cancel():
-        fresh();r.command('both',action='focus',id='qa-0');r.wait();r.expected('scroll',y=220)
-        x,y=r.point(310,220);r.sample(1,x,y);r.sample(1,65535,65535);r.sample(0,65535,65535)
+        fresh();r.command('both',action='focus',id='qa-0');r.wait();r.expected('scroll',y=252)
+        x,y=r.point(470,252);r.sample(1,x,y);r.sample(1,65535,65535);r.sample(0,65535,65535)
         return r.snap('28-scroll-leaves-panel')
     case('28-scroll-leaves-panel',rail_cancel)
     def invalid_commands():
@@ -242,7 +242,7 @@ def suite(r):
         return r.snap('29-invalid-usb-commands')
     case('29-invalid-usb-commands',invalid_commands)
     def held_reconnect():
-        fresh();x,y=r.point(40,80);r.sample(1,x,y)
+        fresh();x,y=r.point(60,80);r.sample(1,x,y)
         r.host.stdin.write('{"cmd":"quit"}\n');r.host.stdin.flush();r.host.wait(timeout=5);time.sleep(2)
         r.start_host();r.wait(timeout=30)
         # Deliberately do not reset diagnostic mode: the connection must cancel the old gesture.
@@ -252,14 +252,14 @@ def suite(r):
     case('30-held-across-reconnect',held_reconnect)
     def overflow_next():
         r.reset(count=10);r.command('both',action='focus',id='qa-7');r.wait()
-        r.expected('click',x=140,y=220);r.tap(140,220);return r.snap('31-footer-overflow')
+        r.expected('click',x=210,y=252);r.tap(210,252);return r.snap('31-footer-overflow')
     case('31-footer-overflow',overflow_next)
     def all_closed():
         fresh();r.command('both',action='remove');r.command('both',action='tick',steps=300);return r.snap('32-removal-animation-complete')
     case('32-removal-animation-complete',all_closed)
     def unicode_last():
-        fresh();r.command('both',action='focus',id='qa-3');r.wait();r.expected('scroll',y=239)
-        x,y=r.point(310,239);r.sample(1,x,y);r.sample(0,x,y);return r.snap('33-unicode-last-page')
+        fresh();r.command('both',action='focus',id='qa-3');r.wait();r.expected('scroll',y=271)
+        x,y=r.point(470,271);r.sample(1,x,y);r.sample(0,x,y);return r.snap('33-unicode-last-page')
     case('33-unicode-last-page',unicode_last)
     def attention_rotate():
         r.reset(attention=True);r.command('both',action='tick',steps=120);return r.snap('34-attention-rotation')
@@ -276,42 +276,42 @@ def suite(r):
         result=r.snap(f'36-double-{index}',base+2)
         assert r.command('state')['activations']==[url], 'Expected exactly one desktop activation'
         return result
-    case('36-double-claude',lambda:double_case(0,40,'claude://code/continue?session=local_qa'))
-    case('37-double-codex',lambda:double_case(2,200,'codex://threads/qa-codex'))
+    case('36-double-claude',lambda:double_case(0,60,'claude://code/continue?session=local_qa'))
+    case('37-double-codex',lambda:double_case(2,300,'codex://threads/qa-codex'))
     def unlinked():
         r.reset(targets=True);base=r.command('state')['inputs'];r.expected('focus',id='qa-1')
-        r.tap(120,80);r.tap(120,80)
+        r.tap(180,80);r.tap(180,80)
         result=r.snap('38-double-unlinked',base+2)
         assert not r.command('state')['activations']
         return result
     case('38-double-unlinked',unlinked)
     def slow():
         r.reset(targets=True);base=r.command('state')['inputs']
-        r.tap(40,80);time.sleep(.55);r.tap(40,80)
+        r.tap(60,80);time.sleep(.55);r.tap(60,80)
         result=r.snap('39-slow-taps-toggle',base+2)
         assert not r.command('state')['activations']
         return result
     case('39-slow-taps-toggle',slow)
     def different():
         r.reset(targets=True);base=r.command('state')['inputs'];r.expected('focus',id='qa-1')
-        r.tap(40,80);r.tap(120,80)
+        r.tap(60,80);r.tap(180,80)
         result=r.snap('40-different-patrons',base+2)
         assert not r.command('state')['activations']
         return result
     case('40-different-patrons',different)
     def double_footer():
         r.reset(targets=True);base=r.command('state')['inputs']
-        r.expected('click',x=140,y=220);r.expected('click',x=140,y=220)
-        r.tap(140,220);r.tap(140,220)
+        r.expected('click',x=210,y=252);r.expected('click',x=210,y=252)
+        r.tap(210,252);r.tap(210,252)
         result=r.snap('41-double-footer',base+2)
         assert not r.command('state')['activations']
         return result
     case('41-double-footer',double_footer)
     def broken_pair():
         r.reset(targets=True);base=r.command('state')['inputs']
-        r.tap(40,80)
+        r.tap(60,80)
         r.sample(1,60,91);r.sample(2,60,91);r.sample(0,60,91)
-        r.tap(40,80)
+        r.tap(60,80)
         result=r.snap('42-multitouch-breaks-pair',base+2)
         assert not r.command('state')['activations']
         return result

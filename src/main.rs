@@ -6,7 +6,7 @@
 //!   token-cafe              the live café
 //!   token-cafe --demo       a fixed list that shows every pose
 //!   token-cafe --print      print the sessions and this month's usage, and exit
-//!   token-cafe --scale N    start at N times 320x240 (default 3)
+//!   token-cafe --scale N    start at N times 480x272 (default 1 on macOS, 3 elsewhere)
 //!   token-cafe --always-on-top  keep the café above other windows
 //! Keys: 1-6 window size, f / F11 fullscreen, Esc leave fullscreen/clear selection, Tab next session, Left/Right select patron, Up/Down task page, t toggle always on top, q quit.
 
@@ -174,14 +174,15 @@ fn usage_text() -> &'static str {
      \n  --watch    with --session-info, emit snapshots when they change\
      \n  --demo     a fixed list that shows every pose\
      \n  --print    print the sessions and this month's usage, and exit\
-     \n  --scale N  start at N times 320x240 (default 3)\
+     \n  --scale N  start at N times 480x272 (default 1 on macOS, 3 elsewhere)\
      \n  --bluetooth --bluetooth-key PATH  mirror to your authenticated BLE companion\
      \n  --always-on-top  keep the café above other windows\
      \n\nkeys: 1-6 window size, f / F11 fullscreen, Esc leave fullscreen/clear selection, Tab next session, Left/Right select patron, Up/Down task page, t toggle always on top, q quit"
 }
 
 fn main() {
-    let (mut demo, mut print, mut scale) = (false, false, 3u32);
+    let default_scale = if cfg!(target_os = "macos") { 1u32 } else { 3u32 };
+    let (mut demo, mut print, mut scale) = (false, false, default_scale);
     let (mut session_info, mut watch) = (false, false);
     let mut always_on_top = false;
     let mut bluetooth = false;

@@ -143,7 +143,7 @@ static void dispatch(tc_protocol *p) {
         p->present(p->frame);
         put32(result, tc_crc32(0, p->frame, TC_FRAME_BYTES));
         reply(p, 0, result, 4); return;
-    case 4: { // INJECT_TAP: simulator-only input, translated to the 320x240 scene.
+    case 4: { // INJECT_TAP: simulator-only input, translated to the 480x272 scene.
         if (len != 4) break;
         uint16_t x = u16(data), y = u16(data + 2);
         if (x >= TC_WIDTH || y >= TC_HEIGHT) break;

@@ -56,7 +56,7 @@ serial. That diagnostic command does not verify physical LCD pixels or touch ali
 
 ## Transport and limits
 
-- Same desktop 320x240 renderer, RGB565, nearest-neighbor scaled to fill the 480x272 panel.
+- Same desktop 480x272 renderer, RGB565, mapped directly to the panel without stretching.
 - Adaptive compressed rectangles (opcode 6), XOR pixel deltas (opcode 8),
   and raw fallback (opcode 2). Changed four-row regions merge up to the 4096-byte
   payload limit, reducing round trips for sparse updates. Failed transfers force a full
@@ -162,7 +162,7 @@ establish a capacitive reset connection. Touch is polled every 20 ms.
 Single-finger taps select/toggle patrons or cycle the banner. Starting on the
 right rail drags the task scrollbar. Multi-touch and non-rail drags are ignored. Opcode 9 polls a queued event: empty response, or five bytes
 `kind:u8, panel_x:u16le, panel_y:u16le` (1=tap, 2=scroll). The desktop checks bounds,
-maps panel coordinates back to the 320x240 scene, and applies input on its UI thread. Input queues are
+uses panel coordinates directly in the shared 480x272 scene, and applies input on its UI thread. Input queues are
 bounded and cleared on authentication/reconnect. No desktop app-launch commands
 are exposed over this touch path.
 

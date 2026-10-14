@@ -68,11 +68,11 @@ The bundle is for local use; it is not signed for distribution or notarized. Fin
 | `token-cafe --session-info --watch` | emit a snapshot when live session information changes |
 | `token-cafe --print` | list the live sessions and this month's usage in the terminal, then exit |
 | `token-cafe --always-on-top` | keep the café above other windows |
-| `token-cafe --scale N` | open at N × 320×240 (default 3) |
+| `token-cafe --scale N` | open at N × 480×272 (default 1 on macOS, 3 elsewhere) |
 
 | Key | |
 |---|---|
-| `1` – `6` | resize the window to that many times 320×240 |
+| `1` – `6` | resize the window to that many times 480×272 |
 | `f` / `F11` | fullscreen (nice on a spare monitor) |
 | tap a patron / bottom summary / `Tab` | select a session and show its task |
 | tap selected patron / empty desk | clear focus |
@@ -86,7 +86,7 @@ On macOS, press `1` then `t` for a small floating café, or launch with `token-c
 
 On Linux X11, pinning depends on window-manager support. Wayland does not expose the window-level API: the title shows “Pin via compositor”, `T` leaves the window unpinned, and `--always-on-top` prints an explanation. Configure a compositor window rule using the `token-cafe` app ID instead.
 
-The café is drawn at 320×240 and scaled by the largest whole number that fits, so the pixels stay crisp at any window size; the rest is letterboxed. Only what changes on screen is repainted, so a live café costs about 1% of a CPU core.
+The café is drawn at 480×272 and scaled by the largest whole number that fits, so the pixels stay crisp at any window size; the rest is letterboxed. Only what changes on screen is repainted, so a live café costs about 1% of a CPU core.
 
 > [!NOTE]
 > On a tiling window manager the window gets tiled like any other. Its Wayland app id and X11 class are both `token-cafe`, so you can write a window rule to float or pin it.
@@ -187,3 +187,22 @@ after provisioning the board. The app shows BLE connection status in its window
 title, sends compressed changes without blocking rendering, and reconnects with
 a full frame resync. See [firmware/ble/README.md](firmware/ble/README.md) for setup,
 physical-board tests, platform dependencies and current display/security limits.
+
+### Patron seating
+
+Claude patrons sit on the left; Codex patrons sit on the right. Each side is
+numbered 1–2 across the top row and 3–4 across the bottom row. Working patrons and patrons waiting for input take priority, including when
+the app starts or a walking patron settles. An active patron swaps into the
+lowest-numbered earlier seat occupied by an idle patron on the same side.
+Both patrons walk around the desks to exchange seats. Active patrons are never
+displaced. Idle patrons keep their seats unless an active patron needs an earlier seat. Selection and
+session links follow the patron. Swapping seats temporarily ignore taps until
+the walkers settle; overflow sessions remain accessible from the banner.
+
+### Native widescreen layout
+
+The desktop and JC4827W543 companion now share a 480×272 canvas. The board
+receives pixels at 1:1 scale; the desktop uses uniform integer scaling. Patrons,
+font glyphs and icons keep square pixels. Wider desks show longer names, and the
+task panel fits 32 characters per line. Touch coordinates map directly to the
+rendered scene; update both app and firmware together for the new scrollbar area.

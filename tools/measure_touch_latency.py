@@ -46,7 +46,7 @@ def measure(board, app):
     for tap, event in zip(taps, applied):
         released, point, started = tap
         generation, x, y = event
-        if (point[0] * 320 // 480, point[1] * 240 // 272) != (x, y):
+        if (point[0], point[1]) != (x, y):
             raise ValueError('Touch/app event streams do not match; start a fresh capture.')
         finished = completed.get(generation)
         if finished is not None and finished >= released:

@@ -55,23 +55,23 @@ fn main() {
         s.tick(33);
     }
     shot("02-eight-working", &s);
-    s.click(40, 80);
+    s.click(60, 80);
     shot("03-patron-selected", &s);
     s.page_task_key(true);
     shot("04-down-second-page", &s);
-    s.scroll_task_to(239);
+    s.scroll_task_to(271);
     shot("05-drag-last-page", &s);
     s.page_task_key(true);
     shot("06-down-clamped", &s);
-    s.scroll_task_to(192);
+    s.scroll_task_to(224);
     shot("07-drag-first-page", &s);
     s.page_task_key(false);
     shot("08-up-clamped", &s);
-    s.click(140, 220);
+    s.click(210, 252);
     shot("09-banner-next-patron", &s);
     s.select_patron(false);
     shot("10-left-previous", &s);
-    s.click(40, 80);
+    s.click(60, 80);
     shot("11-toggle-off", &s);
     s.page_task_key(false);
     shot("12-up-opens-focus", &s);
@@ -79,7 +79,7 @@ fn main() {
     shot("13-task-unavailable", &s);
     s.focus_patron("qa-3".into());
     shot("14-unicode-long-word", &s);
-    s.scroll_task_to(239);
+    s.scroll_task_to(271);
     shot("15-unicode-last-page", &s);
     sessions[1].state = State::Wait;
     sessions[1].why = Why::Perm;
@@ -124,9 +124,26 @@ fn main() {
         target: None,
         task: "Updated task content should reset to its first page and stay on this same patron.".into(),
     }]);
-    s.scroll_task_to(239);
+    s.scroll_task_to(271);
     s.set_details(vec![SessionDetail { id: "qa-0".into(), target: None, task: "Replacement task".into() }]);
     shot("24-task-replaced", &s);
+    // Record the complete swap: Claude 3 -> 1 and Codex 4 -> 1.
+    let mut swap = Scene::new();
+    for patron in &mut sessions {
+        patron.state = State::Idle;
+    }
+    swap.set_sessions(&sessions[..8]);
+    swap.focus_patron("qa-4".into());
+    shot("25-swap-before", &swap);
+    sessions[4].state = State::Work;
+    sessions[7].state = State::Wait;
+    swap.set_sessions(&sessions[..8]);
+    for i in 0..32 {
+        swap.tick(125);
+        shot(&format!("26-swap-{i:02}"), &swap);
+    }
+    swap.tick(10000);
+    shot("27-swap-after", &swap);
     // Equivalent interactions must preserve both selection and every displayed pixel.
     for (a, b) in [(4, 5), (6, 7), (2, 6), (2, 9), (2, 11)] {
         assert_eq!(frames[a].1, frames[b].1, "{} versus {}", frames[a].0, frames[b].0);

@@ -1,4 +1,4 @@
-//! Software drawing into the 320x240 frame (0x00RRGGBB pixels): rectangles,
+//! Software drawing into the 480x272 frame (0x00RRGGBB pixels): rectangles,
 //! shadows, palette sprites and the 5x7 font, the primitives design/cafe.js
 //! draws with. Every call clips to the screen and to the current clip
 //! rectangle.

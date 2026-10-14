@@ -2,11 +2,11 @@
 use super::{FRAME_BYTES, HEIGHT, WIDTH};
 
 pub fn encode_frame(pixels: &[u32]) -> Vec<u8> {
-    assert_eq!(pixels.len(), 320 * 240);
+    assert_eq!(pixels.len(), WIDTH * HEIGHT);
     let mut out = vec![0; FRAME_BYTES];
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
-            let p = pixels[(y * 240 / HEIGHT) * 320 + x * 320 / WIDTH];
+            let p = pixels[y * WIDTH + x];
             let color = ((((p >> 19) & 31) << 11) | (((p >> 10) & 63) << 5) | ((p >> 3) & 31)) as u16;
             let offset = (y * WIDTH + x) * 2;
             out[offset..offset + 2].copy_from_slice(&color.to_le_bytes());

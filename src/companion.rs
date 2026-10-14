@@ -61,12 +61,12 @@ impl Input {
             let (kind, x, y) = match self {
                 Input::Tap(x, y) => ("tap", x, y),
                 Input::DoubleTap(x, y) => ("double", x, y),
-                Input::Scroll(y) => ("scroll", 310, y),
+                Input::Scroll(y) => ("scroll", 470, y),
             };
             let hit = scene.patron_at(x, y);
             let target = hit.and_then(|id| scene.session_target(id)).and_then(|t| t.url());
             let seats: Vec<_> = (0..8).map(|i| {
-                        let id = scene.patron_at(40+(i%4)*80,80+(i/4)*72);
+                        let id = scene.patron_at(60+(i%4)*120,80+(i/4)*88);
                         serde_json::json!({"seat":i,"id":id,"target":id.and_then(|id| scene.session_target(id)).and_then(|t| t.url())})
                     }).collect();
             eprintln!(
@@ -87,7 +87,7 @@ impl Input {
                 scene.click(x, y);
             }
             Self::Scroll(y) => {
-                if !scene.scrollbar_hit(310, 220) {
+                if !scene.scrollbar_hit(470, 252) {
                     scene.select_next();
                 }
                 scene.scroll_task_to(y);
@@ -108,12 +108,12 @@ fn decode_input(data: &[u8]) -> Result<Option<Input>, Error> {
     if x >= WIDTH || y >= HEIGHT {
         return Err("Invalid companion input coordinates".into());
     }
-    let x = (x * 320 / WIDTH) as i32;
-    let y = (y * 240 / HEIGHT) as i32;
+    let x = x as i32;
+    let y = y as i32;
     match data[0] {
-        1 if (0..320).contains(&x) && (0..240).contains(&y) => Ok(Some(Input::Tap(x, y))),
+        1 if (0..480).contains(&x) && (0..272).contains(&y) => Ok(Some(Input::Tap(x, y))),
         1 => Ok(None),
-        2 => Ok(Some(Input::Scroll(y.clamp(192, 239)))),
+        2 => Ok(Some(Input::Scroll(y.clamp(224, 271)))),
         3 => Ok(Some(Input::DoubleTap(x, y))),
         _ => Err("Invalid companion input kind".into()),
     }
@@ -575,12 +575,12 @@ mod tests {
     #[test]
     fn touch_decode_checks_bounds_and_maps_full_panel() {
         assert_eq!(decode_input(&[]).unwrap(), None);
-        assert_eq!(decode_input(&[3, 60, 0, 91, 0]).unwrap(), Some(Input::DoubleTap(40, 80)));
+        assert_eq!(decode_input(&[3, 60, 0, 91, 0]).unwrap(), Some(Input::DoubleTap(60, 91)));
         assert!(decode_input(&[3, 224, 1, 0, 0]).is_err());
         assert_eq!(decode_input(&[1, 0, 0, 0, 0]).unwrap(), Some(Input::Tap(0, 0)));
-        assert_eq!(decode_input(&[1, 223, 1, 15, 1]).unwrap(), Some(Input::Tap(319, 239)));
-        assert_eq!(decode_input(&[1, 240, 0, 136, 0]).unwrap(), Some(Input::Tap(160, 120)));
-        assert_eq!(decode_input(&[2, 134, 1, 15, 1]).unwrap(), Some(Input::Scroll(239)));
+        assert_eq!(decode_input(&[1, 223, 1, 15, 1]).unwrap(), Some(Input::Tap(479, 271)));
+        assert_eq!(decode_input(&[1, 240, 0, 136, 0]).unwrap(), Some(Input::Tap(240, 136)));
+        assert_eq!(decode_input(&[2, 134, 1, 15, 1]).unwrap(), Some(Input::Scroll(271)));
         assert!(decode_input(&[1, 224, 1, 0, 0]).is_err());
         assert!(decode_input(&[1, 80, 0, 16, 1]).is_err());
         assert!(decode_input(&[9, 80, 0, 16, 0]).is_err());
@@ -588,13 +588,14 @@ mod tests {
     }
     #[test]
     fn every_panel_pixel_maps_to_the_pixel_rendered_there() {
-        let pixels: Vec<u32> = (0..320 * 240).map(|i| (i as u32).wrapping_mul(2654435761) & 0xffffff).collect();
+        let pixels: Vec<u32> = (0..WIDTH * HEIGHT).map(|i| (i as u32).wrapping_mul(2654435761) & 0xffffff).collect();
         let frame = encode_frame(&pixels);
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
                 let data = [1, x as u8, (x >> 8) as u8, y as u8, (y >> 8) as u8];
                 let Some(Input::Tap(sx, sy)) = decode_input(&data).unwrap() else { panic!("tap lost") };
-                let p = pixels[sy as usize * 320 + sx as usize];
+                assert_eq!((sx, sy), (x as i32, y as i32));
+                let p = pixels[sy as usize * WIDTH + sx as usize];
                 let expected = ((((p >> 19) & 31) << 11) | (((p >> 10) & 63) << 5) | ((p >> 3) & 31)) as u16;
                 let at = (y * WIDTH + x) * 2;
                 assert_eq!(u16::from_le_bytes([frame[at], frame[at + 1]]), expected);
@@ -604,7 +605,7 @@ mod tests {
 
     #[test]
     fn frame_positions_and_color() {
-        let image = encode_frame(&vec![0xff0000; 320 * 240]);
+        let image = encode_frame(&vec![0xff0000; WIDTH * HEIGHT]);
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
                 let expected = [0, 0xf8];

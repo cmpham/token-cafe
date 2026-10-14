@@ -66,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
     fn frame(s: &Scene) -> Vec<u8> {
-        let mut pixels = vec![0; 320 * 240];
+        let mut pixels = vec![0; 480 * 272];
         s.render(&mut pixels, chrono::NaiveTime::from_hms_opt(20, 0, 0).unwrap());
         encode_frame(&pixels)
     }
@@ -119,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 json!({"id":v["request"],"inputs":inputs,"actual":format!("{:08x}",crc32fast::hash(&a)),"expected":format!("{:08x}",crc32fast::hash(&e)),"status":mirror.status(),"activations":activations})
             );
         }
-        let mut pixels = vec![0; 320 * 240];
+        let mut pixels = vec![0; 480 * 272];
         actual.render(&mut pixels, chrono::NaiveTime::from_hms_opt(20, 0, 0).unwrap());
         mirror.publish(&pixels);
         std::thread::sleep(Duration::from_millis(10));

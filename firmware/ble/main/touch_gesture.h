@@ -13,7 +13,7 @@ static inline uint8_t touch_sample(TouchGesture *g,uint8_t count,uint16_t x,uint
             g->epoch=epoch;g->started=now;
             g->down=true;g->start_x=x;g->start_y=y;g->last_y=y;
             g->cancel=count!=1 || x>=TC_WIDTH || y>=TC_HEIGHT;
-            g->scroll=!g->cancel && x*TC_SCENE_WIDTH/TC_WIDTH>=276 && y*TC_SCENE_HEIGHT/TC_HEIGHT>=192;
+            g->scroll=!g->cancel && x*TC_SCENE_WIDTH/TC_WIDTH>=436 && y*TC_SCENE_HEIGHT/TC_HEIGHT>=224;
             if(g->scroll) {g->taps.pending=false;event=2;}
         } else if(!g->cancel) {
             if(x>=TC_WIDTH || y>=TC_HEIGHT) g->cancel=true;

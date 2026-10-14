@@ -1,5 +1,5 @@
 //! The window: ticks the scene in fixed 33 ms steps, renders the
-//! 320x240 frame and shows it at the largest whole-number scale that fits,
+//! 480x272 frame and shows it at the largest whole-number scale that fits,
 //! letterboxed, so the pixel art stays crisp at any size or DPI. Only the
 //! part of the window that changed since the buffer was last shown is
 //! repainted and reported to the compositor: a quiet café costs little.
@@ -722,19 +722,16 @@ mod tests {
 
     #[test]
     fn pointer_mapping_handles_retina_and_letterbox_edges() {
-        assert_eq!(frame_point(240.0, 160.0, 640, 480), Some((120, 80)));
-        assert_eq!(frame_point(720.0, 480.0, 1920, 1440), Some((120, 80)));
-        // The desktop window keeps integer-scale letterboxing; the companion fills its panel.
-        assert_eq!(frame_point(80.0, 16.0, 480, 272), Some((0, 0)));
-        assert_eq!(frame_point(399.0, 255.0, 480, 272), Some((319, 239)));
-        for (x, y) in [(79.0, 16.0), (400.0, 16.0), (80.0, 15.0), (80.0, 256.0)] {
+        assert_eq!(frame_point(60.0, 80.0, 480, 272), Some((60, 80)));
+        assert_eq!(frame_point(479.0, 271.0, 480, 272), Some((479, 271)));
+        for (x, y) in [(-1.0, 0.0), (480.0, 0.0), (0.0, -1.0), (0.0, 272.0)] {
             assert_eq!(frame_point(x, y, 480, 272), None);
         }
-        // 1000x600: scale 2, horizontal padding 180 and vertical padding 60.
-        assert_eq!(frame_point(420.0, 220.0, 1000, 600), Some((120, 80)));
-        assert_eq!(frame_point(179.0, 60.0, 1000, 600), None);
-        assert_eq!(frame_point(820.0, 60.0, 1000, 600), None);
-        assert_eq!(frame_point(180.0, 540.0, 1000, 600), None);
+        // Uniform 2x scaling: 20px horizontal and 28px vertical padding.
+        assert_eq!(frame_point(140.0, 188.0, 1000, 600), Some((60, 80)));
+        assert_eq!(frame_point(19.0, 28.0, 1000, 600), None);
+        assert_eq!(frame_point(980.0, 28.0, 1000, 600), None);
+        assert_eq!(frame_point(20.0, 572.0, 1000, 600), None);
     }
 
     fn frame() -> Vec<u32> {
@@ -743,8 +740,8 @@ mod tests {
 
     #[test]
     fn fit_letterboxes_at_whole_scales() {
-        assert_eq!(fit(2540, 1356), Fit { k: 5, ox: 470, oy: 78 });
-        assert_eq!(fit(960, 720), Fit { k: 3, ox: 0, oy: 0 });
+        assert_eq!(fit(2540, 1356), Fit { k: 4, ox: 310, oy: 134 });
+        assert_eq!(fit(960, 720), Fit { k: 2, ox: 0, oy: 88 });
         assert_eq!(fit(200, 100), Fit { k: 1, ox: 0, oy: 0 }); // smaller than the frame: clipped
     }
 

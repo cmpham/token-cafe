@@ -12,8 +12,8 @@ use crate::assets::{self as a, Pal, Sprite, base, c, slot};
 use crate::gfx::{Gfx, text_width};
 
 pub const SEATS: usize = 8;
-const TASK_LINE_LEN: usize = 19; // between the portrait and scrollbar touch target
-const PLATE_LEN: usize = 8; // shown on the desk nameplate
+const TASK_LINE_LEN: usize = 32; // between the portrait and scrollbar touch target
+const PLATE_LEN: usize = 13; // shown on the desk nameplate
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
@@ -102,16 +102,16 @@ pub struct Usage {
 /* ---- layout, as in design/cafe.js --------------------------------------- */
 
 const COLS: i32 = 4;
-const STATION_W: i32 = 80;
-const STATION_H: i32 = 72;
+const STATION_W: i32 = 120;
+const STATION_H: i32 = 88;
 const FLOOR_Y: i32 = 48;
 const SIT_X: i32 = 32; // seated base box inside a station
 const SIT_Y: i32 = 6;
 const CHAIR_X: i32 = 30;
 const CHAIR_Y: i32 = 2;
-const DESK_X: i32 = 12;
+const DESK_X: i32 = -4;
 const DESK_Y: i32 = 30;
-const DESK_W: i32 = 56;
+const DESK_W: i32 = 88;
 const LID_X: i32 = 34;
 const LID_Y: i32 = 24;
 const BX: i32 = 3; // base box offset inside character sprites
@@ -127,6 +127,7 @@ const QUIET_MS: i64 = 1000;
 enum Mode {
     Seated,
     Arriving,
+    Swapping,
     Leaving,
 }
 
@@ -249,16 +250,33 @@ struct Geom {
 
 fn seat_geom(i: usize) -> Geom {
     let (col, row) = (i as i32 % COLS, i as i32 / COLS);
-    Geom { sx: col * STATION_W, sy: FLOOR_Y + row * STATION_H, col }
+    Geom { sx: col * STATION_W + 20, sy: FLOOR_Y + row * STATION_H, col }
 }
 
 /// Feet positions from the door (under the message window) to a chair.
 fn path_to(i: usize) -> [[f64; 2]; 5] {
     let g = seat_geom(i);
-    let gap = (if g.col < COLS / 2 { g.sx + STATION_W } else { g.sx }) as f64;
+    let gap = ((g.col + i32::from(g.col < COLS / 2)) * STATION_W) as f64;
     let aisle = (g.sy + 66) as f64;
     let (sx, sy) = (g.sx as f64, g.sy as f64);
-    [[160.0, 262.0], [160.0, aisle], [gap, aisle], [gap, sy + 28.0], [sx + 40.0, sy + 28.0]]
+    [[240.0, 294.0], [240.0, aisle], [gap, aisle], [gap, sy + 28.0], [sx + 40.0, sy + 28.0]]
+}
+
+/// Two offset walking lanes keep a swap readable. Feet leave each chair via
+/// the gap between columns, travel below the desks, then approach the new chair.
+fn swap_path(from: usize, to: usize, lane: f64) -> [[f64; 2]; 6] {
+    let a = seat_geom(from);
+    let b = seat_geom(to);
+    let aisle = if a.col < 2 { 120.0 } else { 360.0 };
+    let x = aisle + lane;
+    [
+        [(a.sx + 40) as f64, (a.sy + 28) as f64],
+        [x, (a.sy + 28) as f64],
+        [x, (a.sy + 60) as f64],
+        [x, (b.sy + 60) as f64],
+        [x, (b.sy + 28) as f64],
+        [(b.sx + 40) as f64, (b.sy + 28) as f64],
+    ]
 }
 
 fn seat_props(i: usize) -> &'static [(&'static Sprite, i32, i32)] {
@@ -357,7 +375,7 @@ fn pose_of(t: i64, a: &Agent) -> Pose {
 
 /* ---- the tab: this month's tokens and dollars, both tools summed -------- */
 
-const TAB_X: i32 = 237;
+const TAB_X: i32 = 397;
 const TAB_Y: i32 = 5;
 const TAB_W: i32 = 74;
 
@@ -559,7 +577,11 @@ impl Scene {
                 continue;
             }
             let full = path_to(a.seat);
-            let back: Vec<[f64; 2]> = if a.mode == Mode::Arriving {
+            let back: Vec<[f64; 2]> = if a.mode == Mode::Swapping {
+                // A session can close mid-swap. Exit from its current position,
+                // rather than indexing the unrelated five-point arrival path.
+                vec![[a.x, a.y], [240.0, a.y], [240.0, 294.0]]
+            } else if a.mode == Mode::Arriving {
                 // turn round where they stand
                 let k = full.len() - 1 - a.remaining();
                 std::iter::once([a.x, a.y]).chain(full[..=k].iter().rev().copied()).collect()
@@ -569,6 +591,40 @@ impl Scene {
             a.start_walk(&back, Mode::Leaving);
         }
         self.overflow = overflow;
+        self.promote_active();
+    }
+
+    fn promote_active(&mut self) {
+        let mut resumed: Vec<_> = self
+            .agents
+            .iter()
+            .filter(|a| a.state != State::Idle && a.seen && a.mode == Mode::Seated)
+            .map(|a| a.id.clone())
+            .collect();
+        // Maintain the invariant even on startup, after arrival, or after another
+        // swap finishes: no seated active patron trails a seated idle patron.
+        resumed.sort_by_key(|id| self.agents.iter().find(|a| &a.id == id).map(|a| a.seat));
+        for id in resumed {
+            let Some(k) = self.agents.iter().position(|a| a.id == id && a.mode == Mode::Seated) else { continue };
+            let from = self.agents[k].seat;
+            let right = self.agents[k].codex;
+            let candidate = self
+                .agents
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| {
+                    a.seen && a.codex == right && a.state == State::Idle && a.mode == Mode::Seated && a.seat < from
+                })
+                .min_by_key(|(_, a)| a.seat)
+                .map(|(i, _)| i);
+            if let Some(other) = candidate {
+                let to = self.agents[other].seat;
+                self.agents[k].seat = to;
+                self.agents[other].seat = from;
+                self.agents[k].start_walk(&swap_path(from, to, -6.0), Mode::Swapping);
+                self.agents[other].start_walk(&swap_path(to, from, 6.0), Mode::Swapping);
+            }
+        }
     }
 
     pub fn set_details(&mut self, details: Vec<SessionDetail>) {
@@ -634,7 +690,7 @@ impl Scene {
     }
 
     pub fn scrollbar_hit(&self, x: i32, y: i32) -> bool {
-        self.selected.is_some() && x >= 276 && y >= a::WIN_Y
+        self.selected.is_some() && x >= 436 && y >= a::WIN_Y
     }
 
     pub fn scroll_task_to(&mut self, y: i32) {
@@ -648,11 +704,14 @@ impl Scene {
     }
 
     pub fn patron_at(&self, x: i32, y: i32) -> Option<&str> {
-        if !(0..320).contains(&x) || !(FLOOR_Y..a::WIN_Y).contains(&y) {
+        if !(0..480).contains(&x) || !(FLOOR_Y..a::WIN_Y).contains(&y) {
             return None;
         }
         let seat = ((y - FLOOR_Y) / STATION_H * COLS + x / STATION_W) as usize;
-        self.agents.iter().find(|ag| ag.seat == seat && ag.seen && ag.mode != Mode::Leaving).map(|ag| ag.id.as_str())
+        self.agents
+            .iter()
+            .find(|ag| ag.seat == seat && ag.seen && !matches!(ag.mode, Mode::Leaving | Mode::Swapping))
+            .map(|ag| ag.id.as_str())
     }
 
     pub fn session_target(&self, id: &str) -> Option<&SessionTarget> {
@@ -673,10 +732,10 @@ impl Scene {
         self.selected = Some(id);
     }
 
-    /// Coordinates are in the original 320x240 frame, after removing letterboxing.
+    /// Coordinates are in the original 480x272 frame, after removing letterboxing.
     pub fn click(&mut self, x: i32, y: i32) {
         if y >= a::WIN_Y {
-            if self.selected.is_none() || x < 276 {
+            if self.selected.is_none() || x < 436 {
                 self.select_next();
             } else {
                 self.scroll_task_to(y);
@@ -687,7 +746,11 @@ impl Scene {
             return;
         }
         let seat = ((y - FLOOR_Y) / STATION_H * COLS + x / STATION_W) as usize;
-        if let Some(ag) = self.agents.iter().find(|ag| ag.seat == seat && ag.seen && ag.mode != Mode::Leaving) {
+        if let Some(ag) = self
+            .agents
+            .iter()
+            .find(|ag| ag.seat == seat && ag.seen && !matches!(ag.mode, Mode::Leaving | Mode::Swapping))
+        {
             if self.selected.as_ref() == Some(&ag.id) {
                 self.clear_selection();
             } else {
@@ -797,7 +860,7 @@ impl Scene {
                 }
             }
             if a.remaining() == 0 {
-                if a.mode == Mode::Arriving {
+                if matches!(a.mode, Mode::Arriving | Mode::Swapping) {
                     a.mode = Mode::Seated;
                     a.since = t;
                 } else {
@@ -806,6 +869,7 @@ impl Scene {
             }
         }
         self.agents.retain(|a| !a.gone);
+        self.promote_active();
         for p in &mut self.particles {
             p.age += dt as i64;
         }
@@ -865,7 +929,7 @@ impl Scene {
 
     fn draw_sign(&self, g: &mut Gfx) {
         const SIGN: &str = "TOKEN CAFE";
-        let k = 2;
+        let k = 3;
         let x0 = (a::W as i32 - text_width(SIGN, k)) >> 1;
         let y0 = 8;
         // one letter flickers now and then
@@ -900,7 +964,7 @@ impl Scene {
             }
         }
         let sub = "OPEN 24H";
-        g.text(sub, (a::W as i32 - text_width(sub, 1)) >> 1, y0 + 18, c::CYAN, 1, Some(c::CYAN_GLOW));
+        g.text(sub, (a::W as i32 - text_width(sub, 1)) >> 1, y0 + 25, c::CYAN, 1, Some(c::CYAN_GLOW));
     }
 
     /// The chalkboard and its labels are in the background; only the values move.
@@ -1139,7 +1203,7 @@ impl Scene {
             State::Work => &a::HEAD_OPEN,
         };
         g.blit_scaled(head, fx + 3, fy + 5, Some(pal), 2, Some([fx + 1, fy + 1, fx + fs - 1, fy + fs - 1]));
-        g.text(&ellipsize(title, 40), 50, a::WIN_Y + 4, c::GOLD, 1, Some(c::TEXT_SHADOW));
+        g.text(&ellipsize(title, 66), 50, a::WIN_Y + 4, c::GOLD, 1, Some(c::TEXT_SHADOW));
         for (row, line) in text.lines().take(2).enumerate() {
             g.text(line, 50, a::WIN_Y + 14 + row as i32 * 16, c::TEXT, 2, Some(c::TEXT_SHADOW));
         }
@@ -1210,7 +1274,7 @@ impl Scene {
             let tx = fx + 42;
             g.text(&ellipsize(&ag.name, 12).to_ascii_uppercase(), tx, y + 9, c::GOLD, 2, Some(c::TEXT_SHADOW));
             let message = &self.speech.as_ref().unwrap().1;
-            // Two small-font lines leave room for branch names in the 320px scene.
+            // Two small-font lines leave room for branch names in the 480px scene.
             let text: String = message
                 .chars()
                 .map(|c| if c.is_ascii_graphic() || c == ' ' { c.to_ascii_uppercase() } else { '?' })
@@ -1342,13 +1406,13 @@ mod tests {
         let seats: Vec<_> = scene.agents.iter().map(|a| (a.id.clone(), a.seat)).collect();
         for a in &scene.agents {
             assert_eq!(a.seat % 4 >= 2, a.codex);
-            let x = (a.seat % 4) as i32 * 80 + 40;
-            let y = (a.seat / 4) as i32 * 72 + 80;
+            let x = (a.seat % 4) as i32 * 120 + 60;
+            let y = (a.seat / 4) as i32 * 88 + 80;
             assert_eq!(scene.patron_at(x, y), Some(a.id.as_str()));
         }
         for (id, seat) in &seats {
             let expected = scene.session_target(id).unwrap().url();
-            assert_eq!(scene.activate_patron((*seat % 4) as i32 * 80 + 40, (*seat / 4) as i32 * 72 + 80), expected);
+            assert_eq!(scene.activate_patron((*seat % 4) as i32 * 120 + 60, (*seat / 4) as i32 * 88 + 80), expected);
         }
         scene.focus_patron(seats[0].0.clone());
         list.reverse();
@@ -1369,17 +1433,120 @@ mod tests {
     }
 
     #[test]
+    fn already_active_fourth_patron_is_promoted_on_startup_for_both_providers() {
+        for state in [State::Work, State::Wait] {
+            let mut scene = Scene::new();
+            let mut list: Vec<_> = (0..8).map(|i| session(&i.to_string(), State::Idle)).collect();
+            list[5].state = state; // Claude seat 4
+            list[7].state = state; // Codex seat 4
+            scene.set_sessions(&list);
+            scene.focus_patron("5".into());
+            assert_eq!(scene.agents.iter().find(|a| a.id == "5").unwrap().seat, 0);
+            assert_eq!(scene.agents.iter().find(|a| a.id == "7").unwrap().seat, 2);
+            for _ in 0..200 {
+                scene.tick(33);
+                scene.set_sessions(&list);
+            }
+            assert_eq!(scene.patron_at(60, 80), Some("5"));
+            assert_eq!(scene.patron_at(300, 80), Some("7"));
+            assert_eq!(scene.selected.as_deref(), Some("5"));
+            assert!(scene.agents.iter().all(|a| a.mode == Mode::Seated));
+        }
+    }
+
+    #[test]
+    fn active_patron_retries_promotion_after_idle_target_finishes_walking() {
+        let mut scene = Scene::new();
+        let mut list: Vec<_> = (0..6).map(|i| session(&i.to_string(), State::Idle)).collect();
+        scene.set_sessions(&list);
+        let first = scene.agents.iter_mut().find(|a| a.id == "0").unwrap();
+        first.start_walk(&path_to(first.seat), Mode::Arriving);
+        list[1].state = State::Work;
+        scene.set_sessions(&list);
+        // Seat 1 is temporarily unavailable while its idle patron arrives.
+        assert_eq!(scene.agents.iter().find(|a| a.id == "1").unwrap().seat, 1);
+        for _ in 0..600 {
+            scene.tick(33);
+        }
+        assert_eq!(scene.patron_at(60, 80), Some("1"));
+        assert!(scene.agents.iter().all(|a| a.mode == Mode::Seated));
+    }
+
+    #[test]
+    fn resumed_patrons_swap_with_first_idle_seat_on_their_own_side() {
+        let mut scene = Scene::new();
+        let mut list: Vec<_> = (0..8).map(|i| session(&i.to_string(), State::Idle)).collect();
+        scene.set_sessions(&list);
+        scene.set_details(
+            list.iter()
+                .map(|s| SessionDetail {
+                    id: s.id.clone(),
+                    task: "Same task".into(),
+                    target: Some(SessionTarget::Codex(s.id.clone())),
+                })
+                .collect(),
+        );
+        scene.focus_patron("4".into());
+        list[4].state = State::Work;
+        list[7].state = State::Wait;
+        scene.set_sessions(&list);
+        for (id, seat) in [("4", 0), ("0", 4), ("7", 2), ("2", 7)] {
+            let a = scene.agents.iter().find(|a| a.id == id).unwrap();
+            assert_eq!(a.seat, seat);
+            assert!(a.mode == Mode::Swapping);
+            assert!(a.path.iter().all(|p| (p[0] >= 240.0) == a.codex));
+            assert_eq!(scene.patron_at((seat % 4) as i32 * 120 + 60, (seat / 4) as i32 * 88 + 80), None);
+        }
+        assert_eq!(scene.selected.as_deref(), Some("4"));
+        scene.tick(300);
+        let before: Vec<_> = scene.agents.iter().map(|a| (a.x, a.y, a.path_i)).collect();
+        scene.set_sessions(&list); // Refresh must not restart an in-flight walk.
+        assert_eq!(before, scene.agents.iter().map(|a| (a.x, a.y, a.path_i)).collect::<Vec<_>>());
+        scene.tick(10000);
+        assert_eq!(scene.agents.len(), 8);
+        assert!(scene.agents.iter().all(|a| a.mode == Mode::Seated));
+        assert_eq!(scene.activate_patron(60, 80).as_deref(), Some("codex://threads/4"));
+        assert_eq!(scene.activate_patron(300, 80).as_deref(), Some("codex://threads/7"));
+        list[4].state = State::Idle; // Becoming idle doesn't reshuffle everyone.
+        scene.set_sessions(&list);
+        assert_eq!(scene.agents.iter().find(|a| a.id == "4").unwrap().seat, 0);
+    }
+
+    #[test]
+    fn swaps_are_ordered_and_can_be_interrupted_by_departure() {
+        let mut scene = Scene::new();
+        let mut list: Vec<_> = (0..8).map(|i| session(&i.to_string(), State::Idle)).collect();
+        scene.set_sessions(&list);
+        list[4].state = State::Work;
+        list[5].state = State::Work;
+        list.reverse();
+        scene.set_sessions(&list);
+        assert_eq!(scene.agents.iter().find(|a| a.id == "4").unwrap().seat, 0);
+        assert_eq!(scene.agents.iter().find(|a| a.id == "5").unwrap().seat, 1);
+        scene.tick(300);
+        list.retain(|s| s.id != "4");
+        scene.set_sessions(&list);
+        scene.tick(20000);
+        assert!(!scene.agents.iter().any(|a| a.id == "4"));
+        assert_eq!(scene.agents.len(), 7);
+        let mut seats: Vec<_> = scene.agents.iter().map(|a| a.seat).collect();
+        seats.sort();
+        seats.dedup();
+        assert_eq!(seats.len(), 7);
+    }
+
+    #[test]
     fn reappearing_session_keeps_its_seat_and_remains_clickable() {
         let mut scene = Scene::new();
         scene.set_sessions(&[session("a", State::Work)]);
         scene.set_sessions(&[]);
         scene.tick(33);
-        assert_eq!(scene.patron_at(40, 80), None);
+        assert_eq!(scene.patron_at(60, 80), None);
         scene.set_sessions(&[session("a", State::Work)]);
         for _ in 0..300 {
             scene.tick(33);
         }
-        assert_eq!(scene.patron_at(40, 80), Some("a"));
+        assert_eq!(scene.patron_at(60, 80), Some("a"));
         assert_eq!(scene.agents.len(), 1);
         for n in 0..5 {
             assert!(shorten("long-name-abc", n).chars().count() <= n);
@@ -1395,16 +1562,16 @@ mod tests {
         assert!(SessionTarget::Claude("cli-uuid".into()).url().is_none());
         let mut scene = Scene::new();
         scene.set_sessions(&[session("a", State::Work)]);
-        assert_eq!(scene.patron_at(40, 80), Some("a"));
-        assert_eq!(scene.patron_at(140, 80), None);
+        assert_eq!(scene.patron_at(60, 80), Some("a"));
+        assert_eq!(scene.patron_at(210, 80), None);
         assert_eq!(scene.patron_at(40, 220), None);
-        scene.click(40, 80);
+        scene.click(60, 80);
         scene.focus_patron("a".into());
         assert_eq!(scene.selected.as_deref(), Some("a"));
-        scene.click(40, 80);
+        scene.click(60, 80);
         assert!(scene.selected.is_none());
         scene.set_sessions(&[]);
-        assert_eq!(scene.patron_at(40, 80), None);
+        assert_eq!(scene.patron_at(60, 80), None);
     }
 
     #[test]
@@ -1419,11 +1586,11 @@ mod tests {
             (None, None),
         ] {
             scene.set_details(vec![SessionDetail { id: "a".into(), task: "Task".into(), target }]);
-            scene.click(40, 80);
-            assert_eq!(scene.activate_patron(40, 80).as_deref(), expected);
+            scene.click(60, 80);
+            assert_eq!(scene.activate_patron(60, 80).as_deref(), expected);
             assert_eq!(scene.selected.as_deref(), Some("a"));
-            assert_eq!(scene.activate_patron(140, 80), None);
-            assert_eq!(scene.activate_patron(140, 220), None);
+            assert_eq!(scene.activate_patron(210, 80), None);
+            assert_eq!(scene.activate_patron(210, 252), None);
         }
     }
 
@@ -1462,27 +1629,27 @@ mod tests {
     fn touch_targets_open_cycle_page_and_toggle_focus() {
         let mut scene = Scene::new();
         scene.set_sessions(&(0..9).map(|i| session(&i.to_string(), State::Work)).collect::<Vec<_>>());
-        scene.click(140, 220);
+        scene.click(210, 252);
         assert_eq!(scene.selected.as_deref(), Some("0"));
-        scene.click(40, 80);
+        scene.click(60, 80);
         assert!(scene.selected.is_none());
-        scene.click(40, 80);
+        scene.click(60, 80);
         assert_eq!(scene.selected.as_deref(), Some("0"));
         scene.set_details(vec![SessionDetail {
             target: None,
             id: "0".into(),
             task: "A long request that spans several pages of readable text".into(),
         }]);
-        scene.click(290, 239);
+        scene.click(450, 271);
         assert_eq!(scene.task_page, scene.selected_task_pages().len() - 1);
         for _ in 0..8 {
-            scene.click(140, 220);
+            scene.click(210, 252);
         }
         assert_eq!(scene.selected.as_deref(), Some("8")); // touch can reach overflow
-        scene.click(140, 220);
+        scene.click(210, 252);
         assert_eq!(scene.selected.as_deref(), Some("0"));
         scene.set_sessions(&[session("0", State::Work)]);
-        scene.click(280, 170);
+        scene.click(420, 190);
         assert!(scene.selected.is_none()); // empty desk clears
     }
 
@@ -1534,11 +1701,11 @@ mod tests {
             id: "b".into(),
             task: "Unique task for patron B".into(),
         }]);
-        scene.click(100, 220); // open A
-        scene.click(100, 220); // next B
+        scene.click(150, 252); // open A
+        scene.click(150, 252); // next B
         assert_eq!(scene.selected.as_deref(), Some("b"));
         assert_eq!(scene.agents.iter().find(|a| Some(&a.id) == scene.selected.as_ref()).unwrap().seat, 1);
-        assert_eq!(scene.selected_task_pages()[0], "Unique task for\npatron B");
+        assert_eq!(scene.selected_task_pages()[0], "Unique task for patron B");
         scene.select_patron(false);
         assert_eq!(scene.selected.as_deref(), Some("a"));
         scene.select_patron(false);
@@ -1547,7 +1714,7 @@ mod tests {
         assert_eq!(scene.selected.as_deref(), Some("a"));
         scene.select_patron(true);
         assert_eq!(scene.selected.as_deref(), Some("b"));
-        scene.click(290, 239);
+        scene.click(450, 271);
         assert_eq!(scene.selected.as_deref(), Some("b"));
         assert_eq!(scene.task_page, scene.selected_task_pages().len() - 1); // scrollbar changes text only
     }
@@ -1559,9 +1726,9 @@ mod tests {
         scene.set_details(vec![SessionDetail {
             target: None,
             id: "b".into(),
-            task: "A sufficiently long request to require multiple readable pages".into(),
+            task: "A sufficiently long request to require multiple readable pages and preserve the selected page when the session list is refreshed".into(),
         }]);
-        scene.click(120, 80);
+        scene.click(180, 80);
         assert_eq!(scene.selected.as_deref(), Some("b"));
         scene.page_task(true);
         assert_eq!(scene.task_page, 1);
@@ -1603,13 +1770,13 @@ mod tests {
         let mut selected = before.clone();
         let now = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
         scene.render(&mut before, now);
-        scene.click(120, 80);
+        scene.click(180, 80);
         scene.render(&mut selected, now);
         assert_ne!(&before[a::WIN_Y as usize * a::W..], &selected[a::WIN_Y as usize * a::W..]);
-        scene.click(120, 80);
+        scene.click(180, 80);
         scene.render(&mut selected, now);
         assert_eq!(&before[a::WIN_Y as usize * a::W..], &selected[a::WIN_Y as usize * a::W..]);
-        scene.click(120, 80);
+        scene.click(180, 80);
         scene.set_sessions(&[session("a", State::Idle), session("b", State::Work)]);
         scene.render(&mut selected, now);
         assert_ne!(&before[a::WIN_Y as usize * a::W..], &selected[a::WIN_Y as usize * a::W..]);

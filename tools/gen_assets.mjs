@@ -3,7 +3,7 @@
 //   node tools/gen_assets.mjs
 // Sprites become slot-indexed bytes (one slot per palette character, 0 =
 // transparent); colours become 0xRRGGBB as the design defines them; the
-// static room (background + empty message window) becomes a 320x240 RGB
+// static room (background + empty message window) becomes a 480x272 RGB
 // image next to the module.
 import { createRequire } from 'module';
 import fs from 'fs';

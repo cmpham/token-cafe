@@ -1,5 +1,5 @@
 /*
- * Token Cafe: a 320x240 pixel scene of the coding-agent sessions on this
+ * Token Cafe: a 480x272 pixel scene of the coding-agent sessions on this
  * machine, drawn as patrons of a JRPG-style net cafe.
  *
  * Pure JS with no DOM: it renders into an RGBA buffer, so the same file runs
@@ -12,7 +12,7 @@
 (function (root) {
 'use strict';
 
-const W = 320, H = 240;
+const W = 480, H = 272;
 
 /* ---------------------------------------------------------------- colour */
 
@@ -841,25 +841,25 @@ function text(s, x, y, c, k = 1, shadow = C.textShadow) {
 /* --------------------------------------------------------------- layout */
 
 const COLS = 4, ROWS = 2, SEATS = COLS * ROWS;
-const STATION_W = 80, STATION_H = 72, FLOOR_Y = 48, WIN_Y = 192;
+const STATION_W = 120, STATION_H = 88, FLOOR_Y = 48, WIN_Y = 224;
 
 function seatGeom(i) {
     const col = i % COLS, row = (i / COLS) | 0;
-    return { col, row, sx: col * STATION_W, sy: FLOOR_Y + row * STATION_H };
+    return { col, row, sx: col * STATION_W + 20, sy: FLOOR_Y + row * STATION_H };
 }
 
 /* Feet positions from the door (under the message window) to a chair. */
 function pathTo(i) {
     const { sx, sy, col } = seatGeom(i);
-    const gap = col < COLS / 2 ? sx + STATION_W : sx;
+    const gap = (col + (col < COLS / 2 ? 1 : 0)) * STATION_W;
     const aisle = sy + 66;
-    return [[160, 262], [160, aisle], [gap, aisle], [gap, sy + 28], [sx + 40, sy + 28]];
+    return [[W/2, H+22], [W/2, aisle], [gap, aisle], [gap, sy + 28], [sx + 40, sy + 28]];
 }
 
 /* Where things sit inside an 80x72 station (offsets from its top-left). */
 const SIT_X = 32, SIT_Y = 6;            // seated base box
 const CHAIR_X = 30, CHAIR_Y = 2;
-const DESK_X = 12, DESK_Y = 30, DESK_W = 56;
+const DESK_X = -4, DESK_Y = 30, DESK_W = 88;
 const LID_X = 34, LID_Y = 24;
 
 const SEAT_PROPS = [
@@ -903,7 +903,7 @@ function drawWindow(x, y, w, h) {
  * summed. The board and its labels are background; drawTab() chalks up the
  * two values each frame. Its frame mirrors the window's across the wall, and
  * it is as narrow as "TOKENS" plus a 5-character count allows. */
-const TAB_X = 237, TAB_Y = 5, TAB_W = 74, TAB_H = 26;
+const TAB_X = 397, TAB_Y = 5, TAB_W = 74, TAB_H = 26;
 
 function drawChalkboard(x, y, w, h) {
     rect(x - 2, y - 2, w + 4, h + 4, C.frame);
@@ -957,11 +957,11 @@ function renderBackground() {
         px(x, y, c);
     }
     // a runner from the door up the centre aisle
-    rect(150, FLOOR_Y + 8, 20, H - FLOOR_Y - 8, C.runner);
-    for (let y = FLOOR_Y + 10; y < H; y += 6) rect(153, y, 14, 1, C.runnerHi);
-    rect(150, FLOOR_Y + 8, 1, H - FLOOR_Y - 8, C.runnerEdge);
-    rect(169, FLOOR_Y + 8, 1, H - FLOOR_Y - 8, C.runnerEdge);
-    rect(150, FLOOR_Y + 8, 20, 1, C.runnerEdge);
+    rect(230, FLOOR_Y + 8, 20, H - FLOOR_Y - 8, C.runner);
+    for (let y = FLOOR_Y + 10; y < H; y += 6) rect(233, y, 14, 1, C.runnerHi);
+    rect(230, FLOOR_Y + 8, 1, H - FLOOR_Y - 8, C.runnerEdge);
+    rect(249, FLOOR_Y + 8, 1, H - FLOOR_Y - 8, C.runnerEdge);
+    rect(230, FLOOR_Y + 8, 20, 1, C.runnerEdge);
     // wall shadow on the floor
     darken(0, FLOOR_Y, W, 2, 0.6);
     BG = new Uint8ClampedArray(FB);

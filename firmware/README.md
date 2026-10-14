@@ -4,8 +4,8 @@ The default build is **QEMU-only** and must not be flashed to a physical board.
 A separate **screenless hardware build** supports ESP32-S3 N16R8 bring-up (below).
 It runs ESP-IDF on an emulated ESP32-S3 with 16 MB flash and 8 MB octal PSRAM.
 The host renders the existing café scene; firmware receives RGB565 rectangles into
-PSRAM and presents them on a 480×272 virtual panel. The existing 320×240 scene is
-scaled with nearest-neighbor sampling to fill the complete panel.
+PSRAM and presents them on a 480×272 virtual panel. The desktop and board share a native 480×272 scene, with one rendered pixel
+per panel pixel and no nonuniform stretching.
 
 ## Install on macOS
 
