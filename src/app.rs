@@ -438,9 +438,7 @@ impl App {
         self.scene.set_sessions(&sessions);
         #[cfg(feature = "bluetooth")]
         if let Some(semantic) = &mut self.semantic {
-            for url in semantic.synchronize(&mut self.scene, self.approvals.as_ref()) {
-                open_session(url);
-            }
+            semantic.synchronize(&mut self.scene, self.approvals.as_ref());
         }
         let title = self.window_title();
         if title != self.last_window_title {
@@ -483,10 +481,19 @@ impl App {
         {
             broker.cancel(&id);
         }
+        // With a semantic companion, Store::apply derives the status from the shared model.
+        #[cfg(feature = "bluetooth")]
+        let shared_status = self.semantic.is_some();
+        #[cfg(not(feature = "bluetooth"))]
+        let shared_status = false;
         if let Some(review) = &mut self.scene.review {
-            if let Some(delivered) = self.approvals.as_ref().and_then(|b| b.take_outcome(&review.request.id)) {
-                review.status =
-                    if delivered { "DECISION RETURNED TO HOOK" } else { "DELIVERY FAILED - OPEN DESKTOP" }.into();
+            if !shared_status && let Some(outcome) = self.approvals.as_ref().and_then(|b| b.outcome(&review.request.id))
+            {
+                match outcome {
+                    token_cafe::approval::Outcome::Delivered(_) => review.status = "DECISION RETURNED TO HOOK".into(),
+                    token_cafe::approval::Outcome::Failed(_) => review.status = "DELIVERY FAILED - OPEN DESKTOP".into(),
+                    token_cafe::approval::Outcome::Closed => (),
+                }
             }
             if let Some(decision) = review.decision.take() {
                 let sent = self.approvals.as_ref().is_some_and(|b| b.decide(&review.request.id, decision));

@@ -1,6 +1,9 @@
 //! BLE v2 platform adapter. Rendering and protocol semantics live in shared crates.
 use super::{Error, SERVICE, read_key, state::Store};
-use crate::{approval::Broker, scene::Scene};
+use crate::{
+    approval::{Broker, Outcome},
+    scene::Scene,
+};
 use btleplug::{
     api::{Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, ValueNotification, WriteType},
     platform::{Manager, Peripheral},
@@ -113,10 +116,8 @@ impl SemanticMirror {
         });
         mirror
     }
-    pub fn synchronize(&mut self, scene: &mut Scene, broker: Option<&Broker>) -> Vec<String> {
-        let mut s = self.shared.lock().unwrap();
-        s.ingest(scene, broker);
-        s.navigation.drain(..).collect()
+    pub fn synchronize(&mut self, scene: &mut Scene, broker: Option<&Broker>) {
+        self.shared.lock().unwrap().ingest(scene, broker);
     }
     pub fn status(&self) -> String {
         self.status.lock().unwrap().join("; ")
@@ -260,7 +261,11 @@ async fn serve(
         {
             let mut store = shared.lock().unwrap();
             for (a, at) in &pending {
-                let outcome = store.broker.as_ref().and_then(|b| b.take_outcome(&a.request_id));
+                let outcome = store
+                    .broker
+                    .as_ref()
+                    .and_then(|b| b.outcome(&a.request_id))
+                    .map(|outcome| matches!(outcome, Outcome::Delivered(_)));
                 if let Some(ok) = outcome.or_else(|| (now - *at > 3000).then_some(false)) {
                     let r = store.authority.finish(&mut peer, a, ok);
                     store.keep_terminal(&a.session_id);

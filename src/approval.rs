@@ -9,6 +9,13 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 pub use cafe_ui::approval::{Decision, Request, lines};
+/// How a request left the broker. `Closed` means the hook ended without a decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Delivered(Decision),
+    Failed(Decision),
+    Closed,
+}
 struct Pending {
     request: Request,
     reply: mpsc::Sender<Option<Decision>>,
@@ -17,7 +24,7 @@ struct Pending {
 #[derive(Clone, Default)]
 pub struct Broker {
     pending: Arc<Mutex<BTreeMap<String, Pending>>>,
-    outcomes: Arc<Mutex<BTreeMap<String, (bool, Instant)>>>,
+    outcomes: Arc<Mutex<BTreeMap<String, (Outcome, Instant)>>>,
 }
 impl Broker {
     pub fn requests(&self) -> Vec<Request> {
@@ -35,8 +42,19 @@ impl Broker {
             let _ = p.reply.send(None);
         }
     }
-    pub fn take_outcome(&self, id: &str) -> Option<bool> {
-        self.outcomes.lock().unwrap().remove(id).map(|(ok, _)| ok)
+    /// Outcomes stay readable for every consumer (desktop review, each board) until they expire.
+    pub fn outcome(&self, id: &str) -> Option<Outcome> {
+        self.outcomes.lock().unwrap().get(id).map(|(outcome, _)| *outcome)
+    }
+    pub fn record(&self, id: String, outcome: Outcome) {
+        let mut outcomes = self.outcomes.lock().unwrap();
+        outcomes.retain(|_, (_, at)| at.elapsed() < Duration::from_secs(600));
+        if outcomes.len() >= 128
+            && let Some(oldest) = outcomes.iter().min_by_key(|(_, (_, at))| *at).map(|(id, _)| id.clone())
+        {
+            outcomes.remove(&oldest);
+        }
+        outcomes.insert(id, (outcome, Instant::now()));
     }
     pub fn start() -> std::io::Result<Self> {
         let home = std::env::var_os("HOME").ok_or_else(|| std::io::Error::other("HOME unavailable"))?;
@@ -129,16 +147,14 @@ impl Broker {
             None => json!({}), // native provider prompt remains authoritative
         };
         let delivered = writeln!(stream, "{result}").is_ok();
-        if decision.is_some() {
-            let mut outcomes = self.outcomes.lock().unwrap();
-            outcomes.retain(|_, (_, at)| at.elapsed() < Duration::from_secs(600));
-            if outcomes.len() >= 128
-                && let Some(oldest) = outcomes.iter().min_by_key(|(_, (_, at))| *at).map(|(id, _)| id.clone())
-            {
-                outcomes.remove(&oldest);
-            }
-            outcomes.insert(id, (delivered, Instant::now()));
-        }
+        self.record(
+            id,
+            match decision {
+                Some(d) if delivered => Outcome::Delivered(d),
+                Some(d) => Outcome::Failed(d),
+                None => Outcome::Closed,
+            },
+        );
         Ok(())
     }
 }

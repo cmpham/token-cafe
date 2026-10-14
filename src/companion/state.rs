@@ -1,6 +1,6 @@
 //! Desktop-to-wire model mapping. Provider session URLs never cross the radio.
 use crate::{
-    approval::{Broker, Decision},
+    approval::{Broker, Decision, Outcome},
     scene::{self, Scene},
 };
 use companion_core::{
@@ -11,7 +11,7 @@ use companion_core::{
     wire::{BlobRef, Request, Session, View},
 };
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::BTreeMap,
     time::{Duration, Instant},
 };
 pub struct Store {
@@ -20,7 +20,6 @@ pub struct Store {
     pub broker: Option<Broker>,
     pub targets: BTreeMap<String, String>,
     blobs: BTreeMap<Vec<u8>, (Vec<u8>, Instant)>,
-    pub navigation: VecDeque<String>,
     arrival: Vec<String>,
     terminal: BTreeMap<String, (Request, Instant)>,
     pub last_desktop: Option<View>,
@@ -38,6 +37,18 @@ pub fn wire_id(s: &str) -> String {
 fn appearance(s: &str) -> u32 {
     s.bytes().fold(2166136261u32, |h, c| (h ^ (c as u32)).wrapping_mul(16777619))
 }
+/// Move a submitting request to its final wire state; true when the broker had an outcome.
+fn settle(r: &mut Request, outcome: Option<Outcome>) -> bool {
+    let (state, decision) = match outcome {
+        Some(Outcome::Delivered(d)) => (3, if d == Decision::Allow { 1 } else { 2 }),
+        Some(Outcome::Failed(_)) => (7, 0),
+        Some(Outcome::Closed) => (6, 0),
+        None => return false,
+    };
+    r.state = state;
+    r.delivered_decision = decision;
+    true
+}
 impl Store {
     pub fn new(epoch: [u8; 16]) -> Self {
         Self {
@@ -48,7 +59,6 @@ impl Store {
             broker: None,
             targets: BTreeMap::new(),
             blobs: BTreeMap::new(),
-            navigation: VecDeque::new(),
             arrival: vec![],
             terminal: BTreeMap::new(),
             last_desktop: None,
@@ -83,7 +93,14 @@ impl Store {
         let input = scene.sessions().to_vec();
         let details = scene.details().to_vec();
         let requests = scene.requests().to_vec();
-        self.terminal.retain(|_, (r, t)| r.state == 2 || t.elapsed() < Duration::from_secs(5));
+        self.terminal.retain(|_, (r, t)| t.elapsed() < Duration::from_secs(if r.state == 2 { 30 } else { 5 }));
+        // Desktop decisions bypass the authority; the broker's record finishes them.
+        for (r, at) in self.terminal.values_mut() {
+            let outcome = self.broker.as_ref().and_then(|b| b.outcome(&r.id));
+            if r.state == 2 && settle(r, outcome) {
+                *at = Instant::now();
+            }
+        }
         for s in input.iter().take(64) {
             let id = wire_id(&s.id);
             if !self.arrival.contains(&id) {
@@ -95,10 +112,34 @@ impl Store {
                 self.targets.insert(id.clone(), url.clone());
             }
             let task = detail.map(|d| self.blob(&d.task));
-            let approval = if let Some((r, _)) = self.terminal.get(&id) {
-                Some(r.clone())
-            } else {
-                requests.iter().find(|r| r.session == s.id).map(|r| {
+            let live = requests.iter().find(|r| r.session == s.id);
+            let settled = self.terminal.get(&id).map(|(r, _)| r.clone());
+            let approval = match (settled, live) {
+                // A finished request yields to the next live one only after boards could see it
+                // finish (receipts reconcile on that state); a submitting request never yields.
+                (Some(t), live)
+                    if t.state == 2
+                        || live.is_none_or(|r| r.id == t.id)
+                        || !old
+                            .sessions
+                            .get(&id)
+                            .and_then(|o| o.approval.as_ref())
+                            .is_some_and(|p| p.id == t.id && p.state == t.state) =>
+                {
+                    Some(t)
+                }
+                (_, None) => {
+                    old.sessions.get(&id).and_then(|o| o.approval.clone()).filter(|r| matches!(r.state, 1 | 2)).map(
+                        |mut r| {
+                            r.state = 2;
+                            let outcome = self.broker.as_ref().and_then(|b| b.outcome(&r.id));
+                            settle(&mut r, outcome);
+                            self.terminal.insert(id.clone(), (r.clone(), Instant::now()));
+                            r
+                        },
+                    )
+                }
+                (_, Some(r)) => Some({
                     let body = self.blob(&r.text);
                     let title = bounded(&r.title, 192);
                     let tool_name = bounded(&r.tool_name, 192);
@@ -135,7 +176,7 @@ impl Store {
                         desktop_only_reason: reason.into(),
                         delivered_decision: 0,
                     }
-                })
+                }),
             };
             let unlinked = if approval.is_none() && s.state == scene::State::Wait {
                 Some(self.blob(&format!("{}\n\nThis session needs your input in its desktop app. No linked approval request is available. Open Desktop to read and answer the exact request.",s.name)))
@@ -257,24 +298,25 @@ impl Store {
         self.apply(scene);
         self.last_desktop = Some(self.desktop_view(scene));
         let now = Instant::now();
-        self.blobs.retain(|_, (_, t)| now.duration_since(*t) < Duration::from_secs(30));
+        let refs: Vec<Vec<u8>> = self
+            .authority
+            .model
+            .sessions
+            .values()
+            .flat_map(|s| {
+                [
+                    s.task_blob.as_ref(),
+                    s.unlinked_review_blob.as_ref(),
+                    s.approval.as_ref().and_then(|r| r.body_blob.as_ref()),
+                ]
+            })
+            .flatten()
+            .map(|b| b.sha256.clone())
+            .collect();
+        // Bodies the published model still references stay fetchable (a settled request's text).
+        self.blobs.retain(|k, (_, t)| refs.contains(k) || now.duration_since(*t) < Duration::from_secs(30));
         // Bound cached historical bodies; live references remain retained.
         while self.blobs.values().map(|(b, _)| b.len()).sum::<usize>() > 512 * 1024 {
-            let refs: Vec<_> = self
-                .authority
-                .model
-                .sessions
-                .values()
-                .flat_map(|s| {
-                    [
-                        s.task_blob.as_ref(),
-                        s.unlinked_review_blob.as_ref(),
-                        s.approval.as_ref().and_then(|r| r.body_blob.as_ref()),
-                    ]
-                })
-                .flatten()
-                .map(|b| &b.sha256)
-                .collect();
             let oldest = self
                 .blobs
                 .iter()
@@ -449,6 +491,40 @@ mod tests {
         scene.set_sessions(&sessions);
         store.ingest(&mut scene, None);
         assert_eq!(store.authority.model.sessions["claude:a"].state_age_ms, 0);
+    }
+    #[test]
+    fn desktop_decision_settles_request_and_then_yields_to_the_next_one() {
+        let request = |id: &str| crate::approval::Request {
+            id: id.into(),
+            session: "claude:a".into(),
+            title: "ALLOW Bash?".into(),
+            tool_name: "Bash".into(),
+            text: "ls".into(),
+        };
+        let mut scene = scene();
+        scene.set_requests(vec![request("first")]);
+        let broker = Broker::default();
+        let mut s = Store::new([1; 16]);
+        s.ingest(&mut scene, Some(&broker));
+        let revision = s.authority.model.revision;
+        assert_eq!(s.authority.model.sessions["claude:a"].approval.as_ref().unwrap().state, 1);
+        // The desktop answered: the broker dropped the request before the hook reply landed.
+        scene.set_requests(vec![]);
+        s.ingest(&mut scene, Some(&broker));
+        let r = s.authority.model.sessions["claude:a"].approval.clone().unwrap();
+        assert_eq!((r.id.as_str(), r.state), ("first", 2));
+        scene.set_requests(vec![request("second")]);
+        s.ingest(&mut scene, Some(&broker));
+        assert_eq!(s.authority.model.sessions["claude:a"].approval.as_ref().unwrap().id, "first");
+        broker.record("first".into(), Outcome::Delivered(Decision::Allow));
+        s.ingest(&mut scene, Some(&broker));
+        let r = s.authority.model.sessions["claude:a"].approval.clone().unwrap();
+        assert_eq!((r.id.as_str(), r.state, r.delivered_decision), ("first", 3, 1));
+        assert!(s.authority.model.revision > revision);
+        assert!(s.body(&r.body_blob.unwrap().sha256).is_some());
+        s.ingest(&mut scene, Some(&broker));
+        let r = s.authority.model.sessions["claude:a"].approval.clone().unwrap();
+        assert_eq!((r.id.as_str(), r.state), ("second", 1));
     }
     #[test]
     fn appearance_uses_renderer_utf8_hash() {
