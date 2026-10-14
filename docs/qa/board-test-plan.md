@@ -140,6 +140,12 @@ Physical finger accuracy and optical output still require physical verification.
 
 ## Physical orientation acceptance gate
 
+Use the [required LCD settings](../protocol/operations.md#lcd-orientation-and-color-settings):
+MADCTL `0xc0`, inversion ON (`0x21`), and reversed GT911 axes. Read the boot LCD
+register diagnostics, then verify upright text and normal colors physically;
+inversion OFF is not the correct color setting for this panel. Repeat the visual
+check after reset and backlight sleep/wake.
+
 After changing LCD orientation, touch acquisition, or production firmware, verify
 physical taps at the four corner patron cells against their visible labels.
 Then physically double-tap one known Codex and one known Claude patron and check

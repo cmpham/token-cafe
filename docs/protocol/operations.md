@@ -52,6 +52,46 @@ Linux and macOS share the protocol and renderer. Desktop-session opening is curr
 macOS-only; Linux sends `navigation_available=false`. Physical Linux BLE, multiple
 simultaneous boards, battery behavior and RF interference need hardware-specific QA.
 
+## LCD orientation and color settings
+
+The JC4827W543 uses the shared NV3041A adapter in `firmware/ble/main/board.c`,
+including when built through `firmware/semantic`. Preserve this combination:
+
+| Setting | Required value | Verification |
+| --- | --- | --- |
+| Orientation | MADCTL (`0x36`) = `0xc0` | Boot `LCD: REG 0b = c0 c0 c0 c0` |
+| Color polarity | Inversion ON (`0x21`) | Boot `LCD: REG 09 = 60 13 24 00`; inversion bit `0x20` is set in the third byte |
+| Touch axes | `x = 479 - raw_x`, `y = 271 - raw_y` | Physically tap patrons in all four corner cells |
+
+Despite the command name, inversion ON produces normal colors on this panel.
+Inversion OFF (`0x20`, status third byte `0x04`) produced negative colors during
+the October 14 hardware check. Do not infer the correct polarity from the word
+"inversion" or copy the previous inversion-OFF instructions.
+
+Apply MADCTL and inversion as standard commands **after** the initialization
+table closes the vendor page with `0xff = 0x00`. Keep `panel_orientation()` as
+the common startup, wake, and periodic restoration path; do not wrap its commands
+in vendor-page selection. Keep the initialization table's MADCTL consistent.
+Changing orientation also requires checking the GT911 mapping and gesture tests;
+a color-only correction must not change orientation or touch coordinates.
+
+For a recurrence:
+
+1. Record the running app's ELF hash from serial boot output and compare it with
+   the intended build. Preserve the existing flash before replacing firmware.
+2. Read the boot LCD diagnostics at 115200 baud. The ID should be `30 41 a1`;
+   compare orientation and status with the table above. The probe reads the
+   bidirectional SDA line at 1 MHz. Build success and flash hash verification
+   alone do not establish that the LCD accepted its settings.
+3. Build and flash the semantic companion with `tools/qemu_v2.sh board-build`
+   and `board-flash PORT`; use the actual connected port. Do not replace a v2
+   companion with the legacy `tools/firmware.sh display-flash` image.
+4. Confirm upright text, normal dark-cafe colors, and physical corner-cell touch
+   selection. Repeat after reset and backlight sleep/wake. RAM screenshots,
+   QEMU, and injected touch cannot verify physical panel polarity or alignment.
+
+Keep physical confirmation separate from register readback in `validation.md`.
+
 ## Rollback
 
 Stop this checkout's app and restore the private pre-v2 full flash backup with

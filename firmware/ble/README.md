@@ -153,7 +153,12 @@ First-frame transfer can take about 20 seconds; subsequent updates depend on the
 changed area and radio link (roughly 2–5 seconds in local tests).
 
 LCD: NV3041A QSPI at 20 MHz, CS45, clock47, D0/D1/D2/D3=21/48/40/39,
-backlight1, with display inversion disabled (this panel otherwise shows negative colors). The initialization table and QSPI framing follow Arduino_GFX, with
+backlight1, with MADCTL `0xc0` and display inversion **enabled** (`0x21`) for
+normal colors on this panel. Inversion OFF (`0x20`) produces negative colors.
+Send these standard commands directly after the vendor initialization page is
+closed. See the [panel settings and verification procedure](../../docs/protocol/operations.md#lcd-orientation-and-color-settings)
+before changing orientation, inversion, or touch mapping.
+The initialization table and QSPI framing follow Arduino_GFX, with
 its BSD license retained in `licenses/Arduino_GFX.txt`. Touch uses the pinned
 Espressif GT911 component on SDA8/SCL4. The driver probes 0x5d then 0x14;
 reset/interrupt pins are not driven because the supplied pin sheet does not

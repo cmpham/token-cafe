@@ -170,3 +170,26 @@ time correction (`target/protocol-v2-qa/clock-noon.ppm`, `clock-0330.ppm`).
 Production firmware was flashed with image-hash verification and the desktop app
 rebuilt/restarted. Physical clock appearance still needs user confirmation; QEMU
 screenshots are not a camera capture of the panel.
+
+## Panel orientation and color follow-up (2026-10-14)
+
+The user reported a 180-degree rotation and inverted colors even after reset.
+The installed flash already contained the periodic `panel_orientation` helper.
+The final correction sends standard MADCTL and inversion commands directly,
+without surrounding them with vendor-page selection. The user confirmed `0xc0`
+fixed orientation, but inversion OFF still produced inverted colors. The panel
+therefore uses inversion-ON command `0x21` with `0xc0` and the original reversed
+GT911 touch axes.
+Boot diagnostics now read the panel over its bidirectional SDA line at 1 MHz.
+The prior inversion-OFF readback is recorded in `target/display-direct-boot.log`.
+The final color build was hash-verified on flash and reports MADCTL `c0` with
+status `60 13 24 00` (inversion ON), in `target/display-color-boot.log`.
+
+The focused native touch/gesture tests and production firmware build passed.
+The application partition was flashed with hash verification, preserving NVS;
+serial diagnostics confirmed rendering resumed. A private full-flash backup is
+saved under `target/esp/backups/display-diagnosis-20261014.bin`. Orientation is
+user-confirmed; final combined color and touch confirmation remains pending.
+The QEMU rerun could not start because
+this checkout lacks the generated `companion_pb2` Python module; no new QEMU pass
+is claimed for this change.

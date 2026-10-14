@@ -48,11 +48,27 @@ static uint64_t fingerprint_get(void) {
 static void fingerprint_set(uint64_t value) {
     taskENTER_CRITICAL(&fingerprint_lock); displayed_crc=value; taskEXIT_CRITICAL(&fingerprint_lock);
 }
-// Orientation and inversion as set by the init table; re-sent because a lost
-// value shows the panel default (180 degrees rotated, colours inverted).
+// Apply standard display commands after leaving the vendor initialization page.
+// This panel needs inversion ON for normal colors, with MADCTL=0xc0 upright.
 static void panel_orientation(void){
-    static const uint8_t page_on=0xa5,madctl=0xc0,page_off=0x00;
-    command(0xff,&page_on,1);command(0x36,&madctl,1);command(0xff,&page_off,1);command(0x20,NULL,0);
+    static const uint8_t madctl=0xc0;
+    command(0x36,&madctl,1);command(0x21,NULL,0);
+}
+static void panel_diagnose(void) {
+    spi_device_handle_t probe;
+    spi_device_interface_config_t cfg={.command_bits=8,.address_bits=24,
+        .clock_speed_hz=1000000,.mode=0,.spics_io_num=45,.queue_size=1,
+        .flags=SPI_DEVICE_HALFDUPLEX|SPI_DEVICE_3WIRE};
+    ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST,&cfg,&probe));
+    const uint8_t regs[]={0x04,0x09,0x0b};
+    for(size_t i=0;i<sizeof(regs);i++) {
+        spi_transaction_t t={.cmd=0x03,.addr=(uint32_t)regs[i]<<8,
+            .flags=SPI_TRANS_USE_RXDATA,.rxlength=32};
+        ESP_ERROR_CHECK(spi_device_polling_transmit(probe,&t));
+        ESP_LOGI("LCD","REG %02x = %02x %02x %02x %02x",regs[i],
+            t.rx_data[0],t.rx_data[1],t.rx_data[2],t.rx_data[3]);
+    }
+    ESP_ERROR_CHECK(spi_bus_remove_device(probe));
 }
 #if TC_SEMANTIC
 static uint8_t *previous;
@@ -237,8 +253,9 @@ void board_init(void) {
         if(lcd_init[i].delay_ms) vTaskDelay(pdMS_TO_TICKS(lcd_init[i].delay_ms));
         else command(lcd_init[i].command,&lcd_init[i].value,1);
     }
-    // This panel requires inversion OFF: ON produces a photographic negative.
+    // Apply the panel's orientation and color polarity before the first frame.
     panel_orientation();
+    panel_diagnose();
     uint8_t *blank=heap_caps_calloc(1,TC_FRAME_BYTES,MALLOC_CAP_SPIRAM);
     TC_CHECK(blank);
     // Visible boot indicator while waiting for the desktop to mirror a frame.
