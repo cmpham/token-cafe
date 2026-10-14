@@ -48,9 +48,16 @@ static uint64_t fingerprint_get(void) {
 static void fingerprint_set(uint64_t value) {
     taskENTER_CRITICAL(&fingerprint_lock); displayed_crc=value; taskEXIT_CRITICAL(&fingerprint_lock);
 }
+// Orientation and inversion as set by the init table; re-sent because a lost
+// value shows the panel default (180 degrees rotated, colours inverted).
+static void panel_orientation(void){
+    static const uint8_t page_on=0xa5,madctl=0xc0,page_off=0x00;
+    command(0xff,&page_on,1);command(0x36,&madctl,1);command(0xff,&page_off,1);command(0x20,NULL,0);
+}
 #if TC_SEMANTIC
 static uint8_t *previous;
-void board_backlight(bool on){gpio_set_level(1,on);}
+static uint64_t orientation_ms;
+void board_backlight(bool on){gpio_set_level(1,on);if(on)panel_orientation();}
 void board_present_feedback(const uint8_t *frame,int x,int y){
     if(!previous)return;
     int left=x-10<0?0:x-10,right=x+10>=TC_WIDTH?TC_WIDTH-1:x+10;
@@ -68,6 +75,8 @@ void board_present_feedback(const uint8_t *frame,int x,int y){
 #endif
 void board_present(const uint8_t *frame) {
 #if TC_SEMANTIC
+    uint64_t now_ms=esp_timer_get_time()/1000;
+    if(now_ms-orientation_ms>=1000){orientation_ms=now_ms;panel_orientation();}
     if(!previous){previous=heap_caps_malloc(TC_FRAME_BYTES,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);TC_CHECK(previous);memset(previous,0xff,TC_FRAME_BYTES);}
 #else
     uint8_t hash[32]; TC_CHECK(mbedtls_sha256(frame,TC_FRAME_BYTES,hash,0)==0);
@@ -229,7 +238,7 @@ void board_init(void) {
         else command(lcd_init[i].command,&lcd_init[i].value,1);
     }
     // This panel requires inversion OFF: ON produces a photographic negative.
-    command(0x20,NULL,0);
+    panel_orientation();
     uint8_t *blank=heap_caps_calloc(1,TC_FRAME_BYTES,MALLOC_CAP_SPIRAM);
     TC_CHECK(blank);
     // Visible boot indicator while waiting for the desktop to mirror a frame.
