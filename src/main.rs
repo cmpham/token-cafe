@@ -176,7 +176,7 @@ fn usage_text() -> &'static str {
      \n  --print    print the sessions and this month's usage, and exit\
      \n  --scale N  start at N times 480x272 (default 1 on macOS, 3 elsewhere)\
      \n  --bluetooth  connect registered semantic companions (TC_BLE_REGISTRY)\
-     \n  --bluetooth-key PATH  explicitly use legacy framebuffer mode\
+     \n  --bluetooth-key PATH  with --bluetooth: use the legacy framebuffer board instead\
      \n  --always-on-top  keep the café above other windows\
      \n\nkeys: 1-6 window size, f / F11 fullscreen, Esc leave fullscreen/clear selection, Tab next session, Left/Right select patron, Up/Down task page, t toggle always on top, q quit"
 }
@@ -218,6 +218,14 @@ fn main() {
     }
     if (watch && !session_info) || (session_info && (demo || print)) || (demo && print) {
         eprintln!("--watch requires --session-info; choose only one of --demo, --print, or --session-info");
+        std::process::exit(2);
+    }
+    #[cfg(feature = "bluetooth")]
+    let legacy_test = bluetooth_test.is_some();
+    #[cfg(not(feature = "bluetooth"))]
+    let legacy_test = false;
+    if bluetooth_key_path.is_some() && !bluetooth && !legacy_test {
+        eprintln!("--bluetooth-key selects the legacy board only together with --bluetooth\n\n{}", usage_text());
         std::process::exit(2);
     }
     #[cfg(feature = "bluetooth")]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch a previously built app with its locally provisioned companion key.
+# Launch a previously built app against the boards in its provisioned semantic registry.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 export TC_BLE_REGISTRY="${TC_BLE_REGISTRY:-$ROOT/target/esp/v2-pairing/production.json}"

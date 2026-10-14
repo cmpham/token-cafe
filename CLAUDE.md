@@ -6,7 +6,7 @@ A Rust desktop app that shows the Claude Code and Codex sessions on this machine
 
 - `cargo build --release`, then `target/release/token-cafe` (live), `--demo` (fixed list showing every pose), `--print` (sessions and month total as text), `--scale N` (initial size, default 3x). Keys: 1-6 window size, f / F11 fullscreen, Esc leave fullscreen/clear selection, Tab next session, Left/Right select patron, Up/Down task page, t toggle always on top, q quit. `--always-on-top` starts pinned; combine with `--scale 1` for a small floating café.
 - `--session-info` prints task/activity JSON for live sessions; add `--watch` for changed snapshots every second. `src/collect/info.rs` is an opt-in, bounded incremental transcript reader; it also supplies the selectable focus panel. Tap a patron or the bottom summary to select; tap the selected patron or an empty desk to clear. Left/Right or the main banner cycles patrons; Up/Down, the mouse wheel, or the right-hand scrollbar navigates two-line task pages. Escape clears selection outside fullscreen. Keep evidence sources/timestamps and distinguish observed tool calls from returned results.
-- `cargo test`, `cargo clippy --all-targets` (kept warning-free), `cargo fmt` (`rustfmt.toml`: width 120).
+- `cargo test --workspace`, `cargo clippy --workspace --all-targets` (kept warning-free), `cargo fmt --all` (`rustfmt.toml`: width 120). The root is both a package and the workspace root, so plain `cargo test` skips `crates/`.
 - After editing `design/cafe.js`: `node tools/gen_assets.mjs`, then `cargo run --release --example screenshots` to refresh the README images in `docs/`.
 
 ## Layout
