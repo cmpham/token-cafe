@@ -64,6 +64,8 @@ pub struct Client {
     unavailable: Option<Vec<u8>>,
     last_tick: u64,
     last_heartbeat: u64,
+    // Display time only; all input and approval deadlines remain monotonic.
+    local_clock: Option<(u32, u64)>,
     contact: Option<Contact>,
     last_tap: Option<(Target, u64, i32, i32)>,
     last_touch: u64,
@@ -98,6 +100,7 @@ impl Client {
             unavailable: None,
             last_tick: now,
             last_heartbeat: now,
+            local_clock: None,
             contact: None,
             last_tap: None,
             last_touch: now,
@@ -180,6 +183,7 @@ impl Client {
             {
                 return Err(Error::Invalid);
             }
+            self.sync_clock(a.local_time_ms, now)?;
             self.authority = e.authority_epoch;
             self.hello = true;
             self.can_decide = a.capabilities.contains(&3) || a.capabilities.contains(&4);
@@ -240,7 +244,7 @@ impl Client {
                 }
                 self.sync(now)?;
             }
-            Payload::Heartbeat(_) => (),
+            Payload::Heartbeat(h) => self.sync_clock(h.local_time_ms, now)?,
             Payload::Error(_) => return Err(Error::Invalid),
             _ => return Err(Error::Sequence),
         }
@@ -478,6 +482,7 @@ impl Client {
                 self.emit(Payload::Heartbeat(Heartbeat {
                     applied_revision: self.replica.model.revision,
                     monotonic_ms: now,
+                    local_time_ms: None,
                 }))?;
                 self.last_heartbeat = now;
             }
@@ -499,11 +504,25 @@ impl Client {
         }
         Ok(())
     }
+    fn sync_clock(&mut self, local_ms: Option<u32>, now: u64) -> Result<()> {
+        if let Some(local_ms) = local_ms {
+            if local_ms >= 86_400_000 {
+                return Err(Error::Invalid);
+            }
+            self.local_clock = Some((local_ms, now));
+        }
+        Ok(())
+    }
+    /// Host-local display time, advanced with elapsed board time between samples.
+    /// An older host without clock samples displays midnight rather than uptime.
+    pub fn local_time(&self, now: u64) -> chrono::NaiveTime {
+        let ms =
+            self.local_clock.map_or(0, |(ms, at)| (u64::from(ms) + now.saturating_sub(at) % 86_400_000) % 86_400_000);
+        chrono::NaiveTime::from_num_seconds_from_midnight_opt((ms / 1000) as u32, (ms % 1000) as u32 * 1_000_000)
+            .unwrap()
+    }
     pub fn render(&mut self, frame: &mut [u32], now: u64) {
-        self.scene.render(
-            frame,
-            chrono::NaiveTime::from_num_seconds_from_midnight_opt(((now / 1000) % (24 * 3600)) as u32, 0).unwrap(),
-        );
+        self.scene.render(frame, self.local_time(now));
         self.feedback(|x, y| frame[y as usize * 480 + x as usize] = 0xffd95f);
     }
     /// Paint only the pressed marker over an already presented frame. This can

@@ -45,7 +45,7 @@ class Host:
   def key(label,n):return HKDF(algorithm=hashes.SHA256(),length=n,salt=sha(transcript),info=b'tc-v2/'+label).derive(KEY)
   self.encrypt=ChaCha20Poly1305(key(b'host-key',32));self.decrypt=ChaCha20Poly1305(key(b'board-key',32));self.tn=key(b'host-nonce',4);self.rn=key(b'board-nonce',4);self.epoch=key(b'epoch',16)
   got=self.poll();assert len(got)==1 and got[0].HasField('hello');self.assets=got[0].hello.asset_digest
-  self.send('hello_ack',pb.HelloAck(asset_digest=self.assets,capabilities=[1,2,3,4,5,6],required_capabilities=[1,2,6],heartbeat_ms=1000,session_limit=64,blob_limit=32768,max_envelope_bytes=4096));assert self.poll()[0].HasField('resync')
+  self.send('hello_ack',pb.HelloAck(asset_digest=self.assets,capabilities=[1,2,3,4,5,6],required_capabilities=[1,2,6],heartbeat_ms=1000,session_limit=64,blob_limit=32768,max_envelope_bytes=4096,local_time_ms=12*3600000));assert self.poll()[0].HasField('resync')
  def env(self,field,msg):
   e=pb.Envelope(major=2,connection_epoch=self.epoch,authority_epoch=AUTH);getattr(e,field).CopyFrom(msg);return e
  def fragments(self,e):
@@ -125,6 +125,17 @@ def emulator():
    except subprocess.TimeoutExpired:p.kill();p.wait()
 
 def extra(d,qmp,p):
+ # Wall time is initialized by HelloAck and corrected by authenticated heartbeat.
+ h=Host(d,244);ss,body=fixture(998);h.snapshot(ss,pb.View(page=1));h.advance(10000)
+ h.present('clock-noon',qmp,p)
+ h.send('heartbeat',pb.Heartbeat(local_time_ms=3*3600000+30*60000));h.poll()
+ h.present('clock-0330',qmp,p)
+ # Inspect only the analog clock, so animation cannot make this assertion pass.
+ def clock_pixels(name):
+  header,pixels=(OUT/name).read_bytes().split(b'255\n',1)
+  assert header==b'P6\n480 272\n' and len(pixels)==480*272*3
+  return b''.join(pixels[(y*480+80)*3:(y*480+93)*3] for y in range(11,24))
+ assert clock_pixels('clock-noon.ppm')!=clock_pixels('clock-0330.ppm'), 'host clock did not reach the rendered clock'
  # All seats, double taps and stable IDs; no provider navigation is executed.
  h=Host(d,244);ss,body=fixture(999);h.snapshot(ss,pb.View(page=1));h.advance(10000)
  for s in ss:

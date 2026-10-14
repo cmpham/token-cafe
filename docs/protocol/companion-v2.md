@@ -569,3 +569,17 @@ fixtures specify whitespace, CRLF, backslashes, non-ASCII and 32768-byte limits.
 - https://www.bluetooth.com/specifications/specs/core-specification-6-2/
 - https://www.rfc-editor.org/rfc/rfc8439 (AEAD)
 - https://www.rfc-editor.org/rfc/rfc5869 (HKDF)
+
+## Display clock synchronization
+
+`HelloAck.local_time_ms` (optional uint32 field 9) initializes the board's display
+clock before the initial snapshot. Host-to-board `Heartbeat.local_time_ms`
+(optional uint32 field 3) refreshes it every second, including after reconnects,
+host timezone/DST changes, or manual time adjustments. Values are host-local
+milliseconds since midnight, in [0, 86400000); invalid values reject the message.
+The board advances the sample using elapsed local monotonic time and wraps at
+midnight. BLE transit time introduces a small display-clock offset; this is not
+precision time synchronization. Absent samples preserve the last anchor; before
+any sample the display uses midnight, never device uptime. Board heartbeats omit
+this field. These additive fields are independent of all monotonic input,
+approval, transport, heartbeat, animation and sleep deadlines.

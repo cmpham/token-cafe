@@ -156,3 +156,17 @@ more than one minute, while other patrons updated normally. The shared display
 adapter also compiles in retained legacy QA firmware (`/tmp/tc-v2-legacy-adapter-build.log`);
 that build was not flashed. Physical finger/panel confirmation was requested from
 the user and remains separate from automated injected-touch evidence.
+
+## Clock synchronization follow-up (2026-10-14)
+
+The board previously rendered its monotonic uptime as time of day. The host now
+sends local milliseconds since midnight in HelloAck and each heartbeat; only the
+rendered clock uses this anchor. All safety and inactivity deadlines remain
+monotonic. Workspace tests pass (109 total), focused clock tests cover startup,
+midnight rollover, missing samples, correction and invalid ranges; Clippy and
+format checks pass. QEMU passes all three ATT capacities plus the extended suite,
+including a comparison of only the clock pixels before/after an authenticated
+time correction (`target/protocol-v2-qa/clock-noon.ppm`, `clock-0330.ppm`).
+Production firmware was flashed with image-hash verification and the desktop app
+rebuilt/restarted. Physical clock appearance still needs user confirmation; QEMU
+screenshots are not a camera capture of the panel.

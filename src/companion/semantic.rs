@@ -5,6 +5,7 @@ use btleplug::{
     api::{Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, ValueNotification, WriteType},
     platform::{Manager, Peripheral},
 };
+use chrono::Timelike;
 use companion_core::{
     authority::{Dispatch, Peer},
     crypto::{self, Keys},
@@ -250,6 +251,7 @@ async fn serve(
             err(link.transport.enqueue(&env(Payload::Heartbeat(Heartbeat {
                 applied_revision: shared.lock().unwrap().authority.model.revision,
                 monotonic_ms: now,
+                local_time_ms: Some(local_time_ms()),
             }))))?;
             heartbeat = Instant::now();
         }
@@ -317,7 +319,7 @@ async fn serve(
                     if h.input_injection_enabled&&board.production{return Err("Production key cannot authenticate an injectable QA image".into());}
                     // QA keys cannot decide against real adapters, irrespective of Hello claims.
                     let capabilities=if board.production{vec![1,2,3,4,5,6]}else{vec![1,2,5,6]};
-                    err(link.transport.enqueue(&env(Payload::HelloAck(HelloAck{minor:0,asset_digest:cafe_ui::ASSET_DIGEST.to_vec(),capabilities,required_capabilities:vec![1,2,6],heartbeat_ms:1000,session_limit:64,blob_limit:32768,max_envelope_bytes:4096}))))?;hello=true;continue;
+                    err(link.transport.enqueue(&env(Payload::HelloAck(HelloAck{minor:0,asset_digest:cafe_ui::ASSET_DIGEST.to_vec(),capabilities,required_capabilities:vec![1,2,6],heartbeat_ms:1000,session_limit:64,blob_limit:32768,max_envelope_bytes:4096,local_time_ms:Some(local_time_ms())}))))?;hello=true;continue;
                 }
                 if !hello||e.authority_epoch!=authority{return Err("Wrong authority epoch".into());}
                 match e.payload.ok_or("Empty message")?{
@@ -374,7 +376,11 @@ pub async fn exercise_fixture(
             err(link.transport.enqueue(&sync::envelope(
                 &link.epoch,
                 &epoch,
-                Payload::Heartbeat(Heartbeat { applied_revision: authority.model.revision, monotonic_ms: now }),
+                Payload::Heartbeat(Heartbeat {
+                    applied_revision: authority.model.revision,
+                    monotonic_ms: now,
+                    local_time_ms: Some(local_time_ms()),
+                }),
             )))?;
             heartbeat = Instant::now();
         }
@@ -390,7 +396,7 @@ pub async fn exercise_fixture(
                     if e.connection_epoch!=link.epoch{return Err("QA epoch mismatch".into());}
                     let env=|p|sync::envelope(&link.epoch,&epoch,p);
                     match e.payload.ok_or("empty")?{
-                        Payload::Hello(h)=>{if h.asset_digest!=cafe_ui::ASSET_DIGEST||!h.input_injection_enabled{return Err("QA firmware/assets mismatch".into());}err(link.transport.enqueue(&env(Payload::HelloAck(HelloAck{asset_digest:cafe_ui::ASSET_DIGEST.to_vec(),capabilities:vec![1,2,3,4,5,6],required_capabilities:vec![1,2,6],heartbeat_ms:1000,session_limit:64,blob_limit:32768,max_envelope_bytes:4096,..Default::default()}))))?;ready=true;},
+                        Payload::Hello(h)=>{if h.asset_digest!=cafe_ui::ASSET_DIGEST||!h.input_injection_enabled{return Err("QA firmware/assets mismatch".into());}err(link.transport.enqueue(&env(Payload::HelloAck(HelloAck{asset_digest:cafe_ui::ASSET_DIGEST.to_vec(),capabilities:vec![1,2,3,4,5,6],required_capabilities:vec![1,2,6],heartbeat_ms:1000,session_limit:64,blob_limit:32768,max_envelope_bytes:4096,local_time_ms:Some(local_time_ms()),..Default::default()}))))?;ready=true;},
                         Payload::Resync(_)=>{queue.extend(err(sync::snapshot(&authority.model,&link.epoch,&epoch))?);last_sent=Some(authority.model.clone());},
                         Payload::BlobGet(b)=>{if let Some(body)=bodies.get(&b.sha256){for c in err(sync::chunks(body))?{queue.push_back(env(Payload::BlobChunk(c)));}}},
                         Payload::Action(a)=>{
@@ -410,6 +416,12 @@ pub async fn exercise_fixture(
     }
     link.peripheral.disconnect().await?;
     Ok(())
+}
+
+/// Use the host timezone, including DST, without requiring timezone data on the MCU.
+fn local_time_ms() -> u32 {
+    let now = chrono::Local::now();
+    now.num_seconds_from_midnight() * 1000 + now.nanosecond() / 1_000_000
 }
 
 #[cfg(test)]

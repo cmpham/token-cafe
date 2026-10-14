@@ -61,6 +61,7 @@ fn setup() -> (Client, Authority, Peer) {
             capabilities: vec![1, 2, 3, 4, 5, 6],
             required_capabilities: vec![1, 2, 6],
             heartbeat_ms: 1000,
+            local_time_ms: Some(12 * 3_600_000 + 34 * 60_000),
             session_limit: 64,
             blob_limit: 32768,
             max_envelope_bytes: 4096,
@@ -330,4 +331,40 @@ fn pressed_overlay_is_local_and_never_arms_approval() {
     assert!(!c.armed(11000));
     c.touch(2, 60, 90, 10020, &mut |_| true).unwrap();
     assert!(!c.feedback(|_, _| panic!("cancelled contact")));
+}
+
+#[test]
+fn host_clock_sync_startup_rollover_and_correction() {
+    use chrono::NaiveTime;
+    let (mut c, _, _) = setup();
+    assert_eq!(c.local_time(0), NaiveTime::from_hms_opt(12, 34, 0).unwrap());
+    assert_eq!(c.local_time(65_000), NaiveTime::from_hms_opt(12, 35, 5).unwrap());
+    receive(&mut c, Payload::Heartbeat(Heartbeat { local_time_ms: Some(86_399_500), ..Default::default() }), 100_000);
+    assert_eq!(c.local_time(100_500), NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+    // An absent optional value is not a request to reset the clock.
+    receive(&mut c, Payload::Heartbeat(Heartbeat::default()), 101_000);
+    assert_eq!(c.local_time(101_500), NaiveTime::from_hms_opt(0, 0, 1).unwrap());
+    // A host timezone/manual-time change takes effect without changing input time.
+    receive(
+        &mut c,
+        Payload::Heartbeat(Heartbeat { local_time_ms: Some(7 * 3_600_000), ..Default::default() }),
+        102_000,
+    );
+    assert_eq!(c.local_time(103_000), NaiveTime::from_hms_opt(7, 0, 1).unwrap());
+    assert!(!c.sleeping);
+    // A fresh connection never treats board uptime as wall time.
+    let fresh = Client::new("qa".into(), vec![2; 16], true, 9_000_000);
+    assert_eq!(fresh.local_time(9_000_000), NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+}
+
+#[test]
+fn host_clock_rejects_out_of_range_sample() {
+    let (mut c, _, _) = setup();
+    let e = sync::envelope(
+        &[1; 16],
+        &[2; 16],
+        Payload::Heartbeat(Heartbeat { local_time_ms: Some(86_400_000), ..Default::default() }),
+    );
+    let raw = codec::encode(&e).unwrap();
+    assert!(c.receive(e, &raw, 100).is_err());
 }

@@ -55,6 +55,7 @@ message HelloAck {
   uint32 blob_limit = 6;
   uint32 max_envelope_bytes = 7;
   repeated Capability required_capabilities = 8;
+  optional uint32 local_time_ms = 9; // host local milliseconds since midnight, < 86400000
 }
 enum ErrorCode {
   ERROR_UNSPECIFIED = 0;
@@ -71,7 +72,11 @@ message ProtocolError {
   optional uint64 related_action_id = 2;
   string detail = 3;
 }
-message Heartbeat { uint64 applied_revision = 1; uint64 monotonic_ms = 2; }
+message Heartbeat {
+  uint64 applied_revision = 1;
+  uint64 monotonic_ms = 2;
+  optional uint32 local_time_ms = 3; // host -> board only; same semantics as HelloAck
+}
 enum ResyncReason {
   RESYNC_UNSPECIFIED = 0;
   RESYNC_INITIAL = 1;
