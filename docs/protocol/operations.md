@@ -59,8 +59,8 @@ including when built through `firmware/semantic`. Preserve this combination:
 
 | Setting | Required value | Verification |
 | --- | --- | --- |
-| Orientation | MADCTL (`0x36`) = `0xc0` | Boot `LCD: REG 0b = c0 c0 c0 c0` |
-| Color polarity | Inversion ON (`0x21`) | Boot `LCD: REG 09 = 60 13 24 00`; inversion bit `0x20` is set in the third byte |
+| Orientation | MADCTL (`0x36`) = `0x00` | Boot `LCD: REG 0b = 00 00 00 00` |
+| Color polarity | Inversion ON (`0x21`) | Boot `LCD: REG 09 = 00 13 24 00`; inversion bit `0x20` is set in the third byte |
 | Touch axes | `x = 479 - raw_x`, `y = 271 - raw_y` | Physically tap patrons in all four corner cells |
 
 Despite the command name, inversion ON produces normal colors on this panel.
@@ -72,7 +72,10 @@ Apply MADCTL and inversion as standard commands **after** the initialization
 table closes the vendor page with `0xff = 0x00`. Keep `panel_orientation()` as
 the common startup, wake, and periodic restoration path; do not wrap its commands
 in vendor-page selection. Keep the initialization table's MADCTL consistent.
-Changing orientation also requires checking the GT911 mapping and gesture tests;
+The touch sensor is physically reversed relative to the upright image: a measured
+top-left tap at raw `(412,173)` maps to display `(67,98)`. Do not infer touch
+orientation from MADCTL bits. Changing orientation requires checking physical
+GT911 contacts and gesture tests;
 a color-only correction must not change orientation or touch coordinates.
 
 For a recurrence:
@@ -91,6 +94,19 @@ For a recurrence:
    QEMU, and injected touch cannot verify physical panel polarity or alignment.
 
 Keep physical confirmation separate from register readback in `validation.md`.
+First confirm animation and touch-driven redraw: a frozen old framebuffer can
+make an orientation change look correct until fresh pixels are written. The
+earlier `0xc0` recommendation was based on that frozen-frame observation and
+is superseded by `0x00`; confirm the combined settings on the live panel.
+
+If the image freezes while serial `V2: FRAME` messages and BLE notifications
+continue, check LCD chip-select routing. ESP-IDF assigns the CS GPIO when adding
+a SPI device and resets that GPIO when removing it. The diagnostic read handle
+and write handle must never coexist on CS45. `panel_diagnose()` removes the write
+handle, runs and removes the read probe, then recreates the write handle from
+`lcd_config`. Omitting that last step leaves a static panel even when SPI
+transactions return success. Verify visible animation and a touch-driven screen
+change after diagnostics; register readback alone cannot catch this failure.
 
 ## Rollback
 

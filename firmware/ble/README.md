@@ -153,7 +153,7 @@ First-frame transfer can take about 20 seconds; subsequent updates depend on the
 changed area and radio link (roughly 2–5 seconds in local tests).
 
 LCD: NV3041A QSPI at 20 MHz, CS45, clock47, D0/D1/D2/D3=21/48/40/39,
-backlight1, with MADCTL `0xc0` and display inversion **enabled** (`0x21`) for
+backlight1, with MADCTL `0x00` and display inversion **enabled** (`0x21`) for
 normal colors on this panel. Inversion OFF (`0x20`) produces negative colors.
 Send these standard commands directly after the vendor initialization page is
 closed. See the [panel settings and verification procedure](../../docs/protocol/operations.md#lcd-orientation-and-color-settings)

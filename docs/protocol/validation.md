@@ -173,6 +173,9 @@ screenshots are not a camera capture of the panel.
 
 ## Panel orientation and color follow-up (2026-10-14)
 
+Historical calibration below was superseded by the live-frame check after fixing
+chip-select routing. See the final follow-up below; do not reuse `0xc0`.
+
 The user reported a 180-degree rotation and inverted colors even after reset.
 The installed flash already contained the periodic `panel_orientation` helper.
 The final correction sends standard MADCTL and inversion commands directly,
@@ -193,3 +196,46 @@ user-confirmed; final combined color and touch confirmation remains pending.
 The QEMU rerun could not start because
 this checkout lacks the generated `companion_pb2` Python module; no new QEMU pass
 is claimed for this change.
+
+## Frozen panel follow-up (2026-10-14)
+
+Live serial capture showed continued BLE notifications and `V2: FRAME` messages
+while the user reported a frozen panel (`target/frozen-board-live.log`). The
+register-read diagnostic had registered a second SPI device on CS45, then removed
+it. ESP-IDF `spi_bus_remove_device()` frees the CS GPIO via `gpio_reset_pin()`,
+disconnecting the active display's chip-select despite successful SPI transfers.
+The diagnostic now replaces the write device temporarily and recreates it after
+removing the probe. Both write-device creation paths use one `lcd_config`.
+The production firmware build passed and flash contents were hash-verified.
+A 35-second post-flash capture recorded continued rendering without a captured
+panic or assertion (`target/display-freeze-fixed-live.log`). Physical animation,
+touch response, and final appearance confirmation remain pending.
+
+## Orientation after restoring live rendering (2026-10-14)
+
+After the chip-select fix, the user reported that the whole board was upside
+down. The earlier apparent success with `0xc0` was observed while pixel updates
+were blocked and cannot establish the orientation of freshly rendered frames.
+MADCTL is now `0x00` in initialization and runtime restoration; inversion remains
+ON (`0x21`). GT911 coordinates retain their native axes, and the focused native
+touch/gesture tests pass with the matching mapping. Physical confirmation must
+include visible animation and a touch-driven redraw, not only a static image.
+Production build and flash hash verification passed. Post-reset readback reports
+MADCTL `00` and status `00 13 24 00` (inversion ON), captured in
+`target/display-live-orientation-boot.log`. Combined physical confirmation is
+still pending.
+
+## Physical touch calibration (2026-10-14)
+
+The user tapped the top-left patron as requested. Serial capture recorded raw
+contacts `(412,173)` and `(421,187)` in `target/touch-location-diagnosis.log`,
+confirming both touch axes were reversed. The mapping now converts them to
+`(67,98)` and `(58,84)` without changing MADCTL `0x00` or inversion ON. This
+supersedes the native-axis assumption above: LCD orientation bits do not define
+the physical touch sensor orientation. The native gesture test includes the
+measured `(412,173)` calibration point and passes tap/double-tap cases.
+The production build and flash hash verification passed. Post-flash physical
+contacts map to top-left positions such as `(51,72)` and `(69,87)`, with immediate
+hit feedback and release-triggered redraws recorded in
+`target/touch-calibration-verification.log`. Desktop navigation from double taps
+still requires user confirmation; firmware touch logs alone do not prove it.

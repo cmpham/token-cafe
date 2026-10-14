@@ -28,6 +28,9 @@ int main(void) {
     uint16_t x=0,y=0;
     assert(touch_to_display(&x,&y) && x==479 && y==271);
     assert(touch_to_display(&x,&y) && x==0 && y==0);
+    // Physical top-left contact captured during hardware calibration.
+    x=412;y=173;
+    assert(touch_to_display(&x,&y) && x==67 && y==98);
     x=480;assert(!touch_to_display(&x,&y));
     x=0;y=272;assert(!touch_to_display(&x,&y));
     TouchGesture g={0};

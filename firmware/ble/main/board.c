@@ -26,6 +26,9 @@
 #include "touch_coordinates.h"
 #include "screen_idle.h"
 static spi_device_handle_t lcd;
+static const spi_device_interface_config_t lcd_config={.command_bits=8,.address_bits=24,
+    .clock_speed_hz=20000000,.mode=0,.spics_io_num=45,.queue_size=1,
+    .flags=SPI_DEVICE_HALFDUPLEX};
 static esp_lcd_touch_handle_t touch;
 static QueueHandle_t events;
 #define LCD_ROWS 32
@@ -49,12 +52,17 @@ static void fingerprint_set(uint64_t value) {
     taskENTER_CRITICAL(&fingerprint_lock); displayed_crc=value; taskEXIT_CRITICAL(&fingerprint_lock);
 }
 // Apply standard display commands after leaving the vendor initialization page.
-// This panel needs inversion ON for normal colors, with MADCTL=0xc0 upright.
+// This panel needs inversion ON for normal colors, with MADCTL=0x00 upright.
 static void panel_orientation(void){
-    static const uint8_t madctl=0xc0;
+    static const uint8_t madctl=0x00;
     command(0x36,&madctl,1);command(0x21,NULL,0);
 }
 static void panel_diagnose(void) {
+    // ESP-IDF routes CS when a device is added and frees the GPIO on removal.
+    // Never register two devices on CS45: temporarily replace the write device,
+    // then recreate it after the read probe so display writes retain CS routing.
+    ESP_ERROR_CHECK(spi_bus_remove_device(lcd));
+    lcd=NULL;
     spi_device_handle_t probe;
     spi_device_interface_config_t cfg={.command_bits=8,.address_bits=24,
         .clock_speed_hz=1000000,.mode=0,.spics_io_num=45,.queue_size=1,
@@ -69,6 +77,7 @@ static void panel_diagnose(void) {
             t.rx_data[0],t.rx_data[1],t.rx_data[2],t.rx_data[3]);
     }
     ESP_ERROR_CHECK(spi_bus_remove_device(probe));
+    ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST,&lcd_config,&lcd));
 }
 #if TC_SEMANTIC
 static uint8_t *previous;
@@ -243,10 +252,7 @@ void board_init(void) {
         .data2_io_num=40,.data3_io_num=39,
         .data4_io_num=-1,.data5_io_num=-1,.data6_io_num=-1,.data7_io_num=-1,.max_transfer_sz=TC_WIDTH*LCD_ROWS*2};
     ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST,&bus,SPI_DMA_CH_AUTO));
-    spi_device_interface_config_t dev={.command_bits=8,.address_bits=24,
-        .clock_speed_hz=20000000,.mode=0,.spics_io_num=45,.queue_size=1,
-        .flags=SPI_DEVICE_HALFDUPLEX};
-    ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST,&dev,&lcd));
+    ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST,&lcd_config,&lcd));
     dma=heap_caps_malloc(TC_WIDTH*LCD_ROWS*2,MALLOC_CAP_DMA);TC_CHECK(dma);
     command(0x01,NULL,0);vTaskDelay(pdMS_TO_TICKS(120));
     for(size_t i=0;i<sizeof(lcd_init)/sizeof(lcd_init[0]);i++) {

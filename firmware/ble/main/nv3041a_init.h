@@ -4,7 +4,7 @@
 // See ../licenses/Arduino_GFX.txt for the BSD license.
 static const struct { uint8_t command, value; uint16_t delay_ms; } lcd_init[] = {
     {0xff, 0xa5, 0},
-    {0x36, 0xc0, 0},
+    {0x36, 0x00, 0},
     {0x3A, 0x01, 0},
     {0x41, 0x03, 0},
     {0x44, 0x15, 0},

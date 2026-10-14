@@ -2,8 +2,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "protocol.h"
-// JC4827W543 LCD MADCTL=0xc0 reverses both axes. GT911 reports its
-// native orientation. Convert physical contacts once, before gesture detection.
+// The GT911 sensor is mounted opposite the upright LCD (MADCTL=0x00).
+// Physical top-left taps read near (419,181); map them to (60,90).
+// Calibrate touch independently of the LCD register's axis bits.
 // USB QA samples already use displayed panel coordinates and bypass this map.
 static inline bool touch_to_display(uint16_t *x, uint16_t *y) {
     if (*x >= TC_WIDTH || *y >= TC_HEIGHT) return false;

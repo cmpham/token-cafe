@@ -141,7 +141,7 @@ Physical finger accuracy and optical output still require physical verification.
 ## Physical orientation acceptance gate
 
 Use the [required LCD settings](../protocol/operations.md#lcd-orientation-and-color-settings):
-MADCTL `0xc0`, inversion ON (`0x21`), and reversed GT911 axes. Read the boot LCD
+MADCTL `0x00`, inversion ON (`0x21`), and reversed GT911 axes (calibrated independently of MADCTL). Read the boot LCD
 register diagnostics, then verify upright text and normal colors physically;
 inversion OFF is not the correct color setting for this panel. Repeat the visual
 check after reset and backlight sleep/wake.
