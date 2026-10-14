@@ -368,3 +368,24 @@ fn host_clock_rejects_out_of_range_sample() {
     let raw = codec::encode(&e).unwrap();
     assert!(c.receive(e, &raw, 100).is_err());
 }
+
+#[test]
+fn double_tap_after_selected_session_vanishes_does_not_panic() {
+    let (mut c, mut h, _) = setup();
+    tap(&mut c, 60, 90, 10010);
+    assert_eq!(c.scene.selected_id(), Some("claude:test"));
+    // The session leaves before the host answers the optimistic selection.
+    let old = h.model.clone();
+    h.model.sessions.clear();
+    h.model.revision += 1;
+    for e in sync::update(&old, &h.model, &[1; 16], &[2; 16]).unwrap() {
+        let raw = codec::encode(&e).unwrap();
+        c.receive(e, &raw, 10050).unwrap();
+    }
+    assert_eq!(c.intents.len(), 1);
+    assert_eq!(c.scene.selected_id(), None);
+    tap(&mut c, 200, 240, 10100);
+    tap(&mut c, 200, 240, 10300);
+    assert!(actions(&mut c).iter().all(|a| a.kind == 1));
+    assert!(c.connected);
+}

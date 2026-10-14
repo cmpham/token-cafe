@@ -327,10 +327,11 @@ impl Client {
             .collect();
         self.scene.set_details(details);
         self.scene.set_usage_text(m.usage.tokens_display.clone(), m.usage.cost_display.clone());
-        if v.selected_session_id.is_empty() {
-            self.scene.clear_selection();
-        } else {
+        // A pending optimistic selection may name a session a delta has since removed.
+        if m.sessions.contains_key(&v.selected_session_id) {
             self.scene.focus_patron(v.selected_session_id.clone());
+        } else {
+            self.scene.clear_selection();
         }
         self.scene.set_task_anchor(v.task_anchor as usize);
         let wanted = if v.page == 2 {
@@ -689,7 +690,7 @@ impl Client {
                         self.sync(now)?;
                     }
                 } else if double {
-                    let s = &self.replica.model.sessions[&id];
+                    let Some(s) = self.replica.model.sessions.get(&id) else { return Ok(()) };
                     let (kind, request, b) = if let Some(r) = &s.approval {
                         (1, r.id.clone(), r.body_blob.clone())
                     } else if s.unlinked_review_blob.is_some() {
@@ -775,7 +776,7 @@ impl Client {
             Target::Decision(decision, identity) => {
                 if c.armed && identity == self.review_identity && self.receipts.len() < 8 {
                     let v = self.view();
-                    let s = &self.replica.model.sessions[&v.selected_session_id];
+                    let Some(s) = self.replica.model.sessions.get(&v.selected_session_id) else { return Ok(()) };
                     let r = s.approval.as_ref().ok_or(Error::Invalid)?;
                     let a = Action {
                         kind: 7,
