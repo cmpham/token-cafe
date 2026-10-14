@@ -8,6 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let body =
         "Synthetic hardware approval fixture.\nNo command or desktop action is executed.\nTool: Bash\n\nprintf 'test'\n"
             .to_owned() + &"Full question line for scrolling.\n".repeat(20);
+    let body = if std::env::var_os("TC_QA_STRESS_TEXT").is_some() { "\t".repeat(32768) } else { body };
     let blob = sync::blob(body.as_bytes()).unwrap();
     let mut sessions = BTreeMap::new();
     for (i, seat) in [0, 1, 4, 5, 2, 3, 6, 7].into_iter().enumerate() {

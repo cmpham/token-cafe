@@ -199,7 +199,9 @@ pub unsafe extern "C" fn cafe_engine_tick(e: *mut Engine, now: u64) -> bool {
         {
             let ok = t.check(now).is_ok() && c.tick(now).is_ok();
             c.reconcile_receipts(&mut persist);
-            e.receipts = c.receipts.clone();
+            if e.receipts != c.receipts {
+                e.receipts.clone_from(&c.receipts);
+            }
             ok
         }
     } else {
@@ -230,7 +232,9 @@ pub unsafe extern "C" fn cafe_engine_touch(e: *mut Engine, pressed: u8, x: i32, 
     let e = unsafe { &mut *e };
     let ok = if let Some(c) = &mut e.client {
         let ok = c.touch(pressed, x, y, now, &mut persist).is_ok();
-        e.receipts = c.receipts.clone();
+        if e.receipts != c.receipts {
+            e.receipts.clone_from(&c.receipts);
+        }
         ok
     } else {
         true

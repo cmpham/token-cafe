@@ -487,7 +487,8 @@ impl App {
         #[cfg(not(feature = "bluetooth"))]
         let shared_status = false;
         if let Some(review) = &mut self.scene.review {
-            if !shared_status && let Some(outcome) = self.approvals.as_ref().and_then(|b| b.outcome(&review.request.id))
+            if !shared_status
+                && let Some(outcome) = self.approvals.as_ref().and_then(|b| b.outcome(&review.request().id))
             {
                 match outcome {
                     token_cafe::approval::Outcome::Delivered(_) => review.status = "DECISION RETURNED TO HOOK".into(),
@@ -496,7 +497,7 @@ impl App {
                 }
             }
             if let Some(decision) = review.decision.take() {
-                let sent = self.approvals.as_ref().is_some_and(|b| b.decide(&review.request.id, decision));
+                let sent = self.approvals.as_ref().is_some_and(|b| b.decide(&review.request().id, decision));
                 review.actionable = false;
                 review.status = if sent { "SENDING DECISION..." } else { "REQUEST EXPIRED - OPEN DESKTOP" }.into();
             }

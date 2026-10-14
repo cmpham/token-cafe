@@ -238,9 +238,9 @@ impl Store {
             ..Default::default()
         };
         if let Some(r) = &scene.review
-            && let Some(s) = next.sessions.get(&wire_id(&r.request.session))
+            && let Some(s) = next.sessions.get(&wire_id(&r.request().session))
         {
-            let req = s.approval.as_ref().filter(|a| a.id == r.request.id);
+            let req = s.approval.as_ref().filter(|a| a.id == r.request().id);
             let (kind, b) = if let Some(req) = req {
                 (1, req.body_blob.clone())
             } else if s.unlinked_review_blob.is_some() {
@@ -373,7 +373,7 @@ impl Store {
                     tool_name: r.map_or_else(String::new, |r| r.tool_name.clone()),
                     text: text.into(),
                 };
-                if scene.review.as_ref().is_none_or(|old| old.request != request) {
+                if scene.review.as_ref().is_none_or(|old| old.request() != &request) {
                     scene.review = Some(crate::review::Review::new(request, false));
                 }
                 if let Some(review) = &mut scene.review {

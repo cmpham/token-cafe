@@ -25,6 +25,10 @@ case "${1:-build}" in
    idf.py -B build-qa -D SDKCONFIG=sdkconfig.qa -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.qa.defaults' "${args[@]}"
   else idf.py "${args[@]}"; fi
   ;;
- test) exec python "$ROOT/tools/test_protocol_v2_qemu.py" "${@:2}" ;;
+ test)
+  python "$ROOT/tools/test_protocol_v2_qemu.py" "${@:2}"
+  python "$ROOT/tools/test_transition_qemu.py"
+  exec python "$ROOT/tools/test_board_performance_qemu.py"
+  ;;
  *) exit 2 ;;
 esac

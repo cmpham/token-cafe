@@ -282,6 +282,7 @@ async fn serve(
             if let Some(ok) = rx.try_recv().ok().or_else(|| (now - *at > 3000).then_some(false)) {
                 let mut s = shared.lock().unwrap();
                 let r = s.authority.finish(&mut peer, a, ok);
+                eprintln!("token-cafe: desktop handoff action={} accepted={} elapsed_ms={}", a.id, ok, now - *at);
                 err(link.transport.enqueue(&env(Payload::ActionResult(r))))?;
                 nav_done.push(a.id);
             }
@@ -374,9 +375,20 @@ pub async fn exercise_fixture(
     let mut queue = VecDeque::new();
     let mut heartbeat = Instant::now();
     let mut ready = false;
+    let mut delayed_navigation: Vec<(Action, u64)> = vec![];
     while start.elapsed() < duration {
         let now = start.elapsed().as_millis() as u64;
         err(link.transport.check(now))?;
+        // Exercise real pending-navigation ordering without launching a provider.
+        let mut completed = vec![];
+        for (action, at) in &delayed_navigation {
+            if now.saturating_sub(*at) >= 2000 {
+                let result = authority.finish(&mut peer, action, true);
+                err(link.transport.enqueue(&sync::envelope(&link.epoch, &epoch, Payload::ActionResult(result))))?;
+                completed.push(action.id);
+            }
+        }
+        delayed_navigation.retain(|(action, _)| !completed.contains(&action.id));
         if ready && heartbeat.elapsed() >= Duration::from_secs(1) {
             err(link.transport.enqueue(&sync::envelope(
                 &link.epoch,
@@ -406,7 +418,7 @@ pub async fn exercise_fixture(
                         Payload::BlobGet(b)=>{if let Some(body)=bodies.get(&b.sha256){for c in err(sync::chunks(body))?{queue.push_back(env(Payload::BlobChunk(c)));}}},
                         Payload::Action(a)=>{
                             let before=authority.model.clone();let (mut result,dispatch)=err(authority.action(&mut peer,&a,now,bodies.get(&a.blob_id).map(Vec::as_slice)))?;
-                            if dispatch.is_some(){result=authority.finish(&mut peer,&a,true);}
+                            if matches!(dispatch,Some(Dispatch::Desktop(_))){delayed_navigation.push((a.clone(),now));}else if dispatch.is_some(){result=authority.finish(&mut peer,&a,true);}
                             writeln!(log,"{}",serde_json::json!({"ms":now,"id":a.id,"kind":a.kind,"session":a.session_id,"request":a.request_id,"decision":a.decision,"status":result.status,"reason":result.reason,"revision":authority.model.revision,"selected":authority.model.view.selected_session_id,"page":authority.model.view.page}))?;log.flush()?;
                             if authority.model!=before{queue.extend(err(sync::update(last_sent.as_ref().unwrap(),&authority.model,&link.epoch,&epoch))?);last_sent=Some(authority.model.clone());}
                             err(link.transport.enqueue(&env(Payload::ActionResult(result))))?;

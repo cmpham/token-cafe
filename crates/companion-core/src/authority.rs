@@ -307,7 +307,10 @@ impl Intents {
         while let Some(r) = self.results.pop_front() {
             if r.applied_revision > revision {
                 waiting.push_back(r);
-            } else if r.status != 2 {
+            } else if r.status != 2 || self.pending.iter().any(|a| a.id == r.action_id && a.kind == 6) {
+                // A navigation's view is committed before the OS opener finishes.
+                // Once that revision is applied, replaying the optimistic handoff
+                // would overwrite newer selections/reviews while status is pending.
                 self.pending.retain(|a| a.id != r.action_id);
             }
         }

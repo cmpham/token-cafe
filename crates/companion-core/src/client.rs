@@ -308,9 +308,13 @@ impl Client {
         for s in m.sessions.values() {
             self.scene.set_appearance(&s.id, s.appearance_seed);
         }
+        // Only the selected patron's footer can display body text. The verified
+        // blob cache retains other bodies; do not clone and lay them out for all
+        // 64 sessions on every synchronization.
         let details = m
             .sessions
-            .values()
+            .get(&v.selected_session_id)
+            .into_iter()
             .map(|s| scene::SessionDetail {
                 id: s.id.clone(),
                 target: None,
@@ -374,14 +378,19 @@ impl Client {
                 self.rendered_identity.clear();
                 self.contact = None;
             }
-            let mut review = Review::new(request, false);
+            let mut review = self
+                .scene
+                .review
+                .take()
+                .filter(|old| old.request() == &request)
+                .unwrap_or_else(|| Review::new(request, false));
             review.allow_approve = r.is_some_and(|r| r.allowed_decisions.contains(&1));
             review.allow_deny = r.is_some_and(|r| r.allowed_decisions.contains(&2));
             let receipt = r.is_some_and(|r| self.receipts.iter().any(|x| x.request == r.id && x.digest == r.digest));
             let eligible = verified
                 && self.can_decide
                 && r.is_some_and(|r| r.state == 1 && r.desktop_only_reason.is_empty())
-                && Review::identity_fits(&review.request)
+                && Review::identity_fits(review.request())
                 && !receipt;
             review.actionable = eligible && self.receipts.len() < 8;
             review.dismiss_pending = (receipt || self.receipts.len() >= 8)
@@ -453,18 +462,19 @@ impl Client {
         if !self.connected || !self.replica.ready {
             return;
         }
-        let remaining: Vec<_> = self
-            .receipts
-            .iter()
-            .filter(|receipt| {
-                !self.replica.model.sessions.values().any(|s| {
-                    s.approval.as_ref().is_some_and(|r| {
-                        r.id == receipt.request && r.digest == receipt.digest && matches!(r.state, 3 | 5 | 6 | 7)
-                    })
+        let settled = |receipt: &Receipt| {
+            self.replica.model.sessions.values().any(|s| {
+                s.approval.as_ref().is_some_and(|r| {
+                    r.id == receipt.request && r.digest == receipt.digest && matches!(r.state, 3 | 5 | 6 | 7)
                 })
             })
-            .cloned()
-            .collect();
+        };
+        // This is called every engine tick. Pending receipts usually do not
+        // change; allocate a replacement only when there is something to retire.
+        if !self.receipts.iter().any(settled) {
+            return;
+        }
+        let remaining: Vec<_> = self.receipts.iter().filter(|r| !settled(r)).cloned().collect();
         if remaining.len() != self.receipts.len() && persist(&remaining) {
             self.receipts = remaining;
         }
@@ -572,7 +582,7 @@ impl Client {
                 return if x < 120 {
                     Target::Back
                 } else if x >= 360 {
-                    Target::Desktop(r.request.session.clone())
+                    Target::Desktop(r.request().session.clone())
                 } else {
                     Target::None
                 };
@@ -596,7 +606,7 @@ impl Client {
             if x >= 436 {
                 return Target::Rail(y >= 142);
             }
-            return Target::Body(r.request.session.clone());
+            return Target::Body(r.request().session.clone());
         }
         if y >= cafe_ui::assets::WIN_Y {
             if x >= 436 {
@@ -759,7 +769,7 @@ impl Client {
                 }
             }
             Target::Dismiss => {
-                let current = self.scene.review.as_ref().map(|r| r.request.id.clone()).unwrap_or_default();
+                let current = self.scene.review.as_ref().map(|r| r.request().id.clone()).unwrap_or_default();
                 let next = if self.receipts.len() >= 8 {
                     Vec::new()
                 } else {

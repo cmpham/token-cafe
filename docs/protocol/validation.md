@@ -239,3 +239,57 @@ contacts map to top-left positions such as `(51,72)` and `(69,87)`, with immedia
 hit feedback and release-triggered redraws recorded in
 `target/touch-calibration-verification.log`. Desktop navigation from double taps
 still requires user confirmation; firmware touch logs alone do not prove it.
+
+## October 14: review / café / desktop transitions
+
+Reproduced a stale-navigation replay in a native regression and the actual Xtensa
+QEMU engine: while an OS desktop opener remained pending, acknowledging a newer
+review caused the board to close that review. Both failed before the fix. The
+client now retires the handoff's optimistic view when its applied revision arrives,
+while provider completion remains asynchronous. Opaque reviews also bypass hidden
+room rendering.
+
+Validation:
+
+- 112 workspace tests passed; Clippy passed with warnings denied.
+- Full QEMU suite passed at ATT capacities 182, 244, and 509, plus the new delayed
+  handoff/reopen/back framebuffer regression. Evidence: ignored
+  `target/protocol-v2-qa/transitions.json` and `transition-before.log`.
+- Physical semantic QA passed: eight seats, 30 selection cycles, one synthetic
+  decision, and both Claude/Codex handoff/reopen/back cycles with a two-second
+  simulated opener delay. Actual board framebuffer checked after the newer view
+  was acknowledged. Evidence: `target/transition-board-qa/`.
+- Hardware timing across 58 inputs: press feedback median 33.5 ms, p95 66 ms,
+  max 88 ms; release-to-LCD median 86 ms, p95 142 ms, max 143 ms. The QA guard now
+  requires press feedback <=150 ms and release-to-LCD <=250 ms. This workload
+  includes full-screen switches; it is not a like-for-like speed comparison with
+  earlier selection-only measurements.
+
+QEMU and the isolated hardware fixture do not open real provider applications.
+`desktop handoff ... accepted=true elapsed_ms=...` in production logs confirms the
+OS opener returned success, not that the destination application finished drawing.
+Final physical appearance and destination-thread verification require human input.
+
+The updated production application image was flashed with hash verification, the
+original pairing header restored byte-for-byte, and the rebuilt desktop companion
+restarted. Production serial telemetry confirms continuing frames; live physical
+Claude/Codex destination verification is pending the user check.
+
+## October 14: board performance and memory optimization
+
+See [the performance review](../qa/board-performance-review-2026-10-14.md) for the
+reviewed paths, before/after profiles, memory tradeoffs, and physical evidence.
+116 native tests, Clippy, formatting, all QEMU interaction tests, and five QEMU
+text/heap profiles passed. QEMU before/after screenshots match exactly for the
+three baseline workloads. Physical tests passed 30 normal and 100 maximum-body
+selection cycles, including both provider transition sequences.
+
+The final image uses compact flash-resident background runs and immutable cached
+review layouts. It preserves LCD polarity/orientation, touch calibration, journal
+safety, and protocol bounds. Physical normal release-to-LCD latency was 80 ms
+median / 98 ms max; the 32 KiB stress workload was 185 ms median / 225 ms max.
+The production image is 315,296 bytes smaller than the starting image.
+
+The optimized production firmware was flashed with hash verification, original
+pairing restored, and matching desktop app restarted. Post-restoration telemetry
+confirmed continuing frames (draw 29 ms, pack 15 ms, LCD 24 ms) and live BLE traffic.

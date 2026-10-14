@@ -308,7 +308,9 @@ impl BlobCache {
         self.complete.get(sha).map(|(b, _)| b.as_slice())
     }
     pub fn pin(&mut self, sha: Option<&[u8]>) {
-        self.pinned = sha.map(|s| s.to_vec());
+        if self.pinned.as_deref() != sha {
+            self.pinned = sha.map(|s| s.to_vec());
+        }
     }
     pub fn cancel(&mut self) {
         self.incoming = None;
@@ -321,7 +323,7 @@ impl BlobCache {
             if c.offset != 0 {
                 return Err(Error::Sequence);
             }
-            self.incoming = Some((c.sha256.clone(), c.total_length, Vec::new()));
+            self.incoming = Some((c.sha256.clone(), c.total_length, Vec::with_capacity(c.total_length as usize)));
         }
         let (sha, total, data) = self.incoming.as_mut().unwrap();
         if *sha != c.sha256

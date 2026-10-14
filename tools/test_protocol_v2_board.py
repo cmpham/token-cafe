@@ -46,19 +46,32 @@ def main():
   r.tap_expect(450,185,5);r.capture('04-scroll')
   time.sleep(.7);r.tap_expect(250,240,7,'qa-claude:0');time.sleep(1);r.capture('05-sent')
   r.tap_expect(30,20,3);time.sleep(.5)
+  # Both provider identities: handoff, reopen before the synthetic OS opener
+  # completes, then go back. Check the real LCD framebuffer after acknowledgments.
+  for seat,ident in [(1,'qa-claude:1'),(2,'qa-codex:4')]:
+   r.tap_expect(60+seat*120,90,1,ident);time.sleep(.5)
+   r.tap(200,240);time.sleep(.1);r.tap_expect(200,240,2,ident)
+   r.tap_expect(410,22,6,ident)
+   r.tap(200,240);time.sleep(.1);r.tap_expect(200,240,2,ident)
+   raw,_=r.capture_bytes()
+   pixel=int.from_bytes(raw[(480+2)*2:(480+2)*2+2],'little')
+   assert pixel==((0xef>>3)<<11|(0xeb>>2)<<5|(0xf7>>3)), 'pending handoff replaced the newer review'
+   r.tap_expect(30,20,3)
+   time.sleep(2.1)
   timings=[]
   for i in range(a.count):
    seat,id=seats[(i%7)+1];t=time.monotonic();down,up,e=r.tap_expect(60+seat%4*120,90+seat//4*82,1,id)
    timings.append({'down_ms':down,'up_ms':up,'host':e,'wall_ms':round((time.monotonic()-t)*1000,2)})
    time.sleep(.05)
-  r.capture('06-after-stress');(out/'timings.json').write_text(json.dumps(timings,indent=2));(out/'results.json').write_text(json.dumps({'result':'PASS','seats':8,'selection_cycles':a.count,'synthetic_decisions':1,'captures':6},indent=2));samples={'press_feedback_ms':[],'release_to_lcd_ms':[]}
+  r.capture('06-after-stress');(out/'timings.json').write_text(json.dumps(timings,indent=2));(out/'results.json').write_text(json.dumps({'result':'PASS','seats':8,'selection_cycles':a.count,'synthetic_decisions':1,'captures':6,'provider_transition_cycles':2},indent=2));samples={'press_feedback_ms':[],'release_to_lcd_ms':[]}
   serial_text=(out/'serial.log').read_text()
   for a,b in re.findall(r'FEEDBACK input=(\d+) lcd=(\d+)',serial_text):samples['press_feedback_ms'].append(int(b)-int(a))
   for a,b in re.findall(r'LOCAL kind=0 input=(\d+) commit=\d+ lcd=(\d+)',serial_text):samples['release_to_lcd_ms'].append(int(b)-int(a))
   metrics={}
   for name,values in samples.items():
    if values:
-    assert min(values)>=0 and max(values)<10000,(name,values)
+    limit=150 if name=='press_feedback_ms' else 250
+    assert min(values)>=0 and max(values)<=limit,(name,values)
     values.sort();metrics[name]={'samples':len(values),'median':statistics.median(values),'p95':values[int(.95*(len(values)-1))],'max':max(values)}
   (out/'latency.json').write_text(json.dumps(metrics,indent=2))
   print('PASS physical v2 fixture tests',metrics,flush=True)

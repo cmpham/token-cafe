@@ -1,12 +1,16 @@
 //! Full-screen request review. Provider requests are immutable while displayed.
 use crate::{
     approval::{Decision, Request, lines},
+    assets::{self as a, c},
     gfx::Gfx,
 };
 use alloc::{format, string::String, vec::Vec};
 #[derive(Clone)]
 pub struct Review {
-    pub request: Request,
+    request: Request,
+    identity: Vec<String>,
+    title_lines: usize,
+    body: Vec<crate::text::Line>,
     pub actionable: bool,
     pub page: usize,
     pub status: String,
@@ -18,8 +22,14 @@ pub struct Review {
 }
 impl Review {
     pub fn new(request: Request, actionable: bool) -> Self {
+        let identity = Self::identity_lines(&request);
+        let title_lines = lines(&request.title, 54).len();
+        let body = crate::text::layout(&request.text, 54);
         Self {
             request,
+            identity,
+            title_lines,
+            body,
             actionable,
             page: 0,
             status: String::new(),
@@ -30,78 +40,165 @@ impl Review {
             dismiss_all: false,
         }
     }
-    pub fn identity_fits(request: &Request) -> bool {
-        lines(&format!("{}\nTOOL: {}", request.title, request.tool_name), 54).len() <= 8
-    }
-    pub fn content_lines(&self) -> Vec<String> {
-        let mut out = lines(&format!("{}\nTOOL: {}", self.request.title, self.request.tool_name), 54);
-        out.push(String::new());
-        out.extend(lines(&self.request.text, 54));
+    fn identity_lines(request: &Request) -> Vec<String> {
+        let mut out = lines(&request.title, 54);
+        if !request.tool_name.is_empty() {
+            out.extend(lines(&format!("TOOL: {}", request.tool_name), 54));
+        }
         out
     }
+    pub fn identity_fits(request: &Request) -> bool {
+        Self::identity_lines(request).len() <= 8
+    }
+    /// Keep the source immutable so cached literal lines and approval identity
+    /// cannot diverge. Replace the Review when its request changes.
+    pub fn request(&self) -> &Request {
+        &self.request
+    }
+    fn line_count(&self) -> usize {
+        self.body_line_start() + self.body.len()
+    }
+    fn text_lines(&self) -> impl Iterator<Item = &str> {
+        self.identity
+            .iter()
+            .map(String::as_str)
+            .chain(core::iter::once(""))
+            .chain(self.body.iter().map(|line| line.text.as_str()))
+    }
+    pub fn content_lines(&self) -> Vec<String> {
+        self.text_lines().map(String::from).collect()
+    }
     pub fn body_line_start(&self) -> usize {
-        lines(&format!("{}\nTOOL: {}", self.request.title, self.request.tool_name), 54).len() + 1
+        self.identity.len() + 1
     }
     pub fn anchor(&self) -> usize {
-        crate::text::layout(&self.request.text, 54)
-            .get(self.page.saturating_sub(self.body_line_start()))
-            .map_or(0, |l| l.offset)
+        self.body.get(self.page.saturating_sub(self.body_line_start())).map_or(0, |l| l.offset)
     }
     pub fn set_anchor(&mut self, anchor: usize) {
-        self.page = if anchor == 0 {
-            0
-        } else {
-            self.body_line_start() + crate::text::index(&crate::text::layout(&self.request.text, 54), anchor)
-        };
+        self.page = if anchor == 0 { 0 } else { self.body_line_start() + crate::text::index(&self.body, anchor) };
     }
     pub fn page(&mut self, forward: bool) {
-        let last = self.content_lines().len().saturating_sub(9);
+        let last = self.line_count().saturating_sub(9);
         self.page = if forward { self.page.saturating_add(8).min(last) } else { self.page.saturating_sub(8) };
     }
     pub fn draw(&self, g: &mut Gfx) {
         g.noclip();
-        g.rect(0, 0, 480, 272, 0x101b4c);
-        g.rect(2, 2, 476, 268, 0x6176b4);
-        g.rect(4, 4, 472, 264, 0x172e78);
-        g.rect(4, 4, 472, 44, 0x254fc4);
-        g.text("< CAFE", 12, 20, 0xe3e9ff, 1, None);
-        g.text("DESKTOP >", 390, 20, 0xe3e9ff, 1, None);
-        let title: String = self.request.title.chars().take(32).collect();
-        g.text(&title, 12, 55, 0xffd95f, 1, None);
-        g.text(&self.request.id.chars().take(32).collect::<String>(), 246, 55, 0x9cb2e6, 1, None);
-        let text = self.content_lines();
-        for (i, line) in text.iter().skip(self.page).take(9).enumerate() {
-            g.text_literal(line, 12, 74 + i as i32 * 15, 0xe3e9ff);
+        // Use the room dialogue's stepped gradient and beveled pixel frame.
+        // Paint borders only: filling nested panels would write the full PSRAM
+        // framebuffer five times before any text is drawn.
+        fn border(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32, color: u32) {
+            g.rect(x, y, w, 1, color);
+            g.rect(x, y + h - 1, w, 1, color);
+            g.rect(x, y, 1, h, color);
+            g.rect(x + w - 1, y, 1, h, color);
         }
-        // A full-height 44px touch rail; tap upper/lower half to page.
-        g.rect(440, 72, 28, 138, 0x102057);
-        g.text("^", 450, 81, 0xe3e9ff, 1, None);
-        g.text("V", 450, 194, 0xe3e9ff, 1, None);
-        let last = text.len().saturating_sub(9);
-        let pos = (94 * self.page).checked_div(last).unwrap_or(0);
-        g.rect(448, 94 + pos as i32, 12, 12, 0xa1b6e8);
+        g.rect(0, 0, 480, 3, c::WIN_OUTER);
+        g.rect(0, 269, 480, 3, c::WIN_OUTER);
+        g.rect(0, 0, 3, 272, c::WIN_OUTER);
+        g.rect(477, 0, 3, 272, c::WIN_OUTER);
+        border(g, 2, 1, 476, 270, c::WIN_BORDER);
+        border(g, 1, 2, 478, 268, c::WIN_BORDER);
+        border(g, 3, 3, 474, 266, c::WIN_BORDER_LO);
+        border(g, 4, 4, 472, 264, c::WIN_BORDER_LO);
+        for y in 5..267 {
+            let step = ((y - 5) / 16) as u32;
+            let mix = |shift: u32| {
+                let hi = (c::WIN0 >> shift) & 255u32;
+                let lo = (c::WIN1 >> shift) & 255u32;
+                (hi * (16 - step) + lo * step) / 16
+            };
+            g.rect(5, y, 470, 1, mix(16) << 16 | mix(8) << 8 | mix(0));
+        }
+        g.text("< CAFE", 16, 22, c::TEXT, 1, Some(c::TEXT_SHADOW));
+        g.text("DESKTOP >", 390, 22, c::TEXT, 1, Some(c::TEXT_SHADOW));
+        g.rect(108, 11, 30, 32, c::WIN_BORDER_LO);
+        g.rect(109, 12, 28, 30, c::WIN1);
+        let pal = crate::scene::review_palette(&self.request.session);
+        g.blit_scaled(&a::HEAD_OPEN, 109, 15, Some(&pal), 2, None);
+        g.text(if self.actionable { "REQUEST" } else { "TASK NOTES" }, 150, 15, c::GOLD, 2, Some(c::TEXT_SHADOW));
+        g.text("TOKEN CAFE", 150, 34, c::TEXT_DIM, 1, Some(c::TEXT_SHADOW));
+        g.rect(16, 50, 448, 1, c::WIN1);
+        g.rect(16, 51, 448, 1, c::WIN_BORDER_LO);
+        let count = self.line_count();
+        let last = count.saturating_sub(9);
+        g.text(if self.actionable { "REVIEW REQUEST" } else { "SESSION DETAILS" }, 18, 59, c::TEXT_DIM, 1, None);
+        if last > 0 {
+            let position = format!("{}-{} / {}", self.page + 1, (self.page + 9).min(count), count);
+            g.text(&position, 432 - crate::gfx::text_width(&position, 1), 59, c::TEXT_DIM, 1, None);
+        }
+        g.clip(18, 74, 432, 212);
+        for (i, line) in self.text_lines().skip(self.page).take(9).enumerate() {
+            let color = if self.page + i < self.title_lines { c::GOLD } else { c::TEXT };
+            g.text_literal(line, 19, 75 + i as i32 * 15, c::TEXT_SHADOW);
+            g.text_literal(line, 18, 74 + i as i32 * 15, color);
+        }
+        g.noclip();
+        // Keep the existing 44px touch target; hide the rail when all text fits.
+        if last > 0 {
+            g.rect(448, 91, 8, 100, c::WIN1);
+            g.rect(456, 91, 1, 100, c::WIN_BORDER_LO);
+            g.text("^", 449, 77, if self.page > 0 { c::TEXT } else { c::TEXT_DIM }, 1, None);
+            g.text("V", 449, 199, if self.page < last { c::TEXT } else { c::TEXT_DIM }, 1, None);
+            let height = (900 / count).max(10) as i32;
+            let pos = (100 - height) * self.page.min(last) as i32 / last as i32;
+            g.rect(448, 91 + pos, 8, height, c::WIN_BORDER_LO);
+            g.rect(448, 91 + pos, 8, 1, c::WIN_BORDER);
+        }
+        g.rect(16, 215, 448, 1, c::WIN_BORDER_LO);
         if self.dismiss_pending {
-            g.rect(12, 220, 420, 44, 0xa1b6e8);
-            g.rect(14, 222, 416, 40, 0x354678);
+            g.rect(12, 220, 420, 44, c::WIN_BORDER_LO);
+            g.rect(14, 222, 416, 40, c::WIN1);
             g.text(
                 if self.dismiss_all { "CHECKED ALL ON DESKTOP" } else { "CHECKED ON DESKTOP" },
                 24,
                 237,
-                0xffffff,
+                c::TEXT,
                 1,
                 None,
             );
         } else if !self.status.is_empty() || !self.actionable {
-            g.text(if self.status.is_empty() { "ANSWER IN DESKTOP" } else { &self.status }, 12, 238, 0xffd95f, 1, None);
+            g.text(if self.status.is_empty() { "ANSWER IN DESKTOP" } else { &self.status }, 12, 238, c::GOLD, 1, None);
         } else {
-            for (x, w, label, color) in [(12, 144, "DENY", 0x354678), (168, 264, "APPROVE ONCE", 0x35784d)] {
+            for (x, w, label, color) in [(12, 144, "DENY", c::WIN1), (168, 264, "APPROVE ONCE", 0x35784d)] {
                 if (x == 12 && !self.allow_deny) || (x == 168 && !self.allow_approve) {
                     continue;
                 }
-                g.rect(x, 220, w, 44, 0xa1b6e8);
+                g.rect(x, 220, w, 44, c::WIN_BORDER_LO);
                 g.rect(x + 2, 222, w - 4, 40, color);
-                g.text(label, x + 12, 237, 0xffffff, 1, None);
+                g.text(label, x + 12, 237, c::TEXT, 1, None);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn cached_pages_preserve_literal_body_and_byte_anchors() {
+        let request = Request {
+            id: "id".into(),
+            session: "session".into(),
+            title: "Title".into(),
+            tool_name: "Bash".into(),
+            text: "LiteralCase \\ \t é\n".repeat(60),
+        };
+        let mut expected = Review::identity_lines(&request);
+        expected.push(String::new());
+        expected.extend(lines(&request.text, 54));
+        let reference = crate::text::layout(&request.text, 54);
+        let mut review = Review::new(request, false);
+        assert_eq!(review.content_lines(), expected);
+        for anchor in [0, 1, 23, 78, 200, review.request().text.len()] {
+            review.set_anchor(anchor);
+            let expected_page = if anchor == 0 { 0 } else { 3 + crate::text::index(&reference, anchor) };
+            assert_eq!(review.page, expected_page);
+            assert_eq!(review.anchor(), reference[expected_page.saturating_sub(3)].offset);
+        }
+        review.set_anchor(0);
+        review.page(true);
+        assert_eq!(review.page, 8);
+        review.page(false);
+        assert_eq!(review.page, 0);
     }
 }

@@ -389,3 +389,74 @@ fn double_tap_after_selected_session_vanishes_does_not_panic() {
     assert!(actions(&mut c).iter().all(|a| a.kind == 1));
     assert!(c.connected);
 }
+
+#[test]
+fn delayed_desktop_completion_does_not_replay_over_new_review() {
+    let (mut c, mut host, mut peer) = setup();
+    tap(&mut c, 60, 90, 10010);
+    tap(&mut c, 60, 90, 10200);
+    let aa = actions(&mut c);
+    for a in &aa {
+        let (result, _) = host.action(&mut peer, a, 10230, None).unwrap();
+        receive(&mut c, Payload::ActionResult(result), 10240);
+    }
+    for e in sync::snapshot(&host.model, &[1; 16], &[2; 16]).unwrap() {
+        let raw = codec::encode(&e).unwrap();
+        c.receive(e, &raw, 10250).unwrap();
+    }
+    // OS navigation is still pending when the user opens details again.
+    tap(&mut c, 200, 240, 10500);
+    tap(&mut c, 200, 240, 10700);
+    let a = actions(&mut c).pop().unwrap();
+    assert_eq!(a.kind, 2);
+    let body = b"printf 'synthetic approval fixture'\nNo actual command is executed.";
+    let (result, _) = host.action(&mut peer, &a, 10740, Some(body)).unwrap();
+    receive(&mut c, Payload::ActionResult(result), 10750);
+    for e in sync::snapshot(&host.model, &[1; 16], &[2; 16]).unwrap() {
+        let raw = codec::encode(&e).unwrap();
+        c.receive(e, &raw, 10760).unwrap();
+    }
+    assert_eq!(c.view().page, 2, "an older pending handoff must not close newer details");
+    assert!(c.scene.review.is_some());
+}
+
+#[test]
+fn switching_patrons_keeps_only_selected_text_without_stale_details() {
+    let (mut c, mut host, _) = setup();
+    let other_body = b"A different Codex task";
+    let blob = sync::blob(other_body).unwrap();
+    host.model.sessions.insert(
+        "codex:other".into(),
+        Session {
+            id: "codex:other".into(),
+            title: "Other".into(),
+            provider: 2,
+            status: 1,
+            seat: 2,
+            task_blob: Some(blob),
+            ..Default::default()
+        },
+    );
+    host.model.revision += 1;
+    for e in sync::snapshot(&host.model, &[1; 16], &[2; 16]).unwrap() {
+        let raw = codec::encode(&e).unwrap();
+        c.receive(e, &raw, 10001).unwrap();
+    }
+    for b in sync::chunks(other_body).unwrap() {
+        c.blobs.receive(&b).unwrap();
+    }
+    for t in (10100..=20000).step_by(100) {
+        c.tick(t).unwrap();
+        while c.outgoing().is_some() {}
+    }
+    for (x, id, text, t) in [
+        (60, "claude:test", "synthetic approval fixture", 20100),
+        (300, "codex:other", "A different Codex task", 20700),
+        (60, "claude:test", "synthetic approval fixture", 21300),
+    ] {
+        tap(&mut c, x, 90, t);
+        assert_eq!(c.scene.details().len(), 1);
+        assert_eq!(c.scene.details()[0].id, id);
+        assert!(c.scene.details()[0].task.contains(text));
+    }
+}

@@ -8,7 +8,6 @@ use crate::FloatMath;
 use alloc::collections::BTreeMap as HashMap;
 use alloc::{
     borrow::ToOwned,
-    boxed::Box,
     format,
     string::{String, ToString},
     vec,
@@ -20,6 +19,18 @@ use chrono::{NaiveTime, Timelike};
 
 use crate::assets::{self as a, Pal, Sprite, base, c, slot};
 use crate::gfx::{Gfx, text_width};
+
+// Compact immutable runs live in flash. Decoding writes the frame sequentially,
+// avoiding both a 510 KiB heap copy and a full-frame flash read every draw.
+static BACKGROUND_RUNS: &[u32] = &include!(concat!(env!("OUT_DIR"), "/background_runs.rs"));
+fn paint_background(mut frame: &mut [u32]) {
+    for &run in BACKGROUND_RUNS {
+        let (pixels, rest) = frame.split_at_mut((run >> 24) as usize);
+        pixels.fill(run & 0xffffff);
+        frame = rest;
+    }
+    debug_assert!(frame.is_empty());
+}
 
 pub const SEATS: usize = 8;
 const TASK_LINE_LEN: usize = 32; // between the portrait and scrollbar touch target
@@ -242,7 +253,6 @@ pub struct Scene {
     unavailable: [String; 1],
     selected: Option<String>,
     task_page: usize,
-    bg: Box<[u32]>,
     requests: Vec<crate::approval::Request>,
     pub review: Option<crate::review::Review>,
     pub handoff_request: Option<String>,
@@ -315,6 +325,10 @@ struct Look {
 
 /// Skin, hair colour and style, shirt and idle preference: a hash of the
 /// session id, so a patron looks the same every time.
+pub(crate) fn review_palette(id: &str) -> Pal {
+    look_for(id).pal
+}
+
 fn look_for(id: &str) -> Look {
     look_seed(fnv1a(id))
 }
@@ -451,8 +465,6 @@ fn task_pages(text: &str) -> Vec<String> {
 
 impl Scene {
     pub fn new() -> Self {
-        let bg =
-            a::BG.as_chunks::<3>().0.iter().map(|p| (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32).collect();
         Scene {
             external_seats: None,
             t: 0,
@@ -469,7 +481,6 @@ impl Scene {
             unavailable: ["TASK UNAVAILABLE".into()],
             selected: None,
             task_page: 0,
-            bg,
             requests: Vec::new(),
             review: None,
             handoff_request: None,
@@ -711,7 +722,7 @@ impl Scene {
     pub fn set_requests(&mut self, requests: Vec<crate::approval::Request>) {
         if let Some(review) = &mut self.review
             && review.actionable
-            && !requests.iter().any(|r| r == &review.request)
+            && !requests.iter().any(|r| r == review.request())
         {
             review.actionable = false;
             if review.status.is_empty() {
@@ -723,7 +734,7 @@ impl Scene {
 
     pub fn interaction_id(&self, x: i32, y: i32) -> Option<String> {
         if let Some(review) = &self.review {
-            return Some(format!("review:{}", review.request.id));
+            return Some(format!("review:{}", review.request().id));
         }
         if y >= a::WIN_Y {
             return Some("footer".into());
@@ -738,8 +749,8 @@ impl Scene {
                 return None;
             }
             if (y < 48 && x >= 380) || (double && (72..212).contains(&y) && x < 436) {
-                let id = review.request.session.clone();
-                self.handoff_request = Some(review.request.id.clone());
+                let id = review.request().session.clone();
+                self.handoff_request = Some(review.request().id.clone());
                 self.review = None;
                 return self.session_target(&id).and_then(SessionTarget::url);
             }
@@ -1452,7 +1463,13 @@ impl Scene {
 
     /// Draw the café as of the last tick, with the clocks at local time `now`.
     pub fn render(&self, fb: &mut [u32], now: NaiveTime) {
-        fb.copy_from_slice(&self.bg);
+        // Review is opaque. Drawing the hidden room first wastes a full scene
+        // render on the board and delays the next touch sample.
+        if let Some(review) = &self.review {
+            review.draw(&mut Gfx::new(fb));
+            return;
+        }
+        paint_background(fb);
         let mut g = Gfx::new(fb);
         // the room's window is part of the background, so the scene stays above it
         g.clip(0, 0, a::W as i32, a::WIN_Y);
@@ -1485,9 +1502,6 @@ impl Scene {
         self.draw_overlays(&mut g);
         g.noclip();
         self.draw_message(&mut g, now);
-        if let Some(review) = &self.review {
-            review.draw(&mut g);
-        }
     }
 }
 
@@ -1517,7 +1531,7 @@ mod tests {
         scene.click(200, 240);
         scene.focus_patron("new".into());
         scene.review_input(true, 200, 240, false);
-        assert_eq!(scene.review.as_ref().unwrap().request.session, "new");
+        assert_eq!(scene.review.as_ref().unwrap().request().session, "new");
         scene.clear_selection();
         assert!(scene.footer_origin.is_none());
     }
@@ -1531,8 +1545,8 @@ mod tests {
         scene.focus_patron("claude:pending".into());
         scene.review_input(true, 200, 240, false);
         let review = scene.review.as_ref().unwrap();
-        assert_eq!(review.request.title, "APPROVAL IN DESKTOP");
-        assert!(review.request.text.contains("not linked to board approval"));
+        assert_eq!(review.request().title, "APPROVAL IN DESKTOP");
+        assert!(review.request().text.contains("not linked to board approval"));
         assert!(!review.actionable);
     }
 
@@ -1554,7 +1568,7 @@ mod tests {
         scene.set_requests(vec![crate::approval::Request { id: "two".into(), ..request.clone() }]);
         scene.review_input(false, 250, 240, true);
         assert!(scene.review.as_ref().unwrap().decision.is_none());
-        assert_eq!(scene.review.as_ref().unwrap().request.id, "one");
+        assert_eq!(scene.review.as_ref().unwrap().request().id, "one");
         scene.review = None;
         scene.set_requests(vec![request]);
         scene.review_input(true, 200, 240, false);
@@ -2026,5 +2040,18 @@ mod tests {
         scene.focus_patron("two".into());
         scene.tick(60000);
         assert_eq!(scene.selected_id(), Some("two"));
+    }
+}
+
+#[cfg(test)]
+mod background_tests {
+    use super::*;
+    #[test]
+    fn compressed_background_matches_every_original_pixel() {
+        let mut frame = vec![0xdeadbeef; a::W * a::H];
+        paint_background(&mut frame);
+        for (pixel, rgb) in frame.iter().zip(a::BG.as_chunks::<3>().0) {
+            assert_eq!(*pixel, (rgb[0] as u32) << 16 | (rgb[1] as u32) << 8 | rgb[2] as u32);
+        }
     }
 }
