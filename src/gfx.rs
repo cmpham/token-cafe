@@ -101,6 +101,21 @@ impl<'a> Gfx<'a> {
         }
     }
 
+    /// Uniform 3:2 nearest-neighbor enlargement for room characters.
+    pub fn blit_large(&mut self, s: &Sprite, x: i32, y: i32, pal: Option<&Pal>, flip: bool) {
+        let pal = pal.unwrap_or(&BASE_PAL);
+        for dy in 0..(s.h as i32 * 3 / 2) {
+            for dx in 0..(s.w as i32 * 3 / 2) {
+                let sx = dx * 2 / 3;
+                let sx = if flip { s.w as i32 - 1 - sx } else { sx };
+                let slot = s.px[(dy * 2 / 3 * s.w as i32 + sx) as usize] as usize;
+                if slot != 0 && (pal.set >> slot) & 1 != 0 {
+                    self.px(x + dx, y + dy, pal.c[slot]);
+                }
+            }
+        }
+    }
+
     /// k-times enlarged sprite, optionally limited to the box [x0, y0, x1, y1).
     pub fn blit_scaled(&mut self, s: &Sprite, x: i32, y: i32, pal: Option<&Pal>, k: i32, bx: Option<[i32; 4]>) {
         let pal = pal.unwrap_or(&BASE_PAL);
@@ -120,6 +135,48 @@ impl<'a> Gfx<'a> {
                             continue;
                         }
                         self.px(px, py, pal.c[slot]);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Case-sensitive permission text; lowercase glyphs must not be uppercased.
+    pub fn text_literal(&mut self, s: &str, x: i32, y: i32, color: u32) {
+        const LOWER: [[u8; 7]; 26] = [
+            [0, 0, 14, 1, 15, 17, 15],
+            [16, 16, 30, 17, 17, 17, 30],
+            [0, 0, 14, 16, 16, 17, 14],
+            [1, 1, 15, 17, 17, 17, 15],
+            [0, 0, 14, 17, 31, 16, 14],
+            [6, 9, 8, 28, 8, 8, 8],
+            [0, 15, 17, 17, 15, 1, 14],
+            [16, 16, 30, 17, 17, 17, 17],
+            [4, 0, 12, 4, 4, 4, 14],
+            [2, 0, 6, 2, 2, 18, 12],
+            [16, 16, 18, 20, 24, 20, 18],
+            [12, 4, 4, 4, 4, 4, 14],
+            [0, 0, 26, 21, 21, 21, 21],
+            [0, 0, 30, 17, 17, 17, 17],
+            [0, 0, 14, 17, 17, 17, 14],
+            [0, 0, 30, 17, 30, 16, 16],
+            [0, 0, 15, 17, 15, 1, 1],
+            [0, 0, 22, 25, 16, 16, 16],
+            [0, 0, 15, 16, 14, 1, 30],
+            [8, 8, 28, 8, 8, 9, 6],
+            [0, 0, 17, 17, 17, 19, 13],
+            [0, 0, 17, 17, 17, 10, 4],
+            [0, 0, 17, 17, 21, 21, 10],
+            [0, 0, 17, 10, 4, 10, 17],
+            [0, 0, 17, 17, 15, 1, 14],
+            [0, 0, 31, 2, 4, 8, 31],
+        ];
+        for (n, ch) in s.bytes().enumerate() {
+            let rows = if ch.is_ascii_lowercase() { &LOWER[(ch - b'a') as usize] } else { glyph(ch) };
+            for (j, bits) in rows.iter().enumerate() {
+                for i in 0..5 {
+                    if bits & (1 << (4 - i)) != 0 {
+                        self.px(x + n as i32 * 7 + i, y + j as i32, color);
                     }
                 }
             }

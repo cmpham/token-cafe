@@ -39,7 +39,8 @@ pub struct SessionInfo(Value);
 impl SessionInfo {
     pub fn display(&self, id: &str) -> crate::scene::SessionDetail {
         let v = &self.0;
-        let task = v["task"]["text"].as_str().unwrap_or("TASK UNAVAILABLE").to_owned();
+        let task =
+            v["question"].as_str().or_else(|| v["task"]["text"].as_str()).unwrap_or("TASK UNAVAILABLE").to_owned();
         crate::scene::SessionDetail { target: None, id: id.to_owned(), task }
     }
 
@@ -61,6 +62,8 @@ struct Transcript {
     activity: Option<Activity>,
     pending: Vec<(String, Evidence)>,
     prompt_pending: bool,
+    awaiting_reply: bool,
+    question: Option<String>,
 }
 
 fn excerpt(s: &str) -> String {
@@ -143,11 +146,50 @@ fn tool_label(name: &str, input: &Value) -> String {
     target.map_or_else(|| format!("{verb} FILE"), |p| format!("{verb} {p}"))
 }
 
+// Conservative fallback for conversational handoffs that Claude reports as idle.
+// Only explicit requests at the end of the latest assistant text count.
+fn asks_for_reply(text: &str) -> bool {
+    let line = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    if line.starts_with('>') || line.starts_with('`') {
+        return false;
+    }
+    let normalized = line.to_lowercase().replace('’', "'");
+    let last = normalized.rsplit(". ").next().unwrap_or(&normalized).trim_matches('*');
+    [
+        "say the word",
+        "please confirm",
+        "please approve",
+        "let me know whether",
+        "let me know which",
+        "tell me which",
+        "tell me whether",
+        "waiting for your approval",
+        "waiting for your confirmation",
+    ]
+    .iter()
+    .any(|p| last.starts_with(p))
+        || (last.ends_with('?')
+            && [
+                "would you like me to",
+                "do you want me to",
+                "should i ",
+                "shall i ",
+                "which option",
+                "which approach",
+                "can you confirm",
+                "could you confirm",
+            ]
+            .iter()
+            .any(|p| last.starts_with(p)))
+}
+
 impl Transcript {
     fn request(&mut self, text: String, source: &'static str, ts: Option<String>) {
         if !human_text(&text) {
             return;
         }
+        self.awaiting_reply = false;
+        self.question = None;
         self.task = Some(evidence(text, source, ts));
         self.progress = None;
         self.activity = None;
@@ -155,6 +197,8 @@ impl Transcript {
         self.prompt_pending = true;
     }
     fn start(&mut self) {
+        self.awaiting_reply = false;
+        self.question = None;
         if !self.prompt_pending {
             self.task = None;
         }
@@ -164,6 +208,8 @@ impl Transcript {
         self.pending.clear();
     }
     fn call(&mut self, id: &str, name: &str, input: &Value, ts: Option<String>) {
+        self.awaiting_reply = false;
+        self.question = None;
         self.prompt_pending = false;
         let mut ev = evidence(tool_label(name, input), "tool_call", ts);
         ev.tool = Some(excerpt(name));
@@ -260,6 +306,10 @@ impl Transcript {
                             }
                         }
                         (Some("assistant"), Some("text")) => {
+                            self.awaiting_reply = asks_for_reply(b["text"].as_str().unwrap_or(""));
+                            self.question = self
+                                .awaiting_reply
+                                .then(|| b["text"].as_str().unwrap_or("").chars().take(65536).collect());
                             let text = excerpt(b["text"].as_str().unwrap_or(""));
                             if !text.is_empty() {
                                 self.progress = Some(evidence(text, "assistant_text", ts.clone()));
@@ -268,6 +318,10 @@ impl Transcript {
                         }
                         _ => {} // Never inspect thinking blocks.
                     }
+                }
+                if v["type"] == "assistant" && blocks.iter().any(|b| b["type"] == "tool_use") {
+                    self.awaiting_reply = false;
+                    self.question = None;
                 }
             }
         }
@@ -384,7 +438,7 @@ impl InfoCache {
         // Ambiguous copies are safer to report as unavailable than attribute to the wrong project.
         (paths.len() == 1).then(|| paths[0].clone())
     }
-    pub(super) fn collect(&mut self, found: &[Found]) -> Vec<SessionInfo> {
+    pub(super) fn collect(&mut self, found: &mut [Found]) -> Vec<SessionInfo> {
         let mut used = HashSet::new();
         let mut result = Vec::new();
         for f in found {
@@ -395,7 +449,17 @@ impl InfoCache {
                 let t = self.files.entry(key.clone()).or_default();
                 t.read(&key.0, f.kind, &f.session_id).ok().map(|_| t)
             });
+            let question = transcript
+                .as_ref()
+                .filter(|t| t.awaiting_reply && f.state != State::Work)
+                .and_then(|t| t.question.clone());
+            let mut inferred_wait = false;
             let (task, progress, activity, partial) = if let Some(t) = transcript {
+                if f.kind == Kind::Claude && f.state == State::Idle && t.awaiting_reply {
+                    inferred_wait = true;
+                    f.state = State::Wait;
+                    f.why = crate::scene::Why::Ask;
+                }
                 let activity = t.activity.as_ref().map(|a| {
                     let mut v = a.evidence.json();
                     v["status"] = json!(if f.state != State::Work && a.status == "observed" {
@@ -419,7 +483,8 @@ impl InfoCache {
                 "title":excerpt(&f.name), "project":f.project,
                 "state":match f.state {State::Work=>"work",State::Idle=>"idle",State::Wait=>"wait"},
                 "state_since":f.since,
-                "task":task, "task_scope":if f.state==State::Idle {"last_request"} else {"latest_observed_request"},
+                "state_source":if inferred_wait {"assistant_handoff"} else {"provider_status"},
+                "question":question, "task":task, "task_scope":if f.state==State::Idle {"last_request"} else {"latest_observed_request"},
                 "progress":progress, "last_activity":activity,
                 "fallback":match f.state {State::Work=>"WORKING",State::Idle=>"IDLE",State::Wait=>"WAITING FOR YOU"},
                 "transcript":path, "transcript_available":partial.is_some(), "history_partial":partial,
@@ -474,6 +539,72 @@ mod tests {
             why: Why::None,
             since: 1.,
             started: 1.,
+        }
+    }
+
+    #[test]
+    fn conversational_handoffs_require_explicit_final_requests() {
+        for text in [
+            "The revision is published. Say the word and I’ll write the spec addendum and plan.",
+            "Would you like me to proceed?",
+            "Please confirm the proposed changes.",
+        ] {
+            assert!(asks_for_reply(text), "{text}");
+        }
+        for text in [
+            "Done. All tests passed.",
+            "What changed? The layout is now wider.",
+            "> Please confirm the changes.",
+            "The document says please approve this.",
+            "Please confirm the plan. I have already continued.",
+        ] {
+            assert!(!asks_for_reply(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn claude_handoff_clears_on_reply_or_resumed_work() {
+        let mut t = Transcript::default();
+        let assistant = |text| json!({"type":"assistant","message":{"content":[{"type":"text","text":text}]}});
+        let waiting = assistant("Say the word and I will proceed.");
+        t.ingest(&waiting, Kind::Claude, "root");
+        assert!(t.awaiting_reply);
+        t.ingest(&json!({"type":"user","message":{"content":"Go ahead"}}), Kind::Claude, "root");
+        assert!(!t.awaiting_reply);
+        t.ingest(&waiting, Kind::Claude, "root");
+        t.ingest(&assistant("Continuing now."), Kind::Claude, "root");
+        assert!(!t.awaiting_reply);
+        t.ingest(&waiting, Kind::Claude, "root");
+        t.call("a", "Read", &json!({}), None);
+        assert!(!t.awaiting_reply);
+    }
+
+    #[test]
+    fn claude_idle_handoff_updates_patron_and_session_info_together() {
+        let dir = TestDir::new();
+        let path = dir.0.join("root.jsonl");
+        write(
+            &path,
+            &[
+                json!({"type":"assistant","message":{"content":[{"type":"text","text":"Say the word and I will proceed."}]}}),
+            ],
+        );
+        let mut cache = InfoCache { indexed: Some(Instant::now()), ..Default::default() };
+        cache.claude_paths.insert("root".into(), vec![path.clone()]);
+        for (state, expected) in [(State::Idle, State::Wait), (State::Work, State::Work), (State::Wait, State::Wait)] {
+            let mut f = found(&path);
+            f.kind = Kind::Claude;
+            f.state = state;
+            f.why = crate::scene::Why::Perm;
+            let mut rows = [f];
+            let info = cache.collect(&mut rows);
+            assert_eq!(rows[0].state, expected);
+            if state == State::Idle {
+                assert_eq!(rows[0].why, crate::scene::Why::Ask);
+                assert_eq!(info[0].json()["state"], "wait");
+            } else {
+                assert_eq!(rows[0].why, crate::scene::Why::Perm);
+            }
         }
     }
 
@@ -640,17 +771,17 @@ mod tests {
         write(&path, &[user("Fix the moon UI"), call("a", "Read", json!({"path":"ui.rs"}))]);
         let mut cache = InfoCache::default();
         let mut f = found(&path);
-        let work = cache.collect(&[found(&path)]);
+        let work = cache.collect(&mut [found(&path)]);
         assert_eq!(work[0].json()["last_activity"]["status"], "observed");
         f.state = State::Idle;
-        let idle = cache.collect(&[f]);
+        let idle = cache.collect(&mut [f]);
         assert_eq!(idle[0].json()["last_activity"]["status"], "ended_without_result");
         assert_eq!(idle[0].json()["task_scope"], "last_request");
         fs::remove_file(&path).unwrap();
-        let unavailable = cache.collect(&[found(&path)]);
+        let unavailable = cache.collect(&mut [found(&path)]);
         assert_eq!(unavailable[0].json()["transcript_available"], false);
         assert!(unavailable[0].json()["task"].is_null());
-        assert!(cache.collect(&[]).is_empty());
+        assert!(cache.collect(&mut []).is_empty());
         assert!(cache.files.is_empty());
     }
 

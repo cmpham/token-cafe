@@ -63,15 +63,15 @@ impl Collector {
 
     /// Terminal prototype: transcript details for confirmed live sessions only.
     pub fn session_info(&mut self) -> Vec<SessionInfo> {
-        let found = self.found();
-        self.info.collect(&found)
+        let mut found = self.found();
+        self.info.collect(&mut found)
     }
 
     /// One discovery snapshot supplies both patrons and their transcript details.
     pub fn sessions_with_details(&mut self) -> (Vec<Session>, Vec<SessionDetail>) {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
-        let found = self.found();
-        let info = self.info.collect(&found);
+        let mut found = self.found();
+        let info = self.info.collect(&mut found);
         let details = found
             .iter()
             .zip(info.iter())
@@ -102,7 +102,9 @@ impl Collector {
     pub fn sessions(&mut self) -> Vec<Session> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
         let mut branches = std::collections::HashMap::new();
-        self.found()
+        let mut found = self.found();
+        self.info.collect(&mut found);
+        found
             .into_iter()
             .map(|f| Session {
                 branch: branches.entry(f.cwd.clone()).or_insert_with(|| git_branch(&f.cwd)).clone(),

@@ -27,11 +27,11 @@ def main():
         for _ in range(2 if double else 1):
             r.sample(1,x,y);time.sleep(.08);r.sample(0,x,y);time.sleep(.08)
         e=wait_event(n+(1 if double else 0))
-        assert e['kind']==('double' if double else ('scroll' if x>=436 and y>=224 else 'tap'))
+        assert e['kind']==('double' if double else ('scroll' if x>=436 and y>=212 else 'tap'))
         return e
     try:
         initial=touch(60,91);seats=initial['seats'];(out/'seats.json').write_text(json.dumps(seats,indent=2))
-        for row,(top,bottom) in enumerate([(48,135),(136,223)]):
+        for row,(top,bottom) in enumerate([(48,129),(130,211)]):
             for col in range(4):
                 seat=row*4+col;left=col*120;right=left+119
                 for label,(x,y) in {'center':(left+60,(top+bottom)//2),'top-left':(left,top),'top-right':(right,top),'bottom-left':(left,bottom),'bottom-right':(right,bottom)}.items():
@@ -56,7 +56,7 @@ def main():
                     results.append(dict(seat=seat,point='double-open',panel=[left+60,(top+bottom)//2],hit=e['hit'],target=e['target'],status='PASS'))
                 (out/'results.json').write_text(json.dumps(results,indent=2))
                 print(f'PASS seat {seat+1}: {seats[seat]}',flush=True)
-        for x,y in [(0,0),(479,0),(60,47),(180,47),(300,47),(420,47),(60,224),(180,224),(300,224),(479,271)]:
+        for x,y in [(0,0),(479,0),(60,47),(180,47),(300,47),(420,47),(60,212),(180,212),(300,212),(479,271)]:
             e=touch(x,y);assert e['hit'] is None and e['target'] is None
             results.append(dict(point='outside-patrons',panel=[x,y],status='PASS'))
         r.capture('final-board')

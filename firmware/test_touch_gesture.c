@@ -7,6 +7,13 @@ static uint8_t sample(TouchGesture *g,int count,int x,int y,uint32_t at,uint32_t
     return touch_sample(g,count,x,y,at,epoch,&ox,&oy);
 }
 int main(void) {
+    // The taller footer begins at y=212; the pixel above remains a patron tap.
+    TouchGesture edge={0};
+    assert(sample(&edge,1,470,211,10,1)==0);
+    assert(sample(&edge,0,470,211,50,1)==1);
+    TouchGesture rail={0};
+    assert(sample(&rail,1,470,212,10,1)==2);
+
     // Real-controller orientation, including every seat and panel endpoints.
     for (unsigned row=0;row<2;row++) for (unsigned col=0;col<4;col++) {
         uint16_t px=col*120+60,py=row*82+91;

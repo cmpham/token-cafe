@@ -175,13 +175,11 @@ impl Wheel {
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
 #[derive(Default)]
 struct DoubleClick {
     previous: Option<(String, i32, i32, Instant)>,
 }
 
-#[cfg(any(target_os = "macos", test))]
 impl DoubleClick {
     fn click(&mut self, id: Option<&str>, x: i32, y: i32, now: Instant, interval: Duration) -> bool {
         let previous = self.previous.take();
@@ -211,6 +209,8 @@ fn supports_pinning(display: winit::raw_window_handle::RawDisplayHandle) -> bool
 struct App {
     #[cfg(feature = "bluetooth")]
     companion: Option<token_cafe::companion::Mirror>,
+    approvals: Option<token_cafe::approval::Broker>,
+    provider_sessions: Vec<token_cafe::scene::Session>,
     rx: Receiver<Update>,
     scale: u32,
     always_on_top: bool,
@@ -235,9 +235,7 @@ struct App {
     tap: Tap,
     touch_scroll: Option<u64>,
     last_touch: Option<Instant>,
-    #[cfg(target_os = "macos")]
     double_click: DoubleClick,
-    #[cfg(target_os = "macos")]
     double_click_interval: Duration,
 }
 
@@ -261,6 +259,8 @@ pub fn run(
     let mut app = App {
         #[cfg(feature = "bluetooth")]
         companion: bluetooth.map(token_cafe::companion::Mirror::start),
+        approvals: token_cafe::approval::Broker::start().map_err(|e| eprintln!("Approval bridge: {e}")).ok(),
+        provider_sessions: Vec::new(),
         rx,
         scale,
         always_on_top: always_on_top && pinning_supported,
@@ -283,10 +283,17 @@ pub fn run(
         tap: Tap::default(),
         touch_scroll: None,
         last_touch: None,
-        #[cfg(target_os = "macos")]
         double_click: DoubleClick::default(),
-        #[cfg(target_os = "macos")]
-        double_click_interval: double_click_interval(),
+        double_click_interval: {
+            #[cfg(target_os = "macos")]
+            {
+                double_click_interval()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                Duration::from_millis(500)
+            }
+        },
     };
     event_loop.run_app(&mut app)?;
     Ok(())
@@ -312,19 +319,25 @@ impl App {
             shown.window.focus_window();
             self.update_window_appearance(true);
         }
-        #[cfg(target_os = "macos")]
         {
-            let id = self.scene.patron_at(x, y).map(str::to_owned);
+            let id = self.scene.interaction_id(x, y);
             if self.double_click.click(id.as_deref(), x, y, Instant::now(), self.double_click_interval) {
-                if let Some(url) = self.scene.activate_patron(x, y) {
+                let url = if self.scene.review.is_some() || y >= token_cafe::assets::WIN_Y {
+                    self.scene.review_input(true, x, y, true)
+                } else {
+                    self.scene.activate_patron(x, y)
+                };
+                if let Some(url) = url {
+                    open_session(url);
+                }
+            } else if self.scene.review.is_some() {
+                if let Some(url) = self.scene.review_input(false, x, y, true) {
                     open_session(url);
                 }
             } else {
                 self.scene.click(x, y);
             }
         }
-        #[cfg(not(target_os = "macos"))]
-        self.scene.click(x, y);
     }
 
     fn update_window_appearance(&self, focused: bool) {
@@ -372,11 +385,36 @@ impl App {
     fn step(&mut self) {
         while let Ok(u) = self.rx.try_recv() {
             match u {
-                Update::Sessions(list) => self.scene.set_sessions(&list),
+                Update::Sessions(list) => self.provider_sessions = list,
                 Update::Details(details) => self.scene.set_details(details),
                 Update::Usage(u) => self.scene.set_usage(u),
             }
         }
+        let requests = self.approvals.as_ref().map_or_else(Vec::new, |b| b.requests());
+        let mut sessions = self.provider_sessions.clone();
+        for session in &mut sessions {
+            if requests.iter().any(|r| r.session == session.id) {
+                session.state = token_cafe::scene::State::Wait;
+                session.why = token_cafe::scene::Why::Perm;
+            }
+        }
+        for request in &requests {
+            if !sessions.iter().any(|s| s.id == request.session) {
+                sessions.push(token_cafe::scene::Session {
+                    id: request.session.clone(),
+                    name: "Claude approval".into(),
+                    kind: token_cafe::scene::Kind::Claude,
+                    state: token_cafe::scene::State::Wait,
+                    why: token_cafe::scene::Why::Perm,
+                    pose: token_cafe::scene::ForcedPose::Auto,
+                    age_s: 0,
+                    branch: None,
+                    active_subagents: None,
+                });
+            }
+        }
+        self.scene.set_requests(requests);
+        self.scene.set_sessions(&sessions);
         let title = self.window_title();
         if title != self.last_window_title {
             if let Some(shown) = &self.shown {
@@ -394,11 +432,39 @@ impl App {
         }
         #[cfg(feature = "bluetooth")]
         if let Some(companion) = &mut self.companion {
-            for input in companion.drain_input() {
+            for (input, presented) in companion.drain_verified_input() {
                 input.trace(&self.scene);
-                if let Some(url) = input.apply(&mut self.scene) {
+                let url = if let token_cafe::companion::Input::Tap(x, y) = input {
+                    if self.scene.review.is_some() {
+                        let expected =
+                            token_cafe::companion::frame_fingerprint(&token_cafe::companion::encode_frame(&self.fb));
+                        self.scene.review_input(false, x, y, presented == Some(expected) && expected != 0)
+                    } else {
+                        input.apply(&mut self.scene)
+                    }
+                } else {
+                    input.apply(&mut self.scene)
+                };
+                if let Some(url) = url {
                     open_session(url);
                 }
+                self.scene.render(&mut self.fb, chrono::Local::now().time());
+            }
+        }
+        if let Some(id) = self.scene.handoff_request.take()
+            && let Some(broker) = &self.approvals
+        {
+            broker.cancel(&id);
+        }
+        if let Some(review) = &mut self.scene.review {
+            if let Some(delivered) = self.approvals.as_ref().and_then(|b| b.take_outcome(&review.request.id)) {
+                review.status =
+                    if delivered { "DECISION RETURNED TO HOOK" } else { "DELIVERY FAILED - OPEN DESKTOP" }.into();
+            }
+            if let Some(decision) = review.decision.take() {
+                let sent = self.approvals.as_ref().is_some_and(|b| b.decide(&review.request.id, decision));
+                review.actionable = false;
+                review.status = if sent { "SENDING DECISION..." } else { "REQUEST EXPIRED - OPEN DESKTOP" }.into();
             }
         }
         self.scene.render(&mut self.fb, chrono::Local::now().time());

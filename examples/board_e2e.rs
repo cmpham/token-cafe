@@ -40,6 +40,12 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             task:if i==2 {String::new()} else if i==3 {"Unicode café 日本語 👋 and SupercalifragilisticexpialidociousABCDEFGHIJKLMNOPQRSTUVWXYZ".into()}
             else {format!("Patron {i}: Implement the Bluetooth companion display. Check selection, scrolling, attention, and final page boundaries carefully.")}
         }).collect());
+        if v["approval"].as_bool() == Some(true) {
+            s.set_requests(vec![token_cafe::approval::Request {
+                id: "0123456789abcdef".into(), session:"qa-0".into(), title:"ALLOW BASH?".into(),
+                text:"Working directory: /tmp/token-cafe-test\n\n{\n  \"command\": \"printf 'Hello Board'\",\n  \"description\": \"Harmless approval test\"\n}\n\nOnly this action will be approved.\nLowercase: abCDef\nLast line: end of request.".into(),
+            }]);
+        }
         s.set_usage(Usage { tokens: 987654321.0, usd: 12345.67 });
         for _ in 0..60 {
             s.tick(33);
@@ -48,6 +54,15 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
     fn action(s: &mut Scene, v: &Value) {
         match v["action"].as_str().unwrap_or("") {
+            "review" => {
+                s.review_input(
+                    v["double"].as_bool().unwrap_or(false),
+                    v["x"].as_i64().unwrap() as i32,
+                    v["y"].as_i64().unwrap() as i32,
+                    v["trusted"].as_bool().unwrap_or(false),
+                );
+            }
+            "expire" => s.set_requests(vec![]),
             "click" => s.click(v["x"].as_i64().unwrap() as i32, v["y"].as_i64().unwrap() as i32),
             "scroll" => s.scroll_task_to(v["y"].as_i64().unwrap() as i32),
             "next" => s.select_next(),
@@ -88,8 +103,18 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut activations: Vec<String> = Vec::new();
     println!("{}", json!({"ready":true}));
     loop {
-        for event in mirror.drain_input() {
-            if let Some(url) = event.apply(&mut actual) {
+        for (event, presented) in mirror.drain_verified_input() {
+            let result = if let token_cafe::companion::Input::Tap(x, y) = event {
+                if actual.review.is_some() {
+                    let expected_crc = token_cafe::companion::frame_fingerprint(&frame(&actual));
+                    actual.review_input(false, x, y, presented == Some(expected_crc) && expected_crc != 0)
+                } else {
+                    event.apply(&mut actual)
+                }
+            } else {
+                event.apply(&mut actual)
+            };
+            if let Some(url) = result {
                 activations.push(url);
             }
             inputs += 1;

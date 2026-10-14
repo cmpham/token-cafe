@@ -20,7 +20,8 @@ typedef struct {
     uint8_t *scratch; // Optional TC_FRAME_BYTES buffer for compressed XOR.
     tc_write_fn write;
     tc_present_fn present;
-    bool (*input)(uint8_t out[5]);
+    bool (*input)(uint8_t *out);
+    size_t input_size; // 0=legacy 5-byte coordinates; BLE uses 13 with displayed frame SHA256 prefix.
     void (*restore)(uint8_t *frame); // Restore last committed frame on preemption.
 } tc_protocol;
 

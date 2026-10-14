@@ -72,7 +72,7 @@ static bool lz4(const uint8_t *src, size_t len, uint8_t *dst, size_t size) {
 static void dispatch(tc_protocol *p) {
     const uint8_t *data = p->packet + TC_HEADER;
     size_t len = u16(p->packet + 6);
-    uint8_t result[8] = {0};
+    uint8_t result[16] = {0};
     if (tc_crc32(tc_crc32(0, p->packet, 12), data, len) != u32(p->packet + 12)) {
         reply(p, 2, NULL, 0); return;
     }
@@ -91,7 +91,7 @@ static void dispatch(tc_protocol *p) {
             len != 8 + w * h * 2) break;
         for (uint32_t row = 0; row < h; ++row)
             memcpy(p->frame + ((y + row) * TC_WIDTH + x) * 2, data + 8 + row * w * 2, w * 2);
-        reply(p, 0, result, p->packet[4]==16 && p->input && p->input(result) ? 5 : 0); return;
+        reply(p, 0, result, p->packet[4]==16 && p->input && p->input(result) ? (p->input_size ? p->input_size : 5) : 0); return;
     }
     case 14:
     case 15:
@@ -116,7 +116,7 @@ static void dispatch(tc_protocol *p) {
                 } else memcpy(p->frame + dest, data + i + 2, 2);
             }
         }
-        reply(p, 0, result, (p->packet[4]==14 || p->packet[4]==15) && p->input && p->input(result) ? 5 : 0); return;
+        reply(p, 0, result, (p->packet[4]==14 || p->packet[4]==15) && p->input && p->input(result) ? (p->input_size ? p->input_size : 5) : 0); return;
     }
     case 10:
     case 13: { // Full-width LZ4 rectangle (13 = XOR); reply piggybacks one touch event.
@@ -129,7 +129,7 @@ static void dispatch(tc_protocol *p) {
             if(!p->scratch || !lz4(data+8,len-8,p->scratch,size)) break;
             for(size_t i=0;i<size;i++) dest[i]^=p->scratch[i];
         } else if(!lz4(data+8,len-8,dest,size)) break;
-        reply(p,0,result,p->input && p->input(result) ? 5 : 0);return;
+        reply(p,0,result,p->input && p->input(result) ? (p->input_size ? p->input_size : 5) : 0);return;
     }
     case 11: // Abort staged update, preserving the currently displayed image.
         if(len || !p->restore) break;
@@ -153,7 +153,7 @@ static void dispatch(tc_protocol *p) {
     }
     case 9: // INPUT: optional queued tap/scroll, kind + panel x/y little endian.
         if (len) break;
-        reply(p, 0, result, p->input && p->input(result) ? 5 : 0); return;
+        reply(p, 0, result, p->input && p->input(result) ? (p->input_size ? p->input_size : 5) : 0); return;
     case 5: // CLEAR staging framebuffer; call PRESENT to display it.
         if (len) break;
         memset(p->frame, 0, TC_FRAME_BYTES);

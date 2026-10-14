@@ -103,17 +103,17 @@ pub struct Usage {
 
 const COLS: i32 = 4;
 const STATION_W: i32 = 120;
-const STATION_H: i32 = 88;
+const STATION_H: i32 = 82;
 const FLOOR_Y: i32 = 48;
 const SIT_X: i32 = 32; // seated base box inside a station
-const SIT_Y: i32 = 6;
+const SIT_Y: i32 = 12;
 const CHAIR_X: i32 = 30;
 const CHAIR_Y: i32 = 2;
 const DESK_X: i32 = -4;
-const DESK_Y: i32 = 30;
+const DESK_Y: i32 = 42;
 const DESK_W: i32 = 88;
 const LID_X: i32 = 34;
-const LID_Y: i32 = 24;
+const LID_Y: i32 = 36;
 const BX: i32 = 3; // base box offset inside character sprites
 const BY: i32 = 6;
 const WALK_SPEED: f64 = 60.0; // px per second
@@ -240,6 +240,10 @@ pub struct Scene {
     selected: Option<String>,
     task_page: usize,
     bg: Box<[u32]>,
+    requests: Vec<crate::approval::Request>,
+    pub review: Option<crate::review::Review>,
+    pub handoff_request: Option<String>,
+    footer_origin: Option<String>,
 }
 
 struct Geom {
@@ -257,9 +261,9 @@ fn seat_geom(i: usize) -> Geom {
 fn path_to(i: usize) -> [[f64; 2]; 5] {
     let g = seat_geom(i);
     let gap = ((g.col + i32::from(g.col < COLS / 2)) * STATION_W) as f64;
-    let aisle = (g.sy + 66) as f64;
+    let aisle = (g.sy + 76) as f64;
     let (sx, sy) = (g.sx as f64, g.sy as f64);
-    [[240.0, 294.0], [240.0, aisle], [gap, aisle], [gap, sy + 28.0], [sx + 40.0, sy + 28.0]]
+    [[240.0, 294.0], [240.0, aisle], [gap, aisle], [gap, sy + 42.0], [sx + 40.0, sy + 42.0]]
 }
 
 /// Two offset walking lanes keep a swap readable. Feet leave each chair via
@@ -270,12 +274,12 @@ fn swap_path(from: usize, to: usize, lane: f64) -> [[f64; 2]; 6] {
     let aisle = if a.col < 2 { 120.0 } else { 360.0 };
     let x = aisle + lane;
     [
-        [(a.sx + 40) as f64, (a.sy + 28) as f64],
-        [x, (a.sy + 28) as f64],
-        [x, (a.sy + 60) as f64],
-        [x, (b.sy + 60) as f64],
-        [x, (b.sy + 28) as f64],
-        [(b.sx + 40) as f64, (b.sy + 28) as f64],
+        [(a.sx + 40) as f64, (a.sy + 42) as f64],
+        [x, (a.sy + 42) as f64],
+        [x, (a.sy + 72) as f64],
+        [x, (b.sy + 72) as f64],
+        [x, (b.sy + 42) as f64],
+        [(b.sx + 40) as f64, (b.sy + 42) as f64],
     ]
 }
 
@@ -482,6 +486,10 @@ impl Scene {
             selected: None,
             task_page: 0,
             bg,
+            requests: Vec::new(),
+            review: None,
+            handoff_request: None,
+            footer_origin: None,
         }
     }
 
@@ -627,6 +635,87 @@ impl Scene {
         }
     }
 
+    pub fn set_requests(&mut self, requests: Vec<crate::approval::Request>) {
+        if let Some(review) = &mut self.review
+            && review.actionable
+            && !requests.iter().any(|r| r == &review.request)
+        {
+            review.actionable = false;
+            if review.status.is_empty() {
+                review.status = "REQUEST NO LONGER PENDING".into();
+            }
+        }
+        self.requests = requests;
+    }
+
+    pub fn interaction_id(&self, x: i32, y: i32) -> Option<String> {
+        if let Some(review) = &self.review {
+            return Some(format!("review:{}", review.request.id));
+        }
+        if y >= a::WIN_Y {
+            return Some("footer".into());
+        }
+        self.patron_at(x, y).map(str::to_owned)
+    }
+
+    pub fn review_input(&mut self, double: bool, x: i32, y: i32, can_decide: bool) -> Option<String> {
+        if let Some(review) = &mut self.review {
+            if y < 48 && x < 100 {
+                self.review = None;
+                return None;
+            }
+            if (y < 48 && x >= 380) || (double && (72..212).contains(&y) && x < 436) {
+                let id = review.request.session.clone();
+                self.handoff_request = Some(review.request.id.clone());
+                self.review = None;
+                return self.session_target(&id).and_then(SessionTarget::url);
+            }
+            if x >= 436 && (72..212).contains(&y) {
+                review.page(y >= 142);
+            }
+            if !double && can_decide && (220..264).contains(&y) && review.actionable && review.status.is_empty() {
+                review.decision = if (12..156).contains(&x) {
+                    Some(crate::approval::Decision::Deny)
+                } else if (168..432).contains(&x) {
+                    Some(crate::approval::Decision::Allow)
+                } else {
+                    None
+                };
+                if review.decision.is_some() {
+                    review.status = "SENDING DECISION...".into();
+                }
+            }
+            return None;
+        }
+        if double && y >= a::WIN_Y && x < 436 {
+            let id = self
+                .footer_origin
+                .take()
+                .filter(|id| {
+                    self.sessions.iter().any(|s| &s.id == id) || self.requests.iter().any(|r| &r.session == id)
+                })
+                .or_else(|| self.selected.clone())?;
+            self.selected = Some(id.clone());
+            let request = self.requests.iter().find(|r| r.session == id).cloned();
+            let actionable = request.is_some();
+            let permission = self.sessions.iter().any(|s| s.id == id && s.state == State::Wait && s.why == Why::Perm);
+            let request = request.unwrap_or_else(|| crate::approval::Request {
+                id: String::new(),
+                session: id.clone(),
+                title: if permission { "APPROVAL IN DESKTOP" } else { "QUESTION / TASK" }.into(),
+                text: if permission {
+                    "Claude or Codex is waiting for permission.\n\nThis request is not linked to board approval.\nOpen Desktop to read and answer the exact request.\n\nDouble-tap here or tap DESKTOP >.".into()
+                } else { self
+                    .details
+                    .iter()
+                    .find(|d| d.id == id)
+                    .map_or("QUESTION UNAVAILABLE".into(), |d| d.task.clone()) },
+            });
+            self.review = Some(crate::review::Review::new(request, actionable));
+        }
+        None
+    }
+
     pub fn set_details(&mut self, details: Vec<SessionDetail>) {
         let old = self.details.iter().find(|d| Some(&d.id) == self.selected.as_ref()).map(|d| &d.task);
         let new = details.iter().find(|d| Some(&d.id) == self.selected.as_ref()).map(|d| &d.task);
@@ -643,6 +732,8 @@ impl Scene {
     }
 
     pub fn clear_selection(&mut self) {
+        self.footer_origin = None;
+        self.review = None;
         self.selected = None;
         self.task_page = 0;
     }
@@ -652,6 +743,9 @@ impl Scene {
     }
 
     pub fn select_patron(&mut self, forward: bool) {
+        if self.review.is_some() {
+            return;
+        }
         if self.sessions.is_empty() {
             return;
         }
@@ -668,6 +762,10 @@ impl Scene {
 
     /// Arrow navigation opens focus first and stops at document boundaries.
     pub fn page_task_key(&mut self, forward: bool) {
+        if let Some(review) = &mut self.review {
+            review.page(forward);
+            return;
+        }
         if self.selected.is_none() {
             self.select_next();
             return;
@@ -695,8 +793,8 @@ impl Scene {
 
     pub fn scroll_task_to(&mut self, y: i32) {
         let n = self.selected_task_pages().len();
-        let thumb_h = (36 / n as i32).max(8);
-        let travel = 36 - thumb_h;
+        let thumb_h = ((a::H as i32 - a::WIN_Y - 12) / n as i32).max(8);
+        let travel = a::H as i32 - a::WIN_Y - 12 - thumb_h;
         if travel > 0 {
             let position = (y - a::WIN_Y - 6 - thumb_h / 2).clamp(0, travel);
             self.task_page = ((position * (n - 1) as i32 + travel / 2) / travel) as usize;
@@ -704,6 +802,9 @@ impl Scene {
     }
 
     pub fn patron_at(&self, x: i32, y: i32) -> Option<&str> {
+        if self.review.is_some() {
+            return None;
+        }
         if !(0..480).contains(&x) || !(FLOOR_Y..a::WIN_Y).contains(&y) {
             return None;
         }
@@ -726,6 +827,7 @@ impl Scene {
     }
 
     pub fn focus_patron(&mut self, id: String) {
+        self.footer_origin = None;
         if self.selected.as_ref() != Some(&id) {
             self.task_page = 0;
         }
@@ -734,7 +836,19 @@ impl Scene {
 
     /// Coordinates are in the original 480x272 frame, after removing letterboxing.
     pub fn click(&mut self, x: i32, y: i32) {
+        if self.review.is_some() {
+            self.review_input(false, x, y, false);
+            return;
+        }
         if y >= a::WIN_Y {
+            self.footer_origin = self.selected.clone();
+            if self.selected.as_ref().is_some_and(|id| {
+                self.requests.iter().any(|r| &r.session == id)
+                    || self.sessions.iter().any(|s| &s.id == id && s.state == State::Wait)
+            }) && x < 436
+            {
+                return;
+            }
             if self.selected.is_none() || x < 436 {
                 self.select_next();
             } else {
@@ -931,7 +1045,7 @@ impl Scene {
         const SIGN: &str = "TOKEN CAFE";
         let k = 3;
         let x0 = (a::W as i32 - text_width(SIGN, k)) >> 1;
-        let y0 = 8;
+        let y0 = 3;
         // one letter flickers now and then
         let cycle = self.t % 9000;
         let dead = if cycle > 7200 && cycle < 7700 && (cycle / 90) % 2 == 0 { 7 } else { usize::MAX };
@@ -964,7 +1078,7 @@ impl Scene {
             }
         }
         let sub = "OPEN 24H";
-        g.text(sub, (a::W as i32 - text_width(sub, 1)) >> 1, y0 + 25, c::CYAN, 1, Some(c::CYAN_GLOW));
+        g.text(sub, (a::W as i32 - text_width(sub, 1)) >> 1, y0 + 24, c::CYAN, 1, Some(c::CYAN_GLOW));
     }
 
     /// The chalkboard and its labels are in the background; only the values move.
@@ -1007,7 +1121,7 @@ impl Scene {
         let ch = a::CHAIRS[i % a::CHAIRS.len()];
         p.set(slot::A, ch[0]);
         p.set(slot::a, ch[1]);
-        g.blit(&a::CHAIR, geo.sx + CHAIR_X, geo.sy + CHAIR_Y, Some(&p), false);
+        g.blit_large(&a::CHAIR, geo.sx + CHAIR_X - 5, geo.sy + CHAIR_Y, Some(&p), false);
     }
 
     fn draw_closed_laptop(&self, g: &mut Gfx, ag: &Agent, x: i32, y: i32) {
@@ -1083,7 +1197,7 @@ impl Scene {
         g.rect(x + 1, y + 8, w - 2, 12, c::DESK_FRONT);
         g.rect(x + 1, y + 18, w - 2, 2, c::DESK_FRONT_LO);
         for &(s, px, py) in seat_props(i) {
-            g.blit(s, geo.sx + px, geo.sy + py, None, false);
+            g.blit(s, geo.sx + px, geo.sy + py + 12, None, false);
         }
         let ag = self.agents.iter().find(|a| a.seat == i);
         if let Some(ag) = ag.filter(|a| a.mode == Mode::Seated) {
@@ -1108,7 +1222,7 @@ impl Scene {
             Pose::Sip => &p.sip[((t / 1600) % 2) as usize],
             Pose::Sleep => &p.sleep[((t / 1100) % 2) as usize],
         };
-        g.blit(spr, geo.sx + SIT_X - BX, geo.sy + SIT_Y - BY, Some(&ag.pal), false);
+        g.blit_large(spr, geo.sx + SIT_X - BX - 6, geo.sy, Some(&ag.pal), false);
     }
 
     fn draw_walker(&self, g: &mut Gfx, ag: &Agent) {
@@ -1135,8 +1249,8 @@ impl Scene {
                 if f % 2 == 0 { &p.stand_s } else { &p.walk_s[0] }
             }
         };
-        let (x, y) = (jround(ag.x) - 8, jround(ag.y) - 24);
-        g.blit(spr, x - BX, y - BY + if f % 2 != 0 { -1 } else { 0 }, Some(&ag.pal), flip);
+        let (x, y) = (jround(ag.x) - 13, jround(ag.y) - 39);
+        g.blit_large(spr, x - BX, y - BY + if f % 2 != 0 { -1 } else { 0 }, Some(&ag.pal), flip);
     }
 
     fn draw_overlays(&self, g: &mut Gfx) {
@@ -1162,7 +1276,7 @@ impl Scene {
                 _ => {}
             }
             if focused == Some(k) {
-                g.blit(&a::CURSOR, geo.sx + 16 + ((t / 220) % 2) as i32, geo.sy + SIT_Y + 6, None, false);
+                g.blit(&a::CURSOR, geo.sx + 7 + ((t / 220) % 2) as i32, geo.sy + SIT_Y + 6, None, false);
             }
         }
         for p in &self.particles {
@@ -1189,7 +1303,7 @@ impl Scene {
 
     /// Shared portrait and text layout for automatic alerts and manual focus.
     fn draw_dialogue(&self, g: &mut Gfx, id: &str, state: State, title: &str, text: &str) {
-        let (fx, fy, fs) = (8, a::WIN_Y + 7, 34);
+        let (fx, fy, fs) = (8, a::WIN_Y + 13, 34);
         let agent = self.agents.iter().find(|ag| ag.id == id && ag.seen);
         let look = look_for(id);
         let pal = agent.map_or(&look.pal, |ag| &ag.pal);
@@ -1203,15 +1317,20 @@ impl Scene {
             State::Work => &a::HEAD_OPEN,
         };
         g.blit_scaled(head, fx + 3, fy + 5, Some(pal), 2, Some([fx + 1, fy + 1, fx + fs - 1, fy + fs - 1]));
-        g.text(&ellipsize(title, 66), 50, a::WIN_Y + 4, c::GOLD, 1, Some(c::TEXT_SHADOW));
+        g.text(&ellipsize(title, 66), 50, a::WIN_Y + 6, c::GOLD, 1, Some(c::TEXT_SHADOW));
         for (row, line) in text.lines().take(2).enumerate() {
-            g.text(line, 50, a::WIN_Y + 14 + row as i32 * 16, c::TEXT, 2, Some(c::TEXT_SHADOW));
+            g.text(line, 50, a::WIN_Y + 19 + row as i32 * 19, c::TEXT, 2, Some(c::TEXT_SHADOW));
         }
     }
 
     /// The message window: whoever waits for the human (portrait, name and
     /// what they want, cycling through them), else the party status.
     fn draw_message(&self, g: &mut Gfx, now: NaiveTime) {
+        if let Some(request) = self.selected.as_ref().and_then(|id| self.requests.iter().find(|r| &r.session == id)) {
+            let pages = task_pages(&request.text);
+            self.draw_dialogue(g, &request.session, State::Wait, &request.title, &pages[0]);
+            return;
+        }
         let t = self.t;
         let (x, y, w, h) = (0, a::WIN_Y, a::W as i32, a::H as i32 - a::WIN_Y);
         let wl = self.waiting_list();
@@ -1243,9 +1362,9 @@ impl Scene {
                 format!("!{} WAIT {location}{prefix} {}", wl.len(), session.name)
             };
             self.draw_dialogue(g, &session.id, session.state, &name, &pages[page]);
-            // Vertical scrollbar; the surrounding 44x48 area is its hit target.
+            // Vertical scrollbar; the surrounding 44x60 area is its hit target.
             let track_y = y + 6;
-            let track_h = 36;
+            let track_h = h - 12;
             let thumb_h = (track_h / pages.len() as i32).max(8);
             let travel = track_h - thumb_h;
             let offset = if pages.len() > 1 { travel * page as i32 / (pages.len() - 1) as i32 } else { 0 };
@@ -1344,7 +1463,7 @@ impl Scene {
             items.push((sy + 51.0, 2 * i + 1, Item::Desk(i)));
         }
         for (k, ag) in self.agents.iter().enumerate() {
-            let d = if ag.mode == Mode::Seated { (seat_geom(ag.seat).sy + 28) as f64 } else { ag.y };
+            let d = if ag.mode == Mode::Seated { (seat_geom(ag.seat).sy + 42) as f64 } else { ag.y };
             items.push((d, 100 + k, Item::Agent(k)));
         }
         items.sort_by(|p, q| p.0.total_cmp(&q.0).then(p.1.cmp(&q.1)));
@@ -1361,6 +1480,9 @@ impl Scene {
         self.draw_overlays(&mut g);
         g.noclip();
         self.draw_message(&mut g, now);
+        if let Some(review) = &self.review {
+            review.draw(&mut g);
+        }
     }
 }
 
@@ -1380,6 +1502,60 @@ mod tests {
             branch: None,
             active_subagents: None,
         }
+    }
+
+    #[test]
+    fn new_focus_does_not_reuse_an_old_footer_identity() {
+        let mut scene = Scene::new();
+        scene.set_sessions(&[session("old", State::Work), session("new", State::Wait)]);
+        scene.focus_patron("old".into());
+        scene.click(200, 240);
+        scene.focus_patron("new".into());
+        scene.review_input(true, 200, 240, false);
+        assert_eq!(scene.review.as_ref().unwrap().request.session, "new");
+        scene.clear_selection();
+        assert!(scene.footer_origin.is_none());
+    }
+
+    #[test]
+    fn unlinked_permission_never_presents_stale_task_as_question() {
+        let mut scene = Scene::new();
+        let mut pending = session("claude:pending", State::Wait);
+        pending.why = Why::Perm;
+        scene.set_sessions(&[pending]);
+        scene.focus_patron("claude:pending".into());
+        scene.review_input(true, 200, 240, false);
+        let review = scene.review.as_ref().unwrap();
+        assert_eq!(review.request.title, "APPROVAL IN DESKTOP");
+        assert!(review.request.text.contains("not linked to board approval"));
+        assert!(!review.actionable);
+    }
+
+    #[test]
+    fn review_keeps_request_identity_and_requires_verified_input() {
+        let mut scene = Scene::new();
+        let request = crate::approval::Request {
+            id: "one".into(),
+            session: "claude:test".into(),
+            title: "ALLOW?".into(),
+            text: "Original command".into(),
+        };
+        scene.set_requests(vec![request.clone()]);
+        scene.focus_patron(request.session.clone());
+        scene.review_input(true, 200, 240, false);
+        scene.review_input(false, 250, 240, false);
+        assert!(scene.review.as_ref().unwrap().decision.is_none());
+        scene.set_requests(vec![crate::approval::Request { id: "two".into(), ..request.clone() }]);
+        scene.review_input(false, 250, 240, true);
+        assert!(scene.review.as_ref().unwrap().decision.is_none());
+        assert_eq!(scene.review.as_ref().unwrap().request.id, "one");
+        scene.review = None;
+        scene.set_requests(vec![request]);
+        scene.review_input(true, 200, 240, false);
+        scene.review_input(false, 250, 240, true);
+        assert_eq!(scene.review.as_ref().unwrap().decision, Some(crate::approval::Decision::Allow));
+        scene.review_input(false, 50, 240, true);
+        assert_eq!(scene.review.as_ref().unwrap().decision, Some(crate::approval::Decision::Allow));
     }
 
     #[test]

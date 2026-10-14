@@ -6,7 +6,7 @@ use btleplug::api::{
 use btleplug::platform::{Manager, Peripheral};
 use futures::{Stream, StreamExt};
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
 use std::io::Read;
 use std::pin::Pin;
@@ -17,12 +17,16 @@ use uuid::Uuid;
 
 mod codec;
 mod reply;
+mod security;
 use codec::updates;
 pub use codec::{encode_frame, packet};
 use reply::RemoteStatus;
 
 pub const WIDTH: usize = 480;
 pub const HEIGHT: usize = 272;
+pub fn frame_fingerprint(frame: &[u8]) -> u64 {
+    u64::from_le_bytes(Sha256::digest(frame)[..8].try_into().unwrap())
+}
 pub const FRAME_BYTES: usize = WIDTH * HEIGHT * 2;
 pub const SERVICE: Uuid = Uuid::from_u128(0x7e57cafe_0001_4000_8000_000000000001);
 const RX: Uuid = Uuid::from_u128(0x7e57cafe_0001_4000_8000_000000000002);
@@ -66,7 +70,7 @@ impl Input {
             let hit = scene.patron_at(x, y);
             let target = hit.and_then(|id| scene.session_target(id)).and_then(|t| t.url());
             let seats: Vec<_> = (0..8).map(|i| {
-                        let id = scene.patron_at(60+(i%4)*120,80+(i/4)*88);
+                        let id = scene.patron_at(60+(i%4)*120,80+(i/4)*82);
                         serde_json::json!({"seat":i,"id":id,"target":id.and_then(|id| scene.session_target(id)).and_then(|t| t.url())})
                     }).collect();
             eprintln!(
@@ -79,8 +83,12 @@ impl Input {
     /// Shared by the native app and the hardware integration test host.
     pub fn apply(self, scene: &mut crate::scene::Scene) -> Option<String> {
         match self {
+            Self::Tap(x, y) if scene.review.is_some() => return scene.review_input(false, x, y, false),
             Self::Tap(x, y) => scene.click(x, y),
             Self::DoubleTap(x, y) => {
+                if scene.review.is_some() || y >= crate::assets::WIN_Y {
+                    return scene.review_input(true, x, y, false);
+                }
                 if scene.patron_at(x, y).is_some() {
                     return scene.activate_patron(x, y);
                 }
@@ -113,13 +121,14 @@ fn decode_input(data: &[u8]) -> Result<Option<Input>, Error> {
     match data[0] {
         1 if (0..480).contains(&x) && (0..272).contains(&y) => Ok(Some(Input::Tap(x, y))),
         1 => Ok(None),
-        2 => Ok(Some(Input::Scroll(y.clamp(224, 271)))),
+        2 => Ok(Some(Input::Scroll(y.clamp(212, 271)))),
         3 => Ok(Some(Input::DoubleTap(x, y))),
         _ => Err("Invalid companion input kind".into()),
     }
 }
-type InputQueue = Arc<Mutex<VecDeque<Input>>>;
+type InputQueue = Arc<Mutex<VecDeque<(Input, Option<u64>)>>>;
 pub struct Link {
+    security: Option<security::Channel>,
     peripheral: Peripheral,
     rx: Characteristic,
     notifications: Pin<Box<dyn Stream<Item = ValueNotification> + Send>>,
@@ -193,7 +202,7 @@ impl Link {
             let tx = chars.iter().find(|c| c.uuid == TX).ok_or("Missing companion TX")?.clone();
             eprintln!("Bluetooth: board authentication verified");
             let caps = peripheral.read(auth).await?;
-            if caps.len() != 2 {
+            if caps.len() != 2 && caps.len() != 3 {
                 return Err("Invalid BLE capacity response".into());
             }
             let chunk_size = u16::from_le_bytes([caps[0], caps[1]]) as usize;
@@ -203,11 +212,19 @@ impl Link {
             eprintln!("Bluetooth: negotiated {chunk_size}-byte writes");
             let notifications = peripheral.notifications().await?;
             peripheral.subscribe(&tx).await?;
-            Ok::<_, Error>((rx, notifications, chunk_size))
+            let security = if caps.get(2) == Some(&1) {
+                if chunk_size <= 20 {
+                    return Err("Authenticated transport requires MTU > 23".into());
+                }
+                Some(security::Channel::new(*key, challenge))
+            } else {
+                None
+            };
+            Ok::<_, Error>((rx, notifications, chunk_size, security))
         })
         .await
         .unwrap_or_else(|_| Err("Bluetooth setup timed out".into()));
-        let (rx, notifications, chunk_size) = match setup {
+        let (rx, notifications, chunk_size, security) = match setup {
             Ok(v) => v,
             Err(e) => {
                 let _ = timeout(Duration::from_secs(2), peripheral.disconnect()).await;
@@ -215,6 +232,7 @@ impl Link {
             }
         };
         let mut link = Self {
+            security,
             peripheral,
             rx,
             notifications,
@@ -254,7 +272,7 @@ impl Link {
         self.sequence = self.sequence.wrapping_add(1);
         let msg = packet(op, self.sequence, payload);
         // Use the actual server MTU after authentication, including default-MTU links.
-        let chunks = msg.chunks(self.chunk_size);
+        let chunks = msg.chunks(self.chunk_size - if self.security.is_some() { 20 } else { 0 });
         for (index, chunk) in chunks.enumerate() {
             // A response every eight fragments bounds the native send queue.
             // The final protocol acknowledgment is the packet boundary barrier.
@@ -263,7 +281,11 @@ impl Link {
             } else {
                 WriteType::WithResponse
             };
-            timeout(Duration::from_secs(5), self.peripheral.write(&self.rx, chunk, write)).await??;
+            let wire = match &mut self.security {
+                Some(c) => c.seal(chunk)?,
+                None => chunk.to_vec(),
+            };
+            timeout(Duration::from_secs(5), self.peripheral.write(&self.rx, &wire, write)).await??;
         }
         let seq = self.sequence;
         let reply = timeout(Duration::from_secs(10), async {
@@ -273,7 +295,10 @@ impl Link {
                 if n.uuid != TX {
                     continue;
                 }
-                bytes.extend(n.value);
+                bytes.extend(match &mut self.security {
+                    Some(c) => c.open(&n.value)?,
+                    None => n.value,
+                });
                 if let Some(reply) = reply::decode(&bytes, op, seq, status)? {
                     return Ok::<_, Error>(reply);
                 }
@@ -283,14 +308,19 @@ impl Link {
         Ok(reply)
     }
     fn receive_input(&self, bytes: &[u8]) -> Result<bool, Error> {
-        if let Some(event) = decode_input(bytes)?
+        let (data, frame) = if self.security.is_some() && bytes.len() == 13 {
+            (&bytes[..5], Some(u64::from_le_bytes(bytes[5..13].try_into()?)))
+        } else {
+            (bytes, None)
+        };
+        if let Some(event) = decode_input(data)?
             && let Some(queue) = &self.input
         {
             let mut q = queue.lock().unwrap();
             if q.len() >= 32 {
                 q.pop_front();
             }
-            q.push_back(event);
+            q.push_back((event, frame));
             return Ok(true);
         }
         Ok(false)
@@ -465,6 +495,9 @@ impl Mirror {
         Self { input: inputs, pending, input_generation: 0, status, last: Instant::now() - Duration::from_secs(1) }
     }
     pub fn drain_input(&mut self) -> Vec<Input> {
+        self.drain_verified_input().into_iter().map(|(event, _)| event).collect()
+    }
+    pub fn drain_verified_input(&mut self) -> Vec<(Input, Option<u64>)> {
         let events: Vec<_> = self.input.lock().unwrap().drain(..).collect();
         if !events.is_empty() {
             self.last = Instant::now() - Duration::from_secs(1);

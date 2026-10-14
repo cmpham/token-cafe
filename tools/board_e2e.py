@@ -170,7 +170,7 @@ def suite(r):
     def scroll():
         fresh();r.expected('click',x=60,y=80);r.tap(60,80);r.wait();r.expected('scroll',y=271)
         x,y=r.point(470,252);r.sample(1,x,y);x,y=r.point(470,271);r.sample(1,x,y);r.sample(0,x,y)
-        r.snap('11-scroll-last');r.expected('scroll',y=224);x,y=r.point(470,224);r.sample(1,x,y);r.sample(0,x,y)
+        r.snap('11-scroll-last');r.expected('scroll',y=224);x,y=r.point(470,212);r.sample(1,x,y);r.sample(0,x,y)
         return r.snap('11-scroll-first')
     case('11-scroll-endpoints',scroll)
     def open_scroll():
@@ -301,7 +301,7 @@ def suite(r):
     case('40-different-patrons',different)
     def double_footer():
         r.reset(targets=True);base=r.command('state')['inputs']
-        r.expected('click',x=210,y=252);r.expected('click',x=210,y=252)
+        r.expected('click',x=210,y=252);r.expected('review',double=True,x=210,y=252)
         r.tap(210,252);r.tap(210,252)
         result=r.snap('41-double-footer',base+2)
         assert not r.command('state')['activations']

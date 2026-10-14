@@ -4,8 +4,10 @@
 
 #[rustfmt::skip]
 pub mod assets;
+pub mod approval;
 pub mod collect;
 pub mod gfx;
+pub mod review;
 pub mod scene;
 pub mod usage;
 

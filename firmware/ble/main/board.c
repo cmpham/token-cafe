@@ -18,6 +18,7 @@
 #include "freertos/queue.h"
 #include "nv3041a_init.h"
 #include "touch_gesture.h"
+#include "mbedtls/sha256.h"
 #include "touch_coordinates.h"
 #include "screen_idle.h"
 static spi_device_handle_t lcd;
@@ -35,7 +36,18 @@ static void window(uint8_t cmd, uint16_t first, uint16_t last) {
     uint8_t bytes[] = {first>>8, first&255, last>>8, last&255};
     command(cmd,bytes,sizeof(bytes));
 }
+static uint64_t displayed_crc;
+static portMUX_TYPE fingerprint_lock=portMUX_INITIALIZER_UNLOCKED;
+static uint64_t fingerprint_get(void) {
+    taskENTER_CRITICAL(&fingerprint_lock); uint64_t value=displayed_crc; taskEXIT_CRITICAL(&fingerprint_lock); return value;
+}
+static void fingerprint_set(uint64_t value) {
+    taskENTER_CRITICAL(&fingerprint_lock); displayed_crc=value; taskEXIT_CRITICAL(&fingerprint_lock);
+}
 void board_present(const uint8_t *frame) {
+    uint8_t hash[32]; TC_CHECK(mbedtls_sha256(frame,TC_FRAME_BYTES,hash,0)==0);
+    uint64_t next_crc=0; for(int i=0;i<8;i++) next_crc|=(uint64_t)hash[i]<<(8*i);
+    if(fingerprint_get()!=next_crc) fingerprint_set(0);
     for (int y=0;y<TC_HEIGHT;y+=LCD_ROWS) {
         int rows=TC_HEIGHT-y < LCD_ROWS ? TC_HEIGHT-y : LCD_ROWS;
         window(0x2a,0,TC_WIDTH-1);
@@ -48,12 +60,14 @@ void board_present(const uint8_t *frame) {
             .tx_buffer=dma,.length=TC_WIDTH*rows*16};
         ESP_ERROR_CHECK(spi_device_polling_transmit(lcd,&t));
     }
+    fingerprint_set(next_crc);
 }
-typedef struct { uint32_t epoch; uint8_t data[5]; } TouchEvent;
+typedef struct { uint32_t epoch; uint8_t data[13]; } TouchEvent;
 static atomic_uint input_epoch;
-static void emit(uint8_t kind,uint16_t x,uint16_t y,uint32_t epoch) {
+static void emit(uint8_t kind,uint16_t x,uint16_t y,uint32_t epoch,uint64_t crc) {
     if(epoch!=atomic_load(&input_epoch)) return;
     TouchEvent event={.epoch=epoch,.data={kind,x&255,x>>8,y&255,y>>8}};
+    for(int i=0;i<8;i++) event.data[5+i]=crc>>(8*i);
     if(xQueueSend(events,&event,0)!=pdTRUE) ESP_LOGW("TOUCH","input queue full");
     ESP_LOGI("TOUCH","%s %u,%u",kind==1?"TAP":kind==3?"DOUBLE_TAP":"SCROLL",x,y);
 }
@@ -74,11 +88,15 @@ static void sample(TouchGesture *g,uint8_t count,uint16_t x,uint16_t y) {
         if (count) touch_cancel(g); else memset(g,0,sizeof(*g));
         return;
     }
+    static uint64_t touch_crc;
+    uint64_t crc=fingerprint_get();
+    if(count && !g->down) touch_crc=crc;
+    if(touch_crc!=crc) touch_crc=0;
     if(count && !g->down) ESP_LOGI("TOUCH","DOWN %u,%u",x,y);
     uint16_t out_x,out_y;
     uint32_t epoch=atomic_load(&input_epoch);
     uint8_t kind=touch_sample(g,count,x,y,esp_log_timestamp(),epoch,&out_x,&out_y);
-    if(kind) emit(kind,out_x,out_y,epoch);
+    if(kind) emit(kind,out_x,out_y,epoch,touch_crc);
 }
 #if CONFIG_TC_QA_USB
 #include <stdio.h>
@@ -122,10 +140,10 @@ static void touch_task(void *arg) {
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
-bool board_input(uint8_t out[5]) {
+bool board_input(uint8_t out[13]) {
     TouchEvent event;
     while(xQueueReceive(events,&event,0)==pdTRUE) {
-        if(event.epoch==atomic_load(&input_epoch)) {memcpy(out,event.data,5);return true;}
+        if(event.epoch==atomic_load(&input_epoch)) {memcpy(out,event.data,13);return true;}
     }
     return false;
 }
@@ -184,6 +202,6 @@ void board_init(void) {
 #else
 void board_init(void) {}
 void board_present(const uint8_t *frame) {(void)frame;}
-bool board_input(uint8_t out[5]) {(void)out;return false;}
+bool board_input(uint8_t out[13]) {(void)out;return false;}
 void board_clear_input(void) {}
 #endif

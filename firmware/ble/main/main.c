@@ -29,6 +29,16 @@ static const ble_uuid128_t service_uuid = UUID(1), rx_uuid = UUID(2), tx_uuid = 
 static const ble_uuid128_t auth_uuid = UUID(4);
 static bool authenticated, challenge_pending;
 static uint8_t challenge[32];
+static uint32_t rx_counter,tx_counter;
+static void data_tag(const char *role,const uint8_t *data,size_t len,uint8_t out[32]) {
+    mbedtls_md_context_t ctx; mbedtls_md_init(&ctx);
+    TC_CHECK(mbedtls_md_setup(&ctx,mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),1)==0);
+    TC_CHECK(mbedtls_md_hmac_starts(&ctx,pairing_key,sizeof(pairing_key))==0);
+    TC_CHECK(mbedtls_md_hmac_update(&ctx,(const uint8_t*)role,strlen(role))==0);
+    TC_CHECK(mbedtls_md_hmac_update(&ctx,challenge,sizeof(challenge))==0);
+    TC_CHECK(mbedtls_md_hmac_update(&ctx,data,len)==0);
+    TC_CHECK(mbedtls_md_hmac_finish(&ctx,out)==0); mbedtls_md_free(&ctx);
+}
 static void auth_tag(const char *role, uint8_t out[32]) {
     uint8_t input[37];
     size_t len = strlen(role);
@@ -43,7 +53,7 @@ static int access_auth(uint16_t handle, uint16_t attr, struct ble_gatt_access_ct
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
         if (authenticated) {
             uint16_t size = ble_att_mtu(handle) - 3;
-            uint8_t caps[2] = {size & 255, size >> 8};
+            uint8_t caps[3] = {size & 255, size >> 8, 1};
             return os_mbuf_append(ctxt->om, caps, sizeof(caps)) ? BLE_ATT_ERR_INSUFFICIENT_RES : 0;
         }
         if (!challenge_pending) return BLE_ATT_ERR_UNLIKELY;
@@ -67,6 +77,7 @@ static int access_auth(uint16_t handle, uint16_t attr, struct ble_gatt_access_ct
         challenge_pending = false;
         authenticated = diff == 0;
         if (!authenticated) return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
+        rx_counter=tx_counter=0;
         board_clear_input();
         ESP_LOGI("BLE", "AUTHENTICATED companion");
     }
@@ -88,10 +99,18 @@ static void advertise(void);
 static void transmit(const uint8_t *data, size_t length) {
     if (conn == BLE_HS_CONN_HANDLE_NONE) return;
     // Fragment replies too: default MTU 23 only allows 20-byte notifications.
-    size_t max = ble_att_mtu(conn) - 3;
+    size_t capacity = ble_att_mtu(conn) - 3;
+    if(capacity<=20) return;
+    size_t max=capacity-20;
     while (length) {
         size_t n = length < max ? length : max;
-        struct os_mbuf *om = ble_hs_mbuf_from_flat(data, n);
+        uint8_t wire[532], tag[32];
+        if(tx_counter==UINT32_MAX) {authenticated=false;return;}
+        uint32_t counter=++tx_counter;
+        for(int i=0;i<4;i++) wire[i]=counter>>(8*i);
+        memcpy(wire+4,data,n); data_tag("board-data",wire,n+4,tag);
+        memcpy(wire+n+4,tag,16);
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(wire, n+20);
         if (!om) { ESP_LOGE("BLE", "notification allocation failed"); return; }
         int rc = ble_gatts_notify_custom(conn, tx_handle, om);
         if (rc) { ESP_LOGE("BLE", "notification failed %d", rc); return; }
@@ -123,10 +142,18 @@ static int access_rx(uint16_t handle, uint16_t attr, struct ble_gatt_access_ctxt
     uint8_t data[512];
     if (len > sizeof(data) || ble_hs_mbuf_to_flat(ctxt->om, data, sizeof(data), NULL))
         return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    if(len<=20) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    uint8_t tag[32]; data_tag("host-data",data,len-16,tag);
+    uint8_t diff=0; for(int i=0;i<16;i++) diff|=tag[i]^data[len-16+i];
+    uint32_t counter=0; for(int i=0;i<4;i++) counter|=(uint32_t)data[i]<<(8*i);
+    if(diff || rx_counter==UINT32_MAX || counter!=rx_counter+1) {
+        authenticated=false; board_clear_input(); return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
+    }
+    rx_counter=counter;
     int64_t now = esp_timer_get_time();
     if (now - last_byte > 5000000) tc_reset(&protocol);
     last_byte = now;
-    tc_feed(&protocol, data, len);
+    tc_feed(&protocol, data+4, len-20);
     return 0;
 }
 static const struct ble_gatt_svc_def services[] = {
@@ -271,6 +298,7 @@ void app_main(void) {
     TC_CHECK(xTaskCreate(qa_task,"usb_qa",6144,NULL,2,NULL)==pdPASS);
 #endif
     protocol.input = board_input;
+    protocol.input_size = 13;
     ESP_ERROR_CHECK(nimble_port_init());
     ble_svc_gap_init();
     ble_svc_gatt_init();
