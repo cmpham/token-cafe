@@ -1,4 +1,4 @@
-// Generate src/assets.rs and src/bg.rgb from design/cafe.js, the single
+// Generate crates/cafe-ui/src/assets.rs and bg.rgb from design/cafe.js, the single
 // source of the art.
 //   node tools/gen_assets.mjs
 // Sprites become slot-indexed bytes (one slot per palette character, 0 =
@@ -138,7 +138,7 @@ R.push('pub static BG: &[u8; W * H * 3] = include_bytes!("bg.rgb");', '');
 const bg = Buffer.alloc(A.W * A.H * 3);
 for (let p = 0; p < A.W * A.H; p++) for (let c = 0; c < 3; c++) bg[p * 3 + c] = A.bg[p * 4 + c];
 
-const out = path.join(here, '../src');
+const out = path.join(here, '../crates/cafe-ui/src');
 fs.writeFileSync(path.join(out, 'assets.rs'), R.join('\n'));
 fs.writeFileSync(path.join(out, 'bg.rgb'), bg);
 console.log(`assets: ${sprites.length} sprites, ${slots.length} slots, font ${has.filter(Boolean).length} glyphs, bg ${A.W}x${A.H}`);

@@ -114,9 +114,9 @@ Claude desktop support covers the **Code tab's local Claude Code sessions**, pre
 
 ```
 design/cafe.js          the art and the scene's behaviour, as pixel strings and plain JS
-tools/gen_assets.mjs    turns it into src/assets.rs and src/bg.rgb
-src/scene.rs            the café: seats, walking, poses, particles, message window, the tab
-src/gfx.rs              rectangles, shadows, palette sprites, a 5×7 font
+tools/gen_assets.mjs    turns it into crates/cafe-ui/src/assets.rs and bg.rgb
+crates/cafe-ui/src/scene.rs  the café: seats, walking, poses, particles, message window, the tab
+crates/cafe-ui/src/gfx.rs    rectangles, shadows, palette sprites, a 5×7 font
 src/collect/            which sessions are live (procfs.rs for Linux, macos.rs for macOS)
 src/usage.rs            this month's tokens and list-price dollars
 src/app.rs              the window: winit + softbuffer, whole-number scaling, damage tracking
@@ -181,12 +181,19 @@ for installation, build/run commands, protocol tests, and hardware limitations.
 
 ### Bluetooth companion display
 
-An ESP32-S3 N16R8 can receive the app's rendered café over BLE, with no screen
-required for initial testing. Run the app with `--bluetooth --bluetooth-key PATH`
-after provisioning the board. The app shows BLE connection status in its window
-title, sends compressed changes without blocking rendering, and reconnects with
-a full frame resync. See [firmware/ble/README.md](firmware/ble/README.md) for setup,
-physical-board tests, platform dependencies and current display/security limits.
+The JC4827W543 ESP32-S3 companion renders the café locally from synchronized
+session state. BLE carries authenticated Protobuf state, actions and text blobs;
+animations and pressed feedback do not wait for desktop framebuffer updates.
+Run `tools/run_companion.sh` after provisioning, or `token-cafe --bluetooth` with
+`TC_BLE_REGISTRY` pointing to your private board registry. Connection status stays
+in the window title. Selection changes only through user interaction; the footer
+no longer cycles through patrons automatically.
+
+See [protocol and payloads](docs/protocol/companion-v2.md),
+[setup and rollback](docs/protocol/operations.md), and
+[validation results](docs/protocol/validation.md). Legacy framebuffer firmware
+remains available for explicit rollback using `--bluetooth --bluetooth-key PATH`.
+Never run the legacy and semantic connection paths against the same board.
 
 ### Patron seating
 
@@ -202,7 +209,7 @@ the walkers settle; overflow sessions remain accessible from the banner.
 ### Native widescreen layout
 
 The desktop and JC4827W543 companion now share a 480×272 canvas. The board
-receives pixels at 1:1 scale; the desktop uses uniform integer scaling. Patrons,
+renders pixels locally at 1:1 scale; the desktop uses uniform integer scaling. Patrons,
 font glyphs and icons keep square pixels. Wider desks show longer names, and the
 task panel fits 32 characters per line. Touch coordinates map directly to the
 rendered scene; update both app and firmware together for the new scrollbar area.

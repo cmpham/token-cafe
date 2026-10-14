@@ -1,0 +1,256 @@
+syntax = "proto3";
+package token_cafe.v2;
+
+// Normative semantics and limits: docs/protocol/companion-v2.md.
+// Zero-valued enums are invalid unless explicitly documented otherwise.
+message Envelope {
+  uint32 major = 1;
+  bytes connection_epoch = 2; // exactly 16 bytes, authenticated connection
+  bytes authority_epoch = 3;  // exactly 16 bytes except in Hello
+  oneof payload {
+    Hello hello = 10;
+    HelloAck hello_ack = 11;
+    ProtocolError error = 12;
+    Heartbeat heartbeat = 13;
+    Resync resync = 14;
+    SnapshotBegin snapshot_begin = 15;
+    Delta delta = 16;
+    Applied applied = 17;
+    BlobGet blob_get = 18;
+    BlobChunk blob_chunk = 19;
+    BlobUnavailable blob_unavailable = 20;
+    Action action = 21;
+    ActionResult action_result = 22;
+    SnapshotPart snapshot_part = 23;
+    SnapshotCommit snapshot_commit = 24;
+    BlobCancel blob_cancel = 25;
+  }
+}
+enum Capability {
+  CAP_UNSPECIFIED = 0;
+  CAP_STATE_SYNC = 1;
+  CAP_LOCAL_UI = 2;
+  CAP_APPROVAL_ONCE = 3;
+  CAP_DENIAL = 4;
+  CAP_NAVIGATION = 5;
+  CAP_ESCAPED_TEXT = 6;
+  CAP_DIAGNOSTICS = 7;
+}
+message Hello {
+  string device_id = 1;
+  uint32 minor = 2;
+  bytes asset_digest = 3;
+  uint32 max_envelope_bytes = 4;
+  uint32 max_blob_bytes = 5;
+  repeated Capability capabilities = 6;
+  repeated Capability required_capabilities = 7;
+  bool input_injection_enabled = 8;
+}
+message HelloAck {
+  uint32 minor = 1;
+  bytes asset_digest = 2;
+  repeated Capability capabilities = 3;
+  uint32 heartbeat_ms = 4;
+  uint32 session_limit = 5;
+  uint32 blob_limit = 6;
+  uint32 max_envelope_bytes = 7;
+  repeated Capability required_capabilities = 8;
+}
+enum ErrorCode {
+  ERROR_UNSPECIFIED = 0;
+  ERROR_INVALID = 1;
+  ERROR_UNSUPPORTED_VERSION = 2;
+  ERROR_ASSET_MISMATCH = 3;
+  ERROR_UNSUPPORTED_MTU = 4;
+  ERROR_LIMIT = 5;
+  ERROR_NOT_READY = 6;
+  ERROR_STATE_INVALID = 7;
+}
+message ProtocolError {
+  ErrorCode code = 1;
+  optional uint64 related_action_id = 2;
+  string detail = 3;
+}
+message Heartbeat { uint64 applied_revision = 1; uint64 monotonic_ms = 2; }
+enum ResyncReason {
+  RESYNC_UNSPECIFIED = 0;
+  RESYNC_INITIAL = 1;
+  RESYNC_REVISION_GAP = 2;
+  RESYNC_STATE_INVALID = 3;
+  RESYNC_HOST_RESTART = 4;
+}
+message Resync { uint64 applied_revision = 1; ResyncReason reason = 2; }
+message Applied { uint64 revision = 1; }
+message SnapshotBegin {
+  uint64 revision = 1;
+  uint32 session_count = 2;
+  View view = 3;
+  Usage usage = 4;
+  uint32 overflow_count = 5;
+}
+message SnapshotPart {
+  uint64 revision = 1;
+  uint32 index = 2;
+  repeated Session sessions = 3; // at most two
+}
+message SnapshotCommit {
+  uint64 revision = 1;
+  uint32 parts_count = 2;
+  bytes sha256 = 3; // exact Begin/Part envelope bytes, not re-encoded messages
+}
+message Delta {
+  uint64 base_revision = 1;
+  uint64 revision = 2;
+  repeated Session upsert_sessions = 3;
+  repeated string remove_session_ids = 4;
+  View view = 5;  // absent means unchanged; present is a complete replacement
+  Usage usage = 6;
+  optional uint32 overflow_count = 7;
+}
+enum Provider { PROVIDER_UNSPECIFIED = 0; PROVIDER_CLAUDE = 1; PROVIDER_CODEX = 2; }
+enum SessionStatus {
+  SESSION_UNSPECIFIED = 0;
+  SESSION_WORKING = 1;
+  SESSION_IDLE = 2;
+  SESSION_WAITING = 3;
+  SESSION_DISCONNECTED = 4;
+}
+enum WaitingReason {
+  WAIT_NONE = 0;
+  WAIT_PERMISSION = 1;
+  WAIT_QUESTION = 2;
+  WAIT_UNKNOWN = 3;
+}
+message BlobRef { bytes sha256 = 1; uint32 byte_length = 2; }
+message Session {
+  string id = 1;
+  Provider provider = 2;
+  string title = 3;
+  SessionStatus status = 4;
+  WaitingReason waiting_reason = 5;
+  uint32 seat = 6;
+  fixed32 appearance_seed = 7;
+  uint64 state_age_ms = 8;
+  BlobRef task_blob = 9;
+  bool task_truncated = 10;
+  bool navigation_available = 11;
+  Request approval = 12;
+  optional string branch = 13;
+  optional uint32 active_subagents = 14;
+  string display_name = 15;
+  BlobRef unlinked_review_blob = 16;
+}
+enum RequestState {
+  REQUEST_UNSPECIFIED = 0;
+  REQUEST_PENDING = 1;
+  REQUEST_SUBMITTING = 2;
+  REQUEST_DELIVERED_TO_ADAPTER = 3;
+  reserved 4;
+  REQUEST_EXPIRED = 5;
+  REQUEST_CANCELLED = 6;
+  REQUEST_FAILED = 7;
+  REQUEST_UNKNOWN = 8;
+}
+enum Decision { DECISION_UNSPECIFIED = 0; DECISION_APPROVE_ONCE = 1; DECISION_DENY = 2; }
+message Request {
+  string id = 1;
+  bytes digest = 2;
+  string title = 3;
+  BlobRef body_blob = 4;
+  RequestState state = 5;
+  repeated Decision allowed_decisions = 6;
+  string desktop_only_reason = 7;
+  Decision delivered_decision = 8;
+  string tool_name = 9; // <=192 UTF-8 bytes, digest-covered
+}
+// Request digest uses the explicit length-prefixed preimage in the spec,
+// never protobuf serialization.
+enum Page { PAGE_UNSPECIFIED = 0; PAGE_CAFE = 1; PAGE_REVIEW = 2; }
+enum ReviewKind {
+  REVIEW_UNSPECIFIED = 0;
+  REVIEW_REQUEST = 1;
+  REVIEW_TASK = 2;
+  REVIEW_UNLINKED_PERMISSION = 3;
+}
+message View {
+  string selected_session_id = 1; // empty clears explicit selection
+  Page page = 2;
+  uint32 task_anchor = 3;
+  string review_request_id = 4;
+  uint32 review_anchor = 5;
+  uint64 generation = 6;
+  string origin_device_id = 7;
+  uint64 applied_action_id = 8;
+  bytes origin_connection_epoch = 9;
+  ReviewKind review_kind = 10;
+  BlobRef review_blob = 11;
+}
+message Usage { string tokens_display = 1; string cost_display = 2; }
+message BlobGet { bytes sha256 = 1; }
+message BlobCancel { bytes sha256 = 1; }
+message BlobChunk {
+  bytes sha256 = 1;
+  uint32 total_length = 2;
+  uint32 offset = 3;
+  bytes data = 4;
+  bool final = 5;
+}
+enum BlobUnavailableReason {
+  BLOB_REASON_UNSPECIFIED = 0;
+  BLOB_REASON_UNKNOWN = 1;
+  BLOB_REASON_EVICTED = 2;
+  BLOB_REASON_LIMIT = 3;
+}
+message BlobUnavailable { bytes sha256 = 1; BlobUnavailableReason reason = 2; }
+enum ActionKind {
+  ACTION_UNSPECIFIED = 0;
+  ACTION_SET_SELECTION = 1;
+  ACTION_OPEN_REVIEW = 2;
+  ACTION_CLOSE_REVIEW = 3;
+  ACTION_SET_TASK_ANCHOR = 4;
+  ACTION_SET_REVIEW_ANCHOR = 5;
+  ACTION_OPEN_DESKTOP = 6;
+  ACTION_DECIDE = 7;
+}
+message Action {
+  uint64 id = 1;
+  uint64 observed_revision = 2;
+  ActionKind kind = 3;
+  string session_id = 4;
+  string request_id = 5;
+  bytes request_digest = 6;
+  bytes blob_id = 7;
+  optional uint32 anchor = 8;
+  Decision decision = 9;
+  bytes displayed_body_sha256 = 10;
+  ReviewKind review_kind = 11;
+}
+enum ResultStatus {
+  RESULT_UNSPECIFIED = 0;
+  RESULT_APPLIED = 1;
+  RESULT_PENDING = 2;
+  RESULT_REJECTED = 3;
+  RESULT_UNKNOWN = 4;
+}
+enum ResultReason {
+  REASON_NONE = 0;
+  REASON_SESSION_GONE = 1;
+  REASON_STALE_REQUEST = 2;
+  REASON_STALE_CONTENT = 3;
+  REASON_UNSUPPORTED = 4;
+  REASON_NOT_CONNECTED = 5;
+  REASON_BUSY = 6;
+  REASON_INVALID = 7;
+  REASON_EXPIRED = 8;
+  REASON_NAVIGATION_FAILED = 9;
+  REASON_PROVIDER_FAILED = 10;
+  REASON_OUTCOME_UNKNOWN = 11;
+  REASON_ALREADY_DECIDED = 12;
+}
+message ActionResult {
+  uint64 action_id = 1;
+  ResultStatus status = 2;
+  uint64 applied_revision = 3;
+  uint64 view_generation = 4;
+  ResultReason reason = 5;
+}

@@ -1,0 +1,7 @@
+/build*/
+/sdkconfig
+/sdkconfig.old
+/sdkconfig.qa
+/sdkconfig.qa.old
+/managed_components/
+/main/pairing.h

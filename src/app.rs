@@ -209,6 +209,8 @@ fn supports_pinning(display: winit::raw_window_handle::RawDisplayHandle) -> bool
 struct App {
     #[cfg(feature = "bluetooth")]
     companion: Option<token_cafe::companion::Mirror>,
+    #[cfg(feature = "bluetooth")]
+    semantic: Option<token_cafe::companion::semantic::SemanticMirror>,
     approvals: Option<token_cafe::approval::Broker>,
     provider_sessions: Vec<token_cafe::scene::Session>,
     rx: Receiver<Update>,
@@ -239,11 +241,18 @@ struct App {
     double_click_interval: Duration,
 }
 
+#[derive(Clone, Copy)]
+#[cfg_attr(not(feature = "bluetooth"), allow(dead_code))]
+pub enum CompanionConfig {
+    Semantic,
+    Legacy([u8; 32]),
+}
+
 pub fn run(
     rx: Receiver<Update>,
     scale: u32,
     always_on_top: bool,
-    bluetooth: Option<[u8; 32]>,
+    bluetooth: Option<CompanionConfig>,
 ) -> Result<(), Box<dyn Error>> {
     #[cfg(not(feature = "bluetooth"))]
     if bluetooth.is_some() {
@@ -258,7 +267,15 @@ pub fn run(
     let now = Instant::now();
     let mut app = App {
         #[cfg(feature = "bluetooth")]
-        companion: bluetooth.map(token_cafe::companion::Mirror::start),
+        companion: match bluetooth {
+            Some(CompanionConfig::Legacy(key)) => Some(token_cafe::companion::Mirror::start(key)),
+            _ => None,
+        },
+        #[cfg(feature = "bluetooth")]
+        semantic: match bluetooth {
+            Some(CompanionConfig::Semantic) => Some(token_cafe::companion::semantic::SemanticMirror::start()),
+            _ => None,
+        },
         approvals: token_cafe::approval::Broker::start().map_err(|e| eprintln!("Approval bridge: {e}")).ok(),
         provider_sessions: Vec::new(),
         rx,
@@ -375,6 +392,10 @@ impl App {
             "Token Café — Pin: T"
         };
         #[cfg(feature = "bluetooth")]
+        if let Some(companion) = &self.semantic {
+            return format!("{base} — BLE: {}", companion.status());
+        }
+        #[cfg(feature = "bluetooth")]
         if let Some(companion) = &self.companion {
             return format!("{base} — BLE: {}", companion.status());
         }
@@ -415,6 +436,12 @@ impl App {
         }
         self.scene.set_requests(requests);
         self.scene.set_sessions(&sessions);
+        #[cfg(feature = "bluetooth")]
+        if let Some(semantic) = &mut self.semantic {
+            for url in semantic.synchronize(&mut self.scene, self.approvals.as_ref()) {
+                open_session(url);
+            }
+        }
         let title = self.window_title();
         if title != self.last_window_title {
             if let Some(shown) = &self.shown {

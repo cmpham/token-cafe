@@ -1,0 +1,9 @@
+/build/
+/sdkconfig
+/sdkconfig.old
+/managed_components/
+__pycache__/
+
+/build-hardware/
+/sdkconfig.hardware
+/sdkconfig.hardware.old

@@ -42,6 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }).collect());
         if v["approval"].as_bool() == Some(true) {
             s.set_requests(vec![token_cafe::approval::Request {
+                tool_name: "Bash".into(),
                 id: "0123456789abcdef".into(), session:"qa-0".into(), title:"ALLOW BASH?".into(),
                 text:"Working directory: /tmp/token-cafe-test\n\n{\n  \"command\": \"printf 'Hello Board'\",\n  \"description\": \"Harmless approval test\"\n}\n\nOnly this action will be approved.\nLowercase: abCDef\nLast line: end of request.".into(),
             }]);

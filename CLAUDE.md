@@ -11,8 +11,8 @@ A Rust desktop app that shows the Claude Code and Codex sessions on this machine
 
 ## Layout
 
-- `design/cafe.js`: the art (sprites as palette strings) and the scene's behaviour in plain JS. `tools/gen_assets.mjs` turns it into `src/assets.rs` (palette-slot sprites, 0xRRGGBB colours, 5x7 font) and `src/bg.rgb` (the static room). Both are generated: `assets.rs` is skipped by rustfmt (`#[rustfmt::skip]` in `lib.rs`), `bg.rgb` is marked binary in `.gitattributes`.
-- `src/scene.rs` + `src/gfx.rs`: the café, drawn into a 320x240 0xRRGGBB frame.
+- `design/cafe.js`: the art (sprites as palette strings) and the scene's behaviour in plain JS. `tools/gen_assets.mjs` turns it into `crates/cafe-ui/src/assets.rs` (palette-slot sprites, 0xRRGGBB colours, 5x7 font) and `crates/cafe-ui/src/bg.rgb` (the static room). Both are generated: `assets.rs` is skipped by rustfmt (`#[rustfmt::skip]` in `lib.rs`), `bg.rgb` is marked binary in `.gitattributes`.
+- `crates/cafe-ui/src/scene.rs` + `crates/cafe-ui/src/gfx.rs`: the café, drawn into a 480x272 0xRRGGBB frame.
 - `src/collect/`: which sessions are live. `procfs.rs` implements Linux discovery; `macos.rs` uses libproc and sysctl on macOS.
 - `src/usage.rs`: this month's tokens and list-price dollars from both tools' transcripts.
 - `src/main.rs`: CLI and two feeder threads (sessions every 1 s, usage every 60 s) sending `Update`s over a channel. `src/app.rs`: the winit 0.30 + softbuffer 0.4 window.
@@ -33,3 +33,14 @@ A Rust desktop app that shows the Claude Code and Codex sessions on this machine
 ## Conventions
 
 - Demo data, tests and screenshots use made-up project names; keep real session names out of the repo.
+
+## Semantic companion
+
+- `crates/cafe-ui` is the shared desktop/board renderer; root modules re-export it.
+- `crates/companion-core` owns bounded Protobuf state/actions, crypto, reconciliation,
+  text cache, local gestures and approval guards. `firmware/engine` statically links it.
+- `firmware/semantic` is the physical BLE/LCD/touch/NVS adapter; `firmware/v2` is QEMU.
+- Follow the simulation-before-hardware gate and private-key handling in
+  `docs/protocol/operations.md`; fixtures must never dispatch real approvals.
+- No timer rotates selected patrons or footer messages. Manual focus and waiting
+  indicators remain. Update both app and board whenever the renderer digest changes.

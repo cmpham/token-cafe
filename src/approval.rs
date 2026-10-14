@@ -8,30 +8,23 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Request {
-    pub id: String,
-    pub session: String,
-    pub title: String,
-    pub text: String,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Decision {
-    Allow,
-    Deny,
-}
+pub use cafe_ui::approval::{Decision, Request, lines};
 struct Pending {
     request: Request,
     reply: mpsc::Sender<Option<Decision>>,
+    created: Instant,
 }
 #[derive(Clone, Default)]
 pub struct Broker {
     pending: Arc<Mutex<BTreeMap<String, Pending>>>,
-    outcomes: Arc<Mutex<BTreeMap<String, bool>>>,
+    outcomes: Arc<Mutex<BTreeMap<String, (bool, Instant)>>>,
 }
 impl Broker {
     pub fn requests(&self) -> Vec<Request> {
-        self.pending.lock().unwrap().values().map(|p| p.request.clone()).collect()
+        let pending = self.pending.lock().unwrap();
+        let mut ordered: Vec<_> = pending.values().collect();
+        ordered.sort_by_key(|p| p.created);
+        ordered.into_iter().map(|p| p.request.clone()).collect()
     }
     /// Remove before delivery: repeated touches cannot answer twice.
     pub fn decide(&self, id: &str, decision: Decision) -> bool {
@@ -43,7 +36,7 @@ impl Broker {
         }
     }
     pub fn take_outcome(&self, id: &str) -> Option<bool> {
-        self.outcomes.lock().unwrap().remove(id)
+        self.outcomes.lock().unwrap().remove(id).map(|(ok, _)| ok)
     }
     pub fn start() -> std::io::Result<Self> {
         let home = std::env::var_os("HOME").ok_or_else(|| std::io::Error::other("HOME unavailable"))?;
@@ -96,6 +89,7 @@ impl Broker {
             id: id.clone(),
             session: format!("claude:{session}"),
             title: format!("ALLOW {tool}?"),
+            tool_name: tool.to_owned(),
             text: format!(
                 "{}\n\nWorking directory: {}\nClaude session: {session}",
                 serde_json::to_string_pretty(&v["tool_input"])?,
@@ -109,7 +103,7 @@ impl Broker {
             if pending.len() >= 32 {
                 return Ok(());
             }
-            pending.insert(id.clone(), Pending { request, reply: tx });
+            pending.insert(id.clone(), Pending { request, reply: tx, created: Instant::now() });
         }
         let start = Instant::now();
         let mut decision = None;
@@ -137,38 +131,16 @@ impl Broker {
         let delivered = writeln!(stream, "{result}").is_ok();
         if decision.is_some() {
             let mut outcomes = self.outcomes.lock().unwrap();
-            if outcomes.len() >= 32 {
-                outcomes.clear();
+            outcomes.retain(|_, (_, at)| at.elapsed() < Duration::from_secs(600));
+            if outcomes.len() >= 128
+                && let Some(oldest) = outcomes.iter().min_by_key(|(_, (_, at))| *at).map(|(id, _)| id.clone())
+            {
+                outcomes.remove(&oldest);
             }
-            outcomes.insert(id, delivered);
+            outcomes.insert(id, (delivered, Instant::now()));
         }
         Ok(())
     }
-}
-
-/// Literal cells: do not silently hide Unicode, control characters or command case.
-pub fn lines(text: &str, width: usize) -> Vec<String> {
-    let mut result = Vec::new();
-    for line in text.lines() {
-        let escaped: String = line
-            .chars()
-            .flat_map(|c| {
-                if c.is_ascii_graphic() || c == ' ' { c.to_string() } else { c.escape_unicode().to_string() }
-                    .chars()
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        if escaped.is_empty() {
-            result.push(String::new());
-        }
-        for chunk in escaped.as_bytes().chunks(width) {
-            result.push(String::from_utf8(chunk.to_vec()).unwrap());
-        }
-    }
-    if result.is_empty() {
-        result.push("QUESTION UNAVAILABLE".into());
-    }
-    result
 }
 
 #[cfg(test)]
@@ -185,9 +157,11 @@ mod tests {
                     id: "one".into(),
                     session: "claude:a".into(),
                     title: "Test".into(),
+                    tool_name: "test".into(),
                     text: "text".into(),
                 },
                 reply: tx,
+                created: Instant::now(),
             },
         );
         assert!(!broker.decide("other", Decision::Allow));

@@ -76,7 +76,27 @@ impl<'a> Gfx<'a> {
     pub fn darken(&mut self, x: i32, y: i32, w: i32, h: i32, k: f64) {
         let (x0, y0) = (x.max(self.cx0), y.max(self.cy0));
         let (x1, y1) = ((x + w).min(self.cx1), (y + h).min(self.cy1));
-        let scale = |v: u32| ((v & 255) as f64 * k) as u32;
+        // The S3 emulates f64. Evaluate each channel once, preserving the
+        // original truncation exactly, instead of doing three soft-float
+        // multiplications for every shadow pixel.
+        const fn shadow_table(k: f64) -> [u32; 256] {
+            let mut table = [0; 256];
+            let mut i = 0;
+            while i < 256 {
+                table[i] = (i as f64 * k) as u32;
+                i += 1;
+            }
+            table
+        }
+        const DESK_SHADOW: [u32; 256] = shadow_table(0.55);
+        let custom;
+        let channels = if k == 0.55 {
+            &DESK_SHADOW
+        } else {
+            custom = shadow_table(k);
+            &custom
+        };
+        let scale = |v: u32| channels[(v & 255) as usize];
         for j in y0..y1 {
             for i in x0..x1 {
                 let p = &mut self.fb[j as usize * W + i as usize];
@@ -201,6 +221,26 @@ impl<'a> Gfx<'a> {
                         self.rect(x + (n as i32 * 6 + i) * k + o, y + j as i32 * k + o, k, k, col);
                     }
                 }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn shadow_lookup_is_pixel_exact() {
+        let mut frame = alloc::vec![0; W * H];
+        for k in [0.0, 0.55, 0.8, 1.0] {
+            for (i, p) in frame[..256].iter_mut().enumerate() {
+                *p = (i as u32) << 16 | ((255 - i) as u32) << 8 | ((i * 37 % 256) as u32);
+            }
+            let original = frame[..256].to_vec();
+            Gfx::new(&mut frame).darken(0, 0, 256, 1, k);
+            for (p, v) in frame.iter().zip(original) {
+                let scale = |x: u32| ((x & 255) as f64 * k) as u32;
+                assert_eq!(*p, scale(v >> 16) << 16 | scale(v >> 8) << 8 | scale(v));
             }
         }
     }

@@ -3,8 +3,18 @@
 //! collector only says which sessions exist and what state each is in;
 //! everything that moves is decided here.
 
-use std::collections::HashMap;
-use std::f64::consts::PI;
+#[cfg(not(feature = "std"))]
+use crate::FloatMath;
+use alloc::collections::BTreeMap as HashMap;
+use alloc::{
+    borrow::ToOwned,
+    boxed::Box,
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
+use core::f64::consts::PI;
 
 use chrono::{NaiveTime, Timelike};
 
@@ -119,9 +129,6 @@ const BY: i32 = 6;
 const WALK_SPEED: f64 = 60.0; // px per second
 const THINK_EVERY: i64 = 11000;
 const THINK_FOR: i64 = 2600;
-const FOCUS_MS: i64 = 3500;
-const TALK_MS: i64 = 4000;
-const QUIET_MS: i64 = 1000;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -155,7 +162,6 @@ struct Agent {
     codex: bool,
     branch: Option<String>,
     active_subagents: Option<usize>,
-    next_message: usize,
     state: State,
     why: Why,
     force: ForcedPose,
@@ -218,21 +224,18 @@ impl Particle {
 }
 
 pub struct Scene {
+    external_seats: Option<HashMap<String, usize>>,
     /// Milliseconds of animation so far.
     t: i64,
     /// In arrival order.
     agents: Vec<Agent>,
     particles: Vec<Particle>,
     focus: usize,
-    focus_at: i64,
-    speech: Option<(String, String)>,
-    speech_until: i64,
-    last_speaker: Option<String>,
-    last_message: Option<String>,
     overflow: usize,
     /// No list yet: the first one seats everyone at once.
     first: bool,
     usage: Option<Usage>,
+    usage_text: Option<(String, String)>,
     sessions: Vec<Session>,
     details: Vec<SessionDetail>,
     pages: HashMap<String, Vec<String>>,
@@ -313,7 +316,9 @@ struct Look {
 /// Skin, hair colour and style, shirt and idle preference: a hash of the
 /// session id, so a patron looks the same every time.
 fn look_for(id: &str) -> Look {
-    let h = fnv1a(id);
+    look_seed(fnv1a(id))
+}
+fn look_seed(h: u32) -> Look {
     let sk = a::SKINS[h as usize % a::SKINS.len()];
     let hr = a::HAIRS[(h >> 3) as usize % a::HAIRS.len()];
     let sh = a::SHIRTS[(h >> 7) as usize % a::SHIRTS.len()];
@@ -437,29 +442,11 @@ fn ellipsize(text: &str, width: usize) -> String {
 
 /// Word-wrap in character cells; never scroll or cut a multi-byte UTF-8 character.
 fn task_pages(text: &str) -> Vec<String> {
-    let mut pages = Vec::new();
-    let mut line = String::new();
-    for word in text.split_whitespace() {
-        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > TASK_LINE_LEN {
-            pages.push(std::mem::take(&mut line));
-        }
-        if !line.is_empty() {
-            line.push(' ');
-        }
-        for c in word.chars() {
-            if line.chars().count() == TASK_LINE_LEN {
-                pages.push(std::mem::take(&mut line));
-            }
-            line.push(c);
-        }
+    if text.is_empty() {
+        return vec!["TASK UNAVAILABLE".into()];
     }
-    if !line.is_empty() {
-        pages.push(line);
-    }
-    if pages.is_empty() {
-        pages.push("TASK UNAVAILABLE".into());
-    }
-    pages.chunks(2).map(|lines| lines.join("\n")).collect()
+    let lines: Vec<_> = crate::text::layout(text, TASK_LINE_LEN).into_iter().map(|line| line.text).collect();
+    lines.chunks(2).map(|lines| lines.join("\n")).collect()
 }
 
 impl Scene {
@@ -467,18 +454,15 @@ impl Scene {
         let bg =
             a::BG.as_chunks::<3>().0.iter().map(|p| (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32).collect();
         Scene {
+            external_seats: None,
             t: 0,
             agents: Vec::new(),
             particles: Vec::new(),
             focus: 0,
-            focus_at: 0,
-            speech: None,
-            speech_until: 0,
-            last_speaker: None,
-            last_message: None,
             overflow: 0,
             first: true,
             usage: None,
+            usage_text: None,
             sessions: Vec::new(),
             details: Vec::new(),
             pages: HashMap::new(),
@@ -505,12 +489,16 @@ impl Scene {
         if self.selected.as_ref().is_some_and(|id| !list.iter().any(|s| &s.id == id)) {
             self.clear_selection();
         }
-        let instant = std::mem::replace(&mut self.first, false);
+        let instant = core::mem::replace(&mut self.first, false);
         for a in &mut self.agents {
             a.seen = false;
         }
         let mut overflow = 0;
         for s in list {
+            if self.external_seats.as_ref().is_some_and(|seats| seats.get(&s.id).is_none_or(|seat| *seat >= SEATS)) {
+                overflow += 1;
+                continue;
+            }
             let mut fresh = false;
             let k = match self.agents.iter().position(|a| a.id == s.id) {
                 Some(k) => k,
@@ -518,7 +506,11 @@ impl Scene {
                     // Keep the two providers on opposite sides of the aisle.
                     // Never spill into the other provider's seats.
                     let right = s.kind == Kind::Codex;
-                    let Some(seat) = (0..SEATS).find(|&i| (i % COLS as usize >= 2) == right && self.seat_free(i))
+                    let Some(seat) = self
+                        .external_seats
+                        .as_ref()
+                        .and_then(|seats| seats.get(&s.id).copied())
+                        .or_else(|| (0..SEATS).find(|&i| (i % COLS as usize >= 2) == right && self.seat_free(i)))
                     else {
                         overflow += 1;
                         continue;
@@ -530,7 +522,6 @@ impl Scene {
                         codex: false,
                         branch: None,
                         active_subagents: None,
-                        next_message: 0,
                         state: State::Work,
                         why: Why::None,
                         force: ForcedPose::Auto,
@@ -592,7 +583,7 @@ impl Scene {
             } else if a.mode == Mode::Arriving {
                 // turn round where they stand
                 let k = full.len() - 1 - a.remaining();
-                std::iter::once([a.x, a.y]).chain(full[..=k].iter().rev().copied()).collect()
+                core::iter::once([a.x, a.y]).chain(full[..=k].iter().rev().copied()).collect()
             } else {
                 full.iter().rev().copied().collect()
             };
@@ -603,6 +594,9 @@ impl Scene {
     }
 
     fn promote_active(&mut self) {
+        if self.external_seats.is_some() {
+            return;
+        }
         let mut resumed: Vec<_> = self
             .agents
             .iter()
@@ -633,6 +627,85 @@ impl Scene {
                 self.agents[other].start_walk(&swap_path(to, from, 6.0), Mode::Swapping);
             }
         }
+    }
+
+    /// The authority assigns seats; both renderers animate the same assignment.
+    pub fn set_authoritative_sessions(&mut self, list: &[Session], seats: &[(String, usize)]) {
+        self.external_seats = Some(seats.iter().cloned().collect());
+        self.set_sessions(list);
+        for ag in &mut self.agents {
+            let Some((_, to)) = seats.iter().find(|(id, seat)| id == &ag.id && *seat < SEATS) else { continue };
+            if ag.seat == *to || ag.mode == Mode::Leaving {
+                continue;
+            }
+            let from = ag.seat;
+            let mut path = swap_path(from, *to, if from < *to { 6.0 } else { -6.0 });
+            if ag.mode != Mode::Seated {
+                path[0] = [ag.x, ag.y];
+            }
+            ag.seat = *to;
+            ag.start_walk(&path, Mode::Swapping);
+        }
+    }
+    pub fn set_appearance(&mut self, id: &str, seed: u32) {
+        if let Some(a) = self.agents.iter_mut().find(|a| a.id == id) {
+            let l = look_seed(seed);
+            a.pal = l.pal;
+            a.style = l.style;
+            a.variant = l.variant;
+            a.phase = l.phase;
+        }
+    }
+    pub fn set_usage_text(&mut self, tokens: String, cost: String) {
+        self.usage_text = Some((tokens, cost));
+    }
+    pub fn selected_id(&self) -> Option<&str> {
+        self.selected.as_deref()
+    }
+    pub fn footer_id(&self) -> Option<&str> {
+        self.footer_origin.as_deref().or(self.selected.as_deref())
+    }
+    pub fn sessions(&self) -> &[Session] {
+        &self.sessions
+    }
+    pub fn details(&self) -> &[SessionDetail] {
+        &self.details
+    }
+    pub fn requests(&self) -> &[crate::approval::Request] {
+        &self.requests
+    }
+    pub fn usage(&self) -> Option<Usage> {
+        self.usage
+    }
+    pub fn task_anchor(&self) -> usize {
+        let text =
+            self.details.iter().find(|d| Some(d.id.as_str()) == self.selected_id()).map_or("", |d| d.task.as_str());
+        crate::text::layout(text, TASK_LINE_LEN).get(self.task_page * 2).map_or(0, |l| l.offset)
+    }
+    pub fn set_task_anchor(&mut self, anchor: usize) {
+        let text =
+            self.details.iter().find(|d| Some(d.id.as_str()) == self.selected_id()).map_or("", |d| d.task.as_str());
+        self.task_page = crate::text::index(&crate::text::layout(text, TASK_LINE_LEN), anchor) / 2;
+    }
+    pub fn visible_patron_at(&self, x: i32, y: i32) -> Option<&str> {
+        if self.review.is_some() {
+            return None;
+        }
+        // Moving sprites get first refusal; never redirect their tap to a seat.
+        if let Some(ag) = self
+            .agents
+            .iter()
+            .filter(|ag| ag.seen && matches!(ag.mode, Mode::Arriving | Mode::Swapping))
+            .filter(|ag| (x - jround(ag.x)).abs() <= 18 && y >= jround(ag.y) - 46 && y <= jround(ag.y) + 2)
+            .max_by_key(|ag| jround(ag.y))
+        {
+            return Some(&ag.id);
+        }
+        if !(0..480).contains(&x) || !(FLOOR_Y..a::WIN_Y).contains(&y) {
+            return None;
+        }
+        let seat = ((y - FLOOR_Y) / STATION_H * COLS + x / STATION_W) as usize;
+        self.agents.iter().find(|ag| ag.seat == seat && ag.seen && ag.mode == Mode::Seated).map(|ag| ag.id.as_str())
     }
 
     pub fn set_requests(&mut self, requests: Vec<crate::approval::Request>) {
@@ -700,6 +773,7 @@ impl Scene {
             let actionable = request.is_some();
             let permission = self.sessions.iter().any(|s| s.id == id && s.state == State::Wait && s.why == Why::Perm);
             let request = request.unwrap_or_else(|| crate::approval::Request {
+                tool_name: String::new(),
                 id: String::new(),
                 session: id.clone(),
                 title: if permission { "APPROVAL IN DESKTOP" } else { "QUESTION / TASK" }.into(),
@@ -802,6 +876,9 @@ impl Scene {
     }
 
     pub fn patron_at(&self, x: i32, y: i32) -> Option<&str> {
+        if self.external_seats.is_some() {
+            return self.visible_patron_at(x, y);
+        }
         if self.review.is_some() {
             return None;
         }
@@ -889,60 +966,23 @@ impl Scene {
         w
     }
 
-    fn speaker(&self) -> Option<usize> {
-        let (id, _) = self.speech.as_ref()?;
-        if self.t >= self.speech_until || self.selected.is_some() || !self.waiting_list().is_empty() {
-            return None;
-        }
-        self.agents.iter().position(|a| a.id == *id && a.mode == Mode::Seated && a.state == State::Work)
-    }
-
-    fn tick_speech(&mut self) {
-        if self.speech.is_some() && self.speaker().is_none() {
-            self.speech = None;
-            self.speech_until = self.t + QUIET_MS;
-        }
-        if self.selected.is_some() || !self.waiting_list().is_empty() {
-            self.speech_until = self.t + QUIET_MS;
-            return;
-        }
-        if self.speech.is_some() || self.t < self.speech_until {
-            return;
-        }
-        let start =
-            self.last_speaker.as_ref().and_then(|id| self.agents.iter().position(|a| &a.id == id)).map_or(0, |i| i + 1);
-        let n = self.agents.len();
-        let Some(k) = (0..n)
-            .map(|i| (start + i) % n)
-            .find(|&i| self.agents[i].mode == Mode::Seated && self.agents[i].state == State::Work)
-        else {
-            return;
-        };
-        let ag = &mut self.agents[k];
-        let mut messages = vec!["I'M HARD AT WORK.".to_string()];
-        if let Some(branch) = &ag.branch {
-            messages.push(format!("BRANCH: {branch}"));
-        }
-        if let Some(count) = ag.active_subagents {
-            messages.push(format!("{count} ACTIVE SUB-AGENT{} OBSERVED", if count == 1 { "" } else { "S" }));
-        }
-        messages.push("ONE STEP AT A TIME.".to_string());
-        let next = (0..messages.len())
-            .map(|offset| (ag.next_message + offset) % messages.len())
-            .find(|&i| self.last_message.as_ref() != Some(&messages[i]))
-            .unwrap_or(0);
-        let message = messages[next].clone();
-        ag.next_message = (next + 1) % messages.len();
-        self.last_message = Some(message.clone());
-        self.last_speaker = Some(ag.id.clone());
-        self.speech = Some((ag.id.clone(), message));
-        self.speech_until = self.t + TALK_MS;
-    }
-
     pub fn tick(&mut self, dt: u32) {
         self.t += dt as i64;
         let t = self.t;
+        let blocked: Vec<usize> = self
+            .agents
+            .iter()
+            .filter(|ag| ag.mode == Mode::Leaving)
+            .filter(|ag| {
+                let geo = seat_geom(ag.seat);
+                (ag.x - (geo.sx + 40) as f64).abs() < 30.0 && (ag.y - (geo.sy + 42) as f64).abs() < 30.0
+            })
+            .map(|ag| ag.seat)
+            .collect();
         for a in &mut self.agents {
+            if self.external_seats.is_some() && a.mode == Mode::Arriving && a.path_i == 0 && blocked.contains(&a.seat) {
+                continue;
+            }
             if a.mode == Mode::Seated {
                 continue;
             }
@@ -1020,12 +1060,7 @@ impl Scene {
                 self.particles.push(p);
             }
         }
-        self.tick_speech();
         let nw = self.waiting_list().len();
-        if self.t - self.focus_at > FOCUS_MS {
-            self.focus_at = self.t;
-            self.focus += 1;
-        }
         if self.focus >= nw {
             self.focus = 0;
         }
@@ -1083,10 +1118,10 @@ impl Scene {
 
     /// The chalkboard and its labels are in the background; only the values move.
     fn draw_tab(&self, g: &mut Gfx) {
-        let (tok, usd) = match self.usage {
+        let (tok, usd) = self.usage_text.clone().unwrap_or_else(|| match self.usage {
             Some(u) => (fmt_tokens(u.tokens), fmt_usd(u.usd)),
             None => ("--".into(), "--".into()),
-        };
+        });
         g.text(&tok, TAB_X + TAB_W - 3 - text_width(&tok, 1), TAB_Y + 5, c::CHALK_HI, 1, None);
         g.text(&usd, TAB_X + TAB_W - 3 - text_width(&usd, 1), TAB_Y + 14, c::CHALK_GOLD, 1, None);
     }
@@ -1259,7 +1294,7 @@ impl Scene {
         let focused = if let Some(id) = &self.selected {
             self.agents.iter().position(|ag| &ag.id == id && ag.seen)
         } else {
-            wl.get(self.focus).copied().or_else(|| self.speaker())
+            wl.get(self.focus).copied()
         };
         for (k, ag) in self.agents.iter().enumerate() {
             if ag.mode != Mode::Seated {
@@ -1324,7 +1359,7 @@ impl Scene {
     }
 
     /// The message window: whoever waits for the human (portrait, name and
-    /// what they want, cycling through them), else the party status.
+    /// what they want), else the party status. Focus never rotates on a timer.
     fn draw_message(&self, g: &mut Gfx, now: NaiveTime) {
         if let Some(request) = self.selected.as_ref().and_then(|id| self.requests.iter().find(|r| &r.session == id)) {
             let pages = task_pages(&request.text);
@@ -1384,37 +1419,7 @@ impl Scene {
             g.rect(sx + 2, ty + thumb_h / 2 + 1, 4, 1, 0x536cab);
             return;
         }
-        if let Some(k) = self.speaker() {
-            let ag = &self.agents[k];
-            let (fx, fy) = (x + 8, y + 7);
-            g.rect(fx, fy, 34, 34, c::WIN_BORDER_LO);
-            g.rect(fx + 1, fy + 1, 32, 32, c::WIN1);
-            g.blit_scaled(&a::HEAD_OPEN, fx + 3, fy + 5, Some(&ag.pal), 2, None);
-            let tx = fx + 42;
-            g.text(&ellipsize(&ag.name, 12).to_ascii_uppercase(), tx, y + 9, c::GOLD, 2, Some(c::TEXT_SHADOW));
-            let message = &self.speech.as_ref().unwrap().1;
-            // Two small-font lines leave room for branch names in the 480px scene.
-            let text: String = message
-                .chars()
-                .map(|c| if c.is_ascii_graphic() || c == ' ' { c.to_ascii_uppercase() } else { '?' })
-                .collect();
-            let mut chars: Vec<char> = text.chars().take(84).collect();
-            if text.chars().count() > 84 {
-                chars.splice(81.., ['.', '.', '.']);
-            }
-            for (line, chunk) in chars.chunks(42).enumerate() {
-                g.text(
-                    &chunk.iter().collect::<String>(),
-                    tx,
-                    y + 27 + line as i32 * 9,
-                    c::TEXT,
-                    1,
-                    Some(c::TEXT_SHADOW),
-                );
-            }
-            return;
-        }
-        // Between speaking turns: party status
+        // With no selection, show the stable cafe summary.
         let (mut working, mut idle, mut seated) = (0, 0, 0);
         for ag in self.agents.iter().filter(|a| a.mode == Mode::Seated) {
             seated += 1;
@@ -1535,6 +1540,7 @@ mod tests {
     fn review_keeps_request_identity_and_requires_verified_input() {
         let mut scene = Scene::new();
         let request = crate::approval::Request {
+            tool_name: "Bash".into(),
             id: "one".into(),
             session: "claude:test".into(),
             title: "ALLOW?".into(),
@@ -1932,7 +1938,7 @@ mod tests {
         assert!(
             pages.iter().all(|p| p.lines().count() <= 2 && p.lines().all(|line| line.chars().count() <= TASK_LINE_LEN))
         );
-        assert_eq!(pages.concat().chars().filter(|c| *c == 'é').count(), 49);
+        assert_eq!(pages.concat().replace('\n', "").matches("\\u{e9}").count(), 49);
         scene.clear_selection();
         scene.page_task(false);
         assert_eq!(scene.task_page, 0);
@@ -1981,88 +1987,44 @@ mod tests {
     }
 
     #[test]
-    fn manual_focus_pauses_chatter_and_clearing_it_resumes_after_a_gap() {
+    fn elapsed_time_never_selects_or_cycles_working_patrons() {
         let mut scene = Scene::new();
         scene.set_sessions(&[patron("one"), patron("two")]);
-        scene.tick(1);
-        assert!(scene.speaker().is_some());
+        let now = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
+        let mut before = alloc::vec![0;a::W*a::H];
+        let mut after = before.clone();
+        scene.render(&mut before, now);
+        for _ in 0..600 {
+            scene.tick(100);
+        }
+        scene.render(&mut after, now);
+        assert!(scene.selected_id().is_none());
+        assert_eq!(&before[a::WIN_Y as usize * a::W..], &after[a::WIN_Y as usize * a::W..]);
         scene.focus_patron("two".into());
-        assert!(scene.speaker().is_none());
-        scene.tick(4000);
-        assert!(scene.speech.is_none());
+        for _ in 0..600 {
+            scene.tick(100);
+        }
+        assert_eq!(scene.selected_id(), Some("two"));
         scene.clear_selection();
-        scene.tick(999);
-        assert!(scene.speech.is_none());
-        scene.tick(1);
-        assert_eq!(scene.speech.as_ref().unwrap().0, "two");
+        scene.tick(60000);
+        assert!(scene.selected_id().is_none());
     }
-
     #[test]
-    fn patrons_take_turns_with_a_quiet_gap_and_new_messages() {
-        let mut scene = Scene::new();
-        let list = [patron("one"), patron("two")];
-        scene.set_sessions(&list);
-        scene.tick(1);
-        assert_eq!(scene.speech.as_ref().unwrap().0, "one");
-        let initial = scene.speech.as_ref().unwrap().1.clone();
-        scene.tick(3999);
-        assert!(scene.speaker().is_some());
-        scene.tick(1);
-        assert!(scene.speech.is_none());
-        scene.tick(999);
-        assert!(scene.speech.is_none());
-        scene.tick(1);
-        assert_eq!(scene.speech.as_ref().unwrap().0, "two");
-        assert_ne!(scene.speech.as_ref().unwrap().1, initial);
-        scene.tick(4000);
-        scene.tick(1000);
-        assert_eq!(scene.speech.as_ref().unwrap().0, "one");
-        assert_ne!(scene.speech.as_ref().unwrap().1, initial);
-        assert_eq!(scene.speech.as_ref().unwrap().1, "BRANCH: feature/one");
-    }
-
-    #[test]
-    fn updates_do_not_restart_speech_and_waiting_or_departure_interrupts_it() {
+    fn waiting_focus_does_not_rotate_on_a_timer() {
         let mut scene = Scene::new();
         let mut list = [patron("one"), patron("two")];
+        for s in &mut list {
+            s.state = State::Wait;
+            s.why = Why::Ask;
+        }
         scene.set_sessions(&list);
-        scene.tick(1);
-        let deadline = scene.speech_until;
-        scene.set_sessions(&list);
-        scene.tick(1000);
-        assert_eq!(scene.speech_until, deadline);
-        list[1].state = State::Wait;
-        scene.set_sessions(&list);
-        assert!(scene.speaker().is_none());
-        scene.tick(1);
-        assert!(scene.speech.is_none());
-        list[1].state = State::Work;
-        scene.set_sessions(&list);
-        scene.tick(1000);
-        assert_eq!(scene.speech.as_ref().unwrap().0, "two");
-        scene.set_sessions(&list[..1]);
-        assert!(scene.speaker().is_none());
-        scene.tick(1);
-        scene.tick(1000);
-        assert_eq!(scene.speech.as_ref().unwrap().0, "one");
-    }
-
-    #[test]
-    fn solo_patron_varies_messages_without_metadata_and_idle_cafe_stays_quiet() {
-        let mut scene = Scene::new();
-        let mut person = patron("solo");
-        person.branch = None;
-        person.active_subagents = None;
-        scene.set_sessions(&[person.clone()]);
-        scene.tick(1);
-        let first = scene.speech.as_ref().unwrap().1.clone();
-        scene.tick(4000);
-        scene.tick(1000);
-        assert_ne!(scene.speech.as_ref().unwrap().1, first);
-        person.state = State::Idle;
-        scene.set_sessions(&[person]);
-        scene.tick(4000);
-        scene.tick(1000);
-        assert!(scene.speech.is_none());
+        let first = scene.waiting_list()[scene.focus];
+        for _ in 0..600 {
+            scene.tick(100);
+        }
+        assert_eq!(scene.waiting_list()[scene.focus], first);
+        scene.focus_patron("two".into());
+        scene.tick(60000);
+        assert_eq!(scene.selected_id(), Some("two"));
     }
 }

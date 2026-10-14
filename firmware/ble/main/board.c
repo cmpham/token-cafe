@@ -1,4 +1,8 @@
+#include "esp_timer.h"
 #include "sdkconfig.h"
+#ifndef TC_SEMANTIC
+#define TC_SEMANTIC 0
+#endif
 #include "board.h"
 #include "protocol.h"
 #if CONFIG_TC_BOARD_JC4827W543
@@ -44,23 +48,63 @@ static uint64_t fingerprint_get(void) {
 static void fingerprint_set(uint64_t value) {
     taskENTER_CRITICAL(&fingerprint_lock); displayed_crc=value; taskEXIT_CRITICAL(&fingerprint_lock);
 }
+#if TC_SEMANTIC
+static uint8_t *previous;
+void board_backlight(bool on){gpio_set_level(1,on);}
+void board_present_feedback(const uint8_t *frame,int x,int y){
+    if(!previous)return;
+    int left=x-10<0?0:x-10,right=x+10>=TC_WIDTH?TC_WIDTH-1:x+10;
+    int top=y-10<0?0:y-10,bottom=y+10>=TC_HEIGHT?TC_HEIGHT-1:y+10;
+    int width=right-left+1,rows=bottom-top+1;
+    window(0x2a,left,right);window(0x2b,top,bottom);command(0x2c,NULL,0);
+    for(int row=0;row<rows;row++)for(int col=0;col<width;col++){
+        int dst=(row*width+col)*2,src=((top+row)*TC_WIDTH+left+col)*2;
+        dma[dst]=frame[src+1];dma[dst+1]=frame[src];
+        previous[src]=frame[src];previous[src+1]=frame[src+1];
+    }
+    spi_transaction_t t={.cmd=0x32,.addr=0x003c00,.flags=SPI_TRANS_MODE_QIO,.tx_buffer=dma,.length=width*rows*16};
+    ESP_ERROR_CHECK(spi_device_polling_transmit(lcd,&t));
+}
+#endif
 void board_present(const uint8_t *frame) {
+#if TC_SEMANTIC
+    if(!previous){previous=heap_caps_malloc(TC_FRAME_BYTES,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);TC_CHECK(previous);memset(previous,0xff,TC_FRAME_BYTES);}
+#else
     uint8_t hash[32]; TC_CHECK(mbedtls_sha256(frame,TC_FRAME_BYTES,hash,0)==0);
     uint64_t next_crc=0; for(int i=0;i<8;i++) next_crc|=(uint64_t)hash[i]<<(8*i);
     if(fingerprint_get()!=next_crc) fingerprint_set(0);
+#endif
     for (int y=0;y<TC_HEIGHT;y+=LCD_ROWS) {
         int rows=TC_HEIGHT-y < LCD_ROWS ? TC_HEIGHT-y : LCD_ROWS;
-        window(0x2a,0,TC_WIDTH-1);
+        int left=0,right=TC_WIDTH-1;
+#if TC_SEMANTIC
+        if(!memcmp(previous+y*TC_WIDTH*2,frame+y*TC_WIDTH*2,rows*TC_WIDTH*2))continue;
+        // Bound changed columns within this strip. Tiny local animation or
+        // pressed-feedback updates should not transfer 480 pixels per row.
+        left=TC_WIDTH;right=-1;
+        const uint16_t *before=(const uint16_t *)previous,*after=(const uint16_t *)frame;
+        for(int row=y;row<y+rows;row++)for(int col=0;col<TC_WIDTH;col++){
+            int p=row*TC_WIDTH+col;if(before[p]!=after[p]){if(col<left)left=col;if(col>right)right=col;}
+        }
+        if(right<left)continue;
+#endif
+        int width=right-left+1;
+        window(0x2a,left,right);
         window(0x2b,y,y+rows-1);
         command(0x2c,NULL,0);
-        for (int i=0;i<TC_WIDTH*rows*2;i+=2) {
-            dma[i]=frame[y*TC_WIDTH*2+i+1]; dma[i+1]=frame[y*TC_WIDTH*2+i];
+        for(int row=0;row<rows;row++)for(int col=0;col<width;col++){
+            int dst=(row*width+col)*2,src=((y+row)*TC_WIDTH+left+col)*2;
+            dma[dst]=frame[src+1];dma[dst+1]=frame[src];
         }
         spi_transaction_t t={.cmd=0x32,.addr=0x003c00,.flags=SPI_TRANS_MODE_QIO,
-            .tx_buffer=dma,.length=TC_WIDTH*rows*16};
+            .tx_buffer=dma,.length=width*rows*16};
         ESP_ERROR_CHECK(spi_device_polling_transmit(lcd,&t));
     }
+#if TC_SEMANTIC
+    memcpy(previous,frame,TC_FRAME_BYTES);
+#else
     fingerprint_set(next_crc);
+#endif
 }
 typedef struct { uint32_t epoch; uint8_t data[13]; } TouchEvent;
 static atomic_uint input_epoch;
@@ -83,6 +127,16 @@ static bool screen_activity(bool pressed) {
     return accept;
 }
 static void sample(TouchGesture *g,uint8_t count,uint16_t x,uint16_t y) {
+#if TC_SEMANTIC
+    static uint8_t last_count;static uint16_t last_x,last_y;
+    if(count==0){x=last_x;y=last_y;}
+    if(count!=last_count||(count&&(x!=last_x||y!=last_y))){
+        TouchEvent event={.epoch=atomic_load(&input_epoch),.data={count>1?2:count,x&255,x>>8,y&255,y>>8}};
+        uint32_t at=(uint32_t)(esp_timer_get_time()/1000);memcpy(event.data+5,&at,4);
+        if(xQueueSend(events,&event,0)!=pdTRUE){xQueueReset(events);event.data[0]=2;xQueueSend(events,&event,0);}
+    }
+    last_count=count;last_x=x;last_y=y;return;
+#endif
     touch_active=count>0;
     if (!screen_activity(touch_active)) {
         if (count) touch_cancel(g); else memset(g,0,sizeof(*g));
@@ -124,7 +178,7 @@ static void touch_task(void *arg) {
             } else if(s.count>=254) {
                 test_mode=s.count==255;touch_active=false;memset(&gesture,0,sizeof(gesture));board_clear_input();
             } else if(test_mode) sample(&gesture,s.count,s.x,s.y);
-            printf("@QA INPUT %u %lu %u\n",s.id,(unsigned long)esp_log_timestamp(),test_mode);
+            printf("@QA INPUT %u %lu %u\n",s.id,(unsigned long)(TC_SEMANTIC ? esp_timer_get_time()/1000 : esp_log_timestamp()),test_mode);
         }
         if(!test_mode)
 #endif
@@ -132,11 +186,13 @@ static void touch_task(void *arg) {
             if(esp_lcd_touch_read_data(touch)==ESP_OK) {
                 uint16_t x[2]={0},y[2]={0},strength[2];uint8_t count=0;
                 bool pressed=esp_lcd_touch_get_coordinates(touch,x,y,strength,&count,2);
-                if (pressed && !touch_to_display(&x[0],&y[0])) touch_cancel(&gesture);
+                if (pressed && !touch_to_display(&x[0],&y[0])) sample(&gesture,2,0,0);
                 else sample(&gesture,pressed ? count : 0,x[0],y[0]);
-            } else touch_cancel(&gesture);
+            } else sample(&gesture,2,0,0);
         }
+        #if !TC_SEMANTIC
         screen_activity(touch_active);
+        #endif
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }

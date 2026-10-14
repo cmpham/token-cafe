@@ -26,9 +26,13 @@ jobs:
           /tmp/tc-test-idle
           cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined firmware/test_protocol.c firmware/main/protocol.c -o /tmp/tc-test-protocol
           /tmp/tc-test-protocol
-      - run: cargo fmt --check
-      - run: cargo test --locked --all-targets
-      - run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Semantic wire decoder sanitizer corpus
+        run: |
+          cc -std=c11 -O1 -g -DPB_VALIDATE_UTF8 -fsanitize=address,undefined -Ifirmware/shared/generated -Ifirmware/shared/vendor/nanopb protocol/tests/fuzz_bounds.c firmware/shared/validate.c firmware/shared/generated/companion.pb.c firmware/shared/vendor/nanopb/pb_common.c firmware/shared/vendor/nanopb/pb_decode.c firmware/shared/vendor/nanopb/pb_encode.c -o /tmp/tc-v2-fuzz
+          /tmp/tc-v2-fuzz
+      - run: cargo fmt --all --check
+      - run: cargo test --workspace --locked --all-targets
+      - run: cargo clippy --workspace --locked --all-targets -- -D warnings
       - name: Linux X11 startup smoke test
         if: runner.os == 'Linux'
         run: |

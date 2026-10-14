@@ -175,7 +175,8 @@ fn usage_text() -> &'static str {
      \n  --demo     a fixed list that shows every pose\
      \n  --print    print the sessions and this month's usage, and exit\
      \n  --scale N  start at N times 480x272 (default 1 on macOS, 3 elsewhere)\
-     \n  --bluetooth --bluetooth-key PATH  mirror to your authenticated BLE companion\
+     \n  --bluetooth  connect registered semantic companions (TC_BLE_REGISTRY)\
+     \n  --bluetooth-key PATH  explicitly use legacy framebuffer mode\
      \n  --always-on-top  keep the café above other windows\
      \n\nkeys: 1-6 window size, f / F11 fullscreen, Esc leave fullscreen/clear selection, Tab next session, Left/Right select patron, Up/Down task page, t toggle always on top, q quit"
 }
@@ -220,7 +221,7 @@ fn main() {
         std::process::exit(2);
     }
     #[cfg(feature = "bluetooth")]
-    let bluetooth_key = if bluetooth || bluetooth_test.is_some() {
+    let bluetooth_key = if bluetooth_test.is_some() || (bluetooth && bluetooth_key_path.is_some()) {
         let Some(path) = bluetooth_key_path.as_deref() else {
             eprintln!("Use --bluetooth-key PATH to authenticate your board");
             std::process::exit(2);
@@ -266,7 +267,16 @@ fn main() {
         thread::spawn(move || sessions_feed(tx));
         thread::spawn(move || usage_feed(tx2));
     }
-    if let Err(e) = app::run(rx, scale, always_on_top, bluetooth_key) {
+    if let Err(e) = app::run(
+        rx,
+        scale,
+        always_on_top,
+        if bluetooth {
+            Some(bluetooth_key.map_or(app::CompanionConfig::Semantic, app::CompanionConfig::Legacy))
+        } else {
+            None
+        },
+    ) {
         eprintln!("token-cafe: {e}");
         std::process::exit(1);
     }

@@ -4,7 +4,12 @@ version = "0.1.0"
 edition = "2024"
 description = "The Claude Code and Codex sessions on this machine as patrons of a JRPG-style night net café, in a desktop window"
 
+[workspace]
+members = ["crates/cafe-ui", "crates/companion-core"]
+
 [dependencies]
+cafe-ui = { path = "crates/cafe-ui" }
+companion-core = { path = "crates/companion-core" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 libc = "0.2"
 memchr = "2"
@@ -55,3 +60,7 @@ png = "0.18.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.2.2", default-features = false, features = ["NSEvent", "NSView", "NSWindow"] }
+
+[[example]]
+name = "protocol_board_qa"
+required-features = ["bluetooth"]
