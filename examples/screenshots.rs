@@ -123,6 +123,40 @@ fn gif(path: &str, frames: &[Vec<u8>], k: usize, delay_cs: u16) {
 
 fn main() {
     use {ForcedPose as P, Kind::*, State::*};
+    if std::env::args().any(|arg| arg == "--attention") {
+        let now = NaiveTime::from_hms_opt(21, 47, 0).unwrap();
+        let mut scene = Scene::new();
+        let mut sessions = vec![
+            s("checkout", "checkout-flow", Claude, Work, Why::None, P::Auto, 0),
+            s("infra", "infra", Codex, Work, Why::None, P::Auto, 0),
+            s("docs", "docs", Claude, Work, Why::None, P::Auto, 0),
+            s("web", "web-app", Codex, Idle, Why::None, P::Sip, 0),
+        ];
+        scene.set_sessions(&sessions);
+        scene.set_usage(Usage { tokens: 14_900_000.0, usd: 6.5 });
+        run(&mut scene, 2000);
+        sessions[0].state = Wait;
+        sessions[0].why = Why::Perm;
+        sessions[1].state = Wait;
+        sessions[1].why = Why::Ask;
+        scene.set_sessions(&sessions);
+        scene.set_requests(vec![token_cafe::approval::Request {
+            id: "preview-approval".into(),
+            session: "checkout".into(),
+            title: "Run tests".into(),
+            tool_name: "Bash".into(),
+            text: "May I run the test suite?".into(),
+        }]);
+        png("docs/attention.png", &rgb(&scene, now, 3), 3);
+        let mut frames = Vec::new();
+        // Sample each blink phase through the full 30-second window and its steady tail.
+        for _ in 0..55 {
+            frames.push(rgb(&scene, now, 2));
+            run(&mut scene, 600);
+        }
+        gif("docs/attention.gif", &frames, 2, 60);
+        return;
+    }
     if std::env::args().any(|arg| arg == "--monologues") {
         let now = NaiveTime::from_hms_opt(21, 47, 0).unwrap();
         let mut scene = Scene::new();

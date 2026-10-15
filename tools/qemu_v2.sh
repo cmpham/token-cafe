@@ -26,6 +26,7 @@ case "${1:-build}" in
   else idf.py "${args[@]}"; fi
   ;;
  test)
+  python "$ROOT/tools/test_attention_qemu.py"
   python "$ROOT/tools/test_protocol_v2_qemu.py" "${@:2}"
   python "$ROOT/tools/test_transition_qemu.py"
   exec python "$ROOT/tools/test_board_performance_qemu.py"

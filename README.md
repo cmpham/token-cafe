@@ -131,6 +131,32 @@ cargo run --release --example screenshots          # refresh docs/*.png and docs
 cargo run --example screenshots -- --monologues    # preview rotation in target/monologues.gif
 ```
 
+### Attention alerts
+
+A newly waiting patron pulses the footer accent for 30 seconds, then keeps an amber
+frame until the request is resolved. A solid amber frame highlights the active
+patron; other waiting patrons keep quiet corner markers and steady nameplates.
+The footer shows the patron, approval/question type, a larger request preview,
+and the waiting queue count. Framed VIEW REQUEST and NEXT controls make actions
+visible; NEXT disappears when only one patron is waiting.
+Tap the patron or footer to acknowledge the pulse; **VIEW REQUEST** opens the
+existing review screen without approving anything. **NEXT** moves through waiting
+patrons, including those outside the visible seats. Acknowledged requests remain
+labeled SEEN - STILL PENDING. Review keeps the patron's name and matching portrait.
+When a request ends, a brief REQUEST RESOLVED notice appears; unchanged old text
+is labeled LAST REQUEST until fresh task text arrives. New alerts preserve a patron
+you are already reading, and refreshes do not restart acknowledged alerts.
+
+On the semantic companion board, a new waiting state or approval identity wakes
+the backlight and keeps it awake for at least 60 seconds. Unchanged refreshes do
+not extend that window; the usual ten-minute touch idle timer still applies.
+Physical wake behavior requires updated board firmware as well as the matching
+host build. Preview the new footer and its animation with:
+
+```sh
+cargo run --example screenshots -- --attention
+```
+
 ## Windows porting notes
 
 The renderer and window dependencies are cross-platform, but Windows process discovery is not implemented. A Windows backend needs executable paths (`codex.exe`), arguments, working directories, process start times and open rollout files (or the existing SQLite fallback). It also needs native home/cache paths and validation of Claude's process identity format.

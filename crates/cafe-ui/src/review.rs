@@ -82,6 +82,11 @@ impl Review {
         self.page = if forward { self.page.saturating_add(8).min(last) } else { self.page.saturating_sub(8) };
     }
     pub fn draw(&self, g: &mut Gfx) {
+        let (pal, style) = crate::scene::review_appearance(&self.request.session);
+        self.draw_for_patron(g, &self.request.session, &pal, style);
+    }
+
+    pub fn draw_for_patron(&self, g: &mut Gfx, name: &str, pal: &a::Pal, style: usize) {
         g.noclip();
         // Use the room dialogue's stepped gradient and beveled pixel frame.
         // Paint borders only: filling nested panels would write the full PSRAM
@@ -111,12 +116,24 @@ impl Review {
         }
         g.text("< CAFE", 16, 22, c::TEXT, 1, Some(c::TEXT_SHADOW));
         g.text("DESKTOP >", 390, 22, c::TEXT, 1, Some(c::TEXT_SHADOW));
-        g.rect(108, 11, 30, 32, c::WIN_BORDER_LO);
-        g.rect(109, 12, 28, 30, c::WIN1);
-        let pal = crate::scene::review_palette(&self.request.session);
-        g.blit_scaled(&a::HEAD_OPEN, 109, 15, Some(&pal), 2, None);
-        g.text(if self.actionable { "REQUEST" } else { "TASK NOTES" }, 150, 15, c::GOLD, 2, Some(c::TEXT_SHADOW));
-        g.text("TOKEN CAFE", 150, 34, c::TEXT_DIM, 1, Some(c::TEXT_SHADOW));
+        // The selected patron remains prominent across cafe, footer, and review.
+        draw_patron_portrait(g, pal, style, 104, 9);
+        g.rect(146, 10, 232, 33, c::WIN1);
+        g.rect(146, 10, 3, 33, c::GOLD);
+        let name = crate::scene::shorten(name, 18);
+        g.text(&name, 154, 14, c::GOLD, 2, Some(c::TEXT_SHADOW));
+        g.text(
+            if self.actionable || !self.request.tool_name.is_empty() {
+                "APPROVAL REQUEST"
+            } else {
+                "QUESTION / TASK DETAILS"
+            },
+            154,
+            33,
+            c::TEXT,
+            1,
+            None,
+        );
         g.rect(16, 50, 448, 1, c::WIN1);
         g.rect(16, 51, 448, 1, c::WIN_BORDER_LO);
         let count = self.line_count();
@@ -169,6 +186,20 @@ impl Review {
             }
         }
     }
+}
+
+/// A framed, cropped portrait uses the same hair style and colors as the seated patron.
+pub(crate) fn draw_patron_portrait(g: &mut Gfx, pal: &a::Pal, style: usize, x: i32, y: i32) {
+    g.rect(x, y, 34, 36, c::GOLD);
+    g.rect(x + 2, y + 2, 30, 32, c::WIN1);
+    g.blit_scaled(&a::POSES[style].stand_d, x - 5, y - 4, Some(pal), 2, Some([x + 2, y + 2, x + 32, y + 34]));
+}
+
+pub(crate) fn draw_button(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32, label: &str) {
+    g.rect(x, y, w, h, c::WIN_BORDER);
+    g.rect(x + 1, y + 1, w - 2, h - 2, c::WIN1);
+    g.rect(x + 1, y + h - 2, w - 2, 1, c::WIN_BORDER_LO);
+    g.text(label, x + (w - crate::gfx::text_width(label, 1)) / 2, y + (h - 7) / 2, c::TEXT, 1, None);
 }
 
 #[cfg(test)]

@@ -460,3 +460,93 @@ fn switching_patrons_keeps_only_selected_text_without_stale_details() {
         assert!(c.scene.details()[0].task.contains(text));
     }
 }
+
+fn publish_attention_snapshot(c: &mut Client, host: &mut Authority, now: u64) {
+    host.model.revision += 1;
+    for e in sync::snapshot(&host.model, &[1; 16], &[2; 16]).unwrap() {
+        let raw = codec::encode(&e).unwrap();
+        c.receive(e, &raw, now).unwrap();
+    }
+}
+
+#[test]
+fn new_attention_wakes_for_a_minute_but_refresh_does_not() {
+    let (mut c, mut host, _) = setup();
+    c.tick(610_000).unwrap();
+    assert!(c.sleeping);
+    publish_attention_snapshot(&mut c, &mut host, 610_010);
+    assert!(c.sleeping, "same waiting request must not wake repeatedly");
+    let mut question = host.model.sessions["claude:test"].clone();
+    question.id = "codex:question".into();
+    question.provider = 2;
+    question.seat = 2;
+    question.waiting_reason = 2;
+    question.approval = None;
+    host.model.sessions.insert(question.id.clone(), question);
+    publish_attention_snapshot(&mut c, &mut host, 611_000);
+    assert!(!c.sleeping);
+    assert!(!c.armed(611_001));
+    c.tick(670_999).unwrap();
+    assert!(!c.sleeping);
+    publish_attention_snapshot(&mut c, &mut host, 670_999);
+    c.tick(671_000).unwrap();
+    assert!(c.sleeping, "refresh cannot extend attention wake time");
+    // A different request identity on the same waiting patron is a new alert.
+    let r = host.model.sessions.get_mut("claude:test").unwrap().approval.as_mut().unwrap();
+    r.id = "qa-2".into();
+    let b = r.body_blob.as_ref().unwrap();
+    r.digest = companion_core::crypto::request_digest(
+        &r.id,
+        "claude:test",
+        1,
+        &r.title,
+        &r.tool_name,
+        &b.sha256.clone().try_into().unwrap(),
+        b.byte_length,
+        &[1, 2],
+    )
+    .unwrap()
+    .to_vec();
+    publish_attention_snapshot(&mut c, &mut host, 672_000);
+    assert!(!c.sleeping);
+    assert!(actions(&mut c).iter().all(|a| a.kind != 7));
+}
+
+#[test]
+fn attention_footer_opens_review_without_a_decision() {
+    let (mut c, _, _) = setup();
+    assert!(c.scene.selected_id().is_none());
+    tap(&mut c, 300, 260, 10_900);
+    assert!(c.scene.review.is_none(), "status text must not open review");
+    assert!(actions(&mut c).iter().all(|a| a.kind == 1));
+    tap(&mut c, 100, 252, 11_000);
+    let sent = actions(&mut c);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].kind, 2);
+    assert_eq!(sent[0].session_id, "claude:test");
+    assert!(c.scene.review.as_ref().is_some_and(|r| r.decision.is_none()));
+    assert!(!c.armed(11_031), "new review must be presented before it can arm");
+}
+
+#[test]
+fn attention_next_is_selection_only_and_new_request_cancels_held_contact() {
+    let (mut c, mut host, _) = setup();
+    c.touch(1, 100, 260, 11_000, &mut |_| true).unwrap();
+    let mut question = host.model.sessions["claude:test"].clone();
+    question.id = "codex:question".into();
+    question.provider = 2;
+    question.seat = 2;
+    question.waiting_reason = 2;
+    question.approval = None;
+    host.model.sessions.insert(question.id.clone(), question);
+    publish_attention_snapshot(&mut c, &mut host, 11_010);
+    c.touch(0, 100, 260, 11_030, &mut |_| true).unwrap();
+    assert!(actions(&mut c).is_empty(), "new request cancels a held View gesture");
+    tap(&mut c, 450, 240, 12_000);
+    let sent = actions(&mut c);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].kind, 1);
+    assert_eq!(sent[0].session_id, "codex:question");
+    assert_eq!(c.scene.attention_id(), Some("codex:question"));
+    assert!(c.scene.review.is_none());
+}

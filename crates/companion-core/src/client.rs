@@ -7,7 +7,7 @@ use crate::{
     wire::{envelope::Payload, *},
 };
 use alloc::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     string::{String, ToString},
     vec,
     vec::Vec,
@@ -29,6 +29,8 @@ pub struct Receipt {
 enum Target {
     Patron(String),
     Body(String),
+    ViewRequest(String),
+    NextWaiting(String),
     Rail(bool),
     Back,
     Desktop(String),
@@ -69,6 +71,8 @@ pub struct Client {
     contact: Option<Contact>,
     last_tap: Option<(Target, u64, i32, i32)>,
     last_touch: u64,
+    attention_identities: BTreeMap<String, Vec<u8>>,
+    attention_awake_until: u64,
     rendered_identity: Vec<u8>,
     review_identity: Vec<u8>,
     displayed_at: Option<u64>,
@@ -104,6 +108,8 @@ impl Client {
             contact: None,
             last_tap: None,
             last_touch: now,
+            attention_identities: BTreeMap::new(),
+            attention_awake_until: 0,
             rendered_identity: Vec::new(),
             review_identity: Vec::new(),
             displayed_at: None,
@@ -330,6 +336,60 @@ impl Client {
             })
             .collect();
         self.scene.set_details(details);
+        let requests = m
+            .sessions
+            .values()
+            .filter_map(|session| {
+                let request = session.approval.as_ref().filter(|r| r.state == 1)?;
+                Some(UiRequest {
+                    id: request.id.clone(),
+                    session: session.id.clone(),
+                    title: request.title.clone(),
+                    tool_name: request.tool_name.clone(),
+                    text: if session.id == v.selected_session_id {
+                        self.text(request.body_blob.as_ref())
+                    } else {
+                        request.title.clone()
+                    },
+                })
+            })
+            .collect();
+        self.scene.set_requests(requests);
+        let identities: BTreeMap<_, _> = m
+            .sessions
+            .values()
+            .filter_map(|session| {
+                let pending = session.approval.as_ref().filter(|r| r.state == 1);
+                if session.status != 3 && pending.is_none() {
+                    return None;
+                }
+                let mut key = vec![session.waiting_reason as u8];
+                if let Some(request) = pending {
+                    key.extend_from_slice(request.id.as_bytes());
+                    key.push(0);
+                    key.extend_from_slice(&request.digest);
+                }
+                Some((session.id.clone(), key))
+            })
+            .collect();
+        let mut new_attention = false;
+        for (id, key) in &identities {
+            if self.attention_identities.get(id) != Some(key) {
+                self.scene.notify_attention(id);
+                new_attention = true;
+            }
+        }
+        self.attention_identities = identities;
+        if new_attention {
+            self.attention_awake_until = now.saturating_add(60_000);
+            self.sleeping = false;
+            // A wake or new request cannot reuse an in-flight gesture or armed review.
+            self.wake_contact |= self.contact.is_some();
+            self.contact = None;
+            self.last_tap = None;
+            self.displayed_at = None;
+            self.rendered_identity.clear();
+        }
         self.scene.set_usage_text(m.usage.tokens_display.clone(), m.usage.cost_display.clone());
         // A pending optimistic selection may name a session a delta has since removed.
         if m.sessions.contains_key(&v.selected_session_id) {
@@ -419,7 +479,7 @@ impl Client {
                         } else if !self.local_review {
                             "TAP TEXT TO ENABLE OPTIONS"
                         } else if !self.armed(now) {
-                            "PLEASE WAIT..."
+                            "PREPARING APPROVAL CONTROLS..."
                         } else {
                             ""
                         }
@@ -498,7 +558,8 @@ impl Client {
                 self.last_heartbeat = now;
             }
         }
-        if self.contact.is_none() && now.saturating_sub(self.last_touch) >= 600000 {
+        if self.contact.is_none() && now >= self.attention_awake_until && now.saturating_sub(self.last_touch) >= 600000
+        {
             self.sleeping = true;
         }
         if self.receipt_wait.is_some_and(|t| now.saturating_sub(t) >= 5000) {
@@ -509,7 +570,7 @@ impl Client {
         if self.armed(now)
             && let Some(r) = &mut self.scene.review
             && r.actionable
-            && r.status == "PLEASE WAIT..."
+            && r.status == "PREPARING APPROVAL CONTROLS..."
         {
             r.status.clear();
         }
@@ -609,6 +670,15 @@ impl Client {
             return Target::Body(r.request().session.clone());
         }
         if y >= cafe_ui::assets::WIN_Y {
+            if let Some(id) = self.scene.attention_id() {
+                if x >= 436 {
+                    return self.scene.next_attention_id().map_or(Target::None, |id| Target::NextWaiting(id.into()));
+                }
+                if y >= cafe_ui::assets::WIN_Y + 38 && (50..190).contains(&x) {
+                    return Target::ViewRequest(id.into());
+                }
+                return Target::Body(id.into());
+            }
             if x >= 436 {
                 return Target::Rail(y >= (cafe_ui::assets::WIN_Y + 272) / 2);
             }
@@ -673,8 +743,10 @@ impl Client {
             *t == c.target && now.saturating_sub(*time) <= 450 && (x - px).abs() <= 20 && (y - py).abs() <= 20
         });
         self.last_tap = if double { None } else { Some((c.target.clone(), now, x, y)) };
+        let view_request = matches!(c.target, Target::ViewRequest(_));
         match c.target {
             Target::Patron(id) => {
+                self.scene.acknowledge_attention(&id);
                 if double {
                     self.issue(Action { kind: 6, session_id: id, ..Default::default() }, now)?;
                 } else {
@@ -689,7 +761,13 @@ impl Client {
                     )?;
                 }
             }
-            Target::Body(id) => {
+            Target::NextWaiting(id) => {
+                self.scene.acknowledge_attention(&id);
+                self.issue(Action { kind: 1, session_id: id, ..Default::default() }, now)?;
+            }
+            Target::Body(id) | Target::ViewRequest(id) => {
+                self.scene.acknowledge_attention(&id);
+                let open = double || view_request;
                 if self.view().page == 2 {
                     if double {
                         self.issue(Action { kind: 6, session_id: id, ..Default::default() }, now)?;
@@ -699,7 +777,7 @@ impl Client {
                         self.rendered_identity.clear();
                         self.sync(now)?;
                     }
-                } else if double {
+                } else if open {
                     let Some(s) = self.replica.model.sessions.get(&id) else { return Ok(()) };
                     let (kind, request, b) = if let Some(r) = &s.approval {
                         (1, r.id.clone(), r.body_blob.clone())
@@ -723,6 +801,8 @@ impl Client {
                         self.local_review = true;
                         self.sync(now)?;
                     }
+                } else if self.view().selected_session_id != id {
+                    self.issue(Action { kind: 1, session_id: id, ..Default::default() }, now)?;
                 }
             }
             Target::Back => {

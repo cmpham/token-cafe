@@ -39,7 +39,13 @@ void app_main(void){
  case 4:n=cafe_engine_next(engine,out,sizeof(out));break;
  case 5:if(size!=8){ok=false;break;}memcpy(&now,input,8);ok=cafe_engine_tick(engine,now);break;
  case 6:if(size!=5){ok=false;break;}ok=cafe_engine_touch(engine,input[0],input[1]|input[2]<<8,input[3]|input[4]<<8,now);break;
- case 7:ok=cafe_engine_render(engine,frame,now);if(ok){ESP_ERROR_CHECK(esp_lcd_rgb_qemu_refresh(panel));cafe_engine_presented(engine,now);}break;
+ case 7:
+  // QEMU has no backlight GPIO: black out the panel while the shared engine
+  // sleeps, matching the production adapter that disables its backlight.
+  if(cafe_engine_status(engine)&4){memset(frame,0,480*272*2);}
+  else {ok=cafe_engine_render(engine,frame,now);}
+  if(ok){ESP_ERROR_CHECK(esp_lcd_rgb_qemu_refresh(panel));if(!(cafe_engine_status(engine)&4))cafe_engine_presented(engine,now);}
+  break;
  case 8:{uint32_t status=cafe_engine_status(engine);memcpy(out,&status,4);n=4;break;}
  case 9:if(size!=2){ok=false;break;}reset(input[0]|input[1]<<8);ok=engine!=NULL;break;
  case 11:{uint64_t start=esp_timer_get_time();ok=cafe_engine_draw(engine,now);uint64_t drawn=esp_timer_get_time();if(ok)cafe_engine_pack(engine,frame);uint32_t metrics[5]={(uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),(uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),(uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM),(uint32_t)(drawn-start),(uint32_t)(esp_timer_get_time()-drawn)};memcpy(out,metrics,sizeof(metrics));n=sizeof(metrics);break;}

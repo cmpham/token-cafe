@@ -242,6 +242,10 @@ pub struct Scene {
     agents: Vec<Agent>,
     particles: Vec<Particle>,
     focus: usize,
+    attention: HashMap<String, Option<i64>>,
+    automatic_attention: Option<String>,
+    resolved_attention: HashMap<String, (i64, Option<String>)>,
+    appearance_seeds: HashMap<String, u32>,
     overflow: usize,
     /// No list yet: the first one seats everyone at once.
     first: bool,
@@ -325,8 +329,9 @@ struct Look {
 
 /// Skin, hair colour and style, shirt and idle preference: a hash of the
 /// session id, so a patron looks the same every time.
-pub(crate) fn review_palette(id: &str) -> Pal {
-    look_for(id).pal
+pub(crate) fn review_appearance(id: &str) -> (Pal, usize) {
+    let look = look_for(id);
+    (look.pal, look.style)
 }
 
 fn look_for(id: &str) -> Look {
@@ -471,6 +476,10 @@ impl Scene {
             agents: Vec::new(),
             particles: Vec::new(),
             focus: 0,
+            attention: HashMap::new(),
+            automatic_attention: None,
+            resolved_attention: HashMap::new(),
+            appearance_seeds: HashMap::new(),
             overflow: 0,
             first: true,
             usage: None,
@@ -496,7 +505,31 @@ impl Scene {
     /// seats everyone at once; later newcomers walk in and leavers walk out.
     /// Whoever finds no free seat waits outside.
     pub fn set_sessions(&mut self, list: &[Session]) {
+        for session in list {
+            if session.state == State::Wait
+                && !self
+                    .sessions
+                    .iter()
+                    .any(|old| old.id == session.id && old.state == State::Wait && old.why == session.why)
+            {
+                self.notify_attention(&session.id);
+            }
+        }
+        let ended: Vec<_> = self
+            .sessions
+            .iter()
+            .filter(|old| {
+                old.state == State::Wait && list.iter().any(|new| new.id == old.id && new.state != State::Wait)
+            })
+            .map(|s| s.id.clone())
+            .collect();
+        for id in ended {
+            self.mark_resolved(&id);
+        }
+        self.resolved_attention.retain(|id, _| list.iter().any(|s| &s.id == id));
+        self.appearance_seeds.retain(|id, _| list.iter().any(|s| &s.id == id));
         self.sessions = list.to_vec();
+        self.reconcile_attention();
         if self.selected.as_ref().is_some_and(|id| !list.iter().any(|s| &s.id == id)) {
             self.clear_selection();
         }
@@ -659,6 +692,7 @@ impl Scene {
         }
     }
     pub fn set_appearance(&mut self, id: &str, seed: u32) {
+        self.appearance_seeds.insert(id.into(), seed);
         if let Some(a) = self.agents.iter_mut().find(|a| a.id == id) {
             let l = look_seed(seed);
             a.pal = l.pal;
@@ -719,6 +753,62 @@ impl Scene {
         self.agents.iter().find(|ag| ag.seat == seat && ag.seen && ag.mode == Mode::Seated).map(|ag| ag.id.as_str())
     }
 
+    /// New identities alert once; selecting or synchronizing a view never re-arms them.
+    pub fn notify_attention(&mut self, id: &str) {
+        self.resolved_attention.remove(id);
+        self.attention.insert(id.into(), Some(self.t));
+        if self.automatic_attention.is_none() {
+            self.automatic_attention = Some(id.into());
+        }
+    }
+
+    fn mark_resolved(&mut self, id: &str) {
+        let task = self.details.iter().find(|d| d.id == id).map(|d| d.task.clone());
+        self.resolved_attention.entry(id.into()).or_insert((self.t, task));
+    }
+
+    fn reconcile_attention(&mut self) {
+        self.attention.retain(|id, _| {
+            self.sessions.iter().any(|s| &s.id == id && s.state == State::Wait)
+                || self.requests.iter().any(|r| &r.session == id)
+        });
+        if self.automatic_attention.as_ref().is_none_or(|id| !self.attention.contains_key(id)) {
+            self.automatic_attention = self.attention.keys().next().cloned();
+        }
+    }
+
+    pub fn acknowledge_attention(&mut self, id: &str) {
+        if let Some(started) = self.attention.get_mut(id) {
+            *started = None;
+        }
+    }
+
+    pub fn attention_id(&self) -> Option<&str> {
+        if let Some(id) = &self.selected {
+            return self.attention.contains_key(id).then_some(id.as_str());
+        }
+        self.automatic_attention.as_deref()
+    }
+
+    pub fn next_attention_id(&self) -> Option<&str> {
+        let ids: Vec<_> = self.attention.keys().collect();
+        if ids.len() < 2 {
+            return None;
+        }
+        let current = self.attention_id();
+        let next = ids.iter().position(|id| Some(id.as_str()) == current).map_or(0, |i| (i + 1) % ids.len());
+        Some(ids[next].as_str())
+    }
+
+    fn attention_bright(&self) -> bool {
+        self.attention.values().any(|start| {
+            start.is_some_and(|at| {
+                let elapsed = self.t - at;
+                (0..30_000).contains(&elapsed) && (elapsed / 600) % 2 == 0
+            })
+        })
+    }
+
     pub fn set_requests(&mut self, requests: Vec<crate::approval::Request>) {
         if let Some(review) = &mut self.review
             && review.actionable
@@ -729,7 +819,25 @@ impl Scene {
                 review.status = "REQUEST NO LONGER PENDING".into();
             }
         }
+        let ended: Vec<_> = self
+            .requests
+            .iter()
+            .filter(|old| {
+                !requests.iter().any(|new| new.session == old.session)
+                    && !self.sessions.iter().any(|s| s.id == old.session && s.state == State::Wait)
+            })
+            .map(|r| r.session.clone())
+            .collect();
+        for id in ended {
+            self.mark_resolved(&id);
+        }
+        for request in &requests {
+            if !self.requests.iter().any(|old| old.id == request.id && old.session == request.session) {
+                self.notify_attention(&request.session);
+            }
+        }
         self.requests = requests;
+        self.reconcile_attention();
     }
 
     pub fn interaction_id(&self, x: i32, y: i32) -> Option<String> {
@@ -737,6 +845,9 @@ impl Scene {
             return Some(format!("review:{}", review.request().id));
         }
         if y >= a::WIN_Y {
+            if x >= 436 && self.attention_id().is_some() {
+                return None;
+            }
             return Some("footer".into());
         }
         self.patron_at(x, y).map(str::to_owned)
@@ -841,7 +952,9 @@ impl Scene {
             .map_or(if forward { 0 } else { self.sessions.len() - 1 }, |i| {
                 (i + if forward { 1 } else { self.sessions.len() - 1 }) % self.sessions.len()
             });
-        self.selected = Some(self.sessions[next].id.clone());
+        let id = self.sessions[next].id.clone();
+        self.acknowledge_attention(&id);
+        self.selected = Some(id);
         self.task_page = 0;
     }
 
@@ -873,7 +986,7 @@ impl Scene {
     }
 
     pub fn scrollbar_hit(&self, x: i32, y: i32) -> bool {
-        self.selected.is_some() && x >= 436 && y >= a::WIN_Y
+        self.attention_id().is_none() && self.selected.is_some() && x >= 436 && y >= a::WIN_Y
     }
 
     pub fn scroll_task_to(&mut self, y: i32) {
@@ -929,6 +1042,22 @@ impl Scene {
             return;
         }
         if y >= a::WIN_Y {
+            if let Some(id) = self.attention_id().map(str::to_owned) {
+                if x >= 436 {
+                    if let Some(next) = self.next_attention_id().map(str::to_owned) {
+                        self.acknowledge_attention(&next);
+                        self.focus_patron(next);
+                    }
+                } else {
+                    self.acknowledge_attention(&id);
+                    self.focus_patron(id.clone());
+                    self.footer_origin = Some(id);
+                    if y >= a::WIN_Y + 38 && (50..190).contains(&x) {
+                        self.review_input(true, x, y, false);
+                    }
+                }
+                return;
+            }
             self.footer_origin = self.selected.clone();
             if self.selected.as_ref().is_some_and(|id| {
                 self.requests.iter().any(|r| &r.session == id)
@@ -953,12 +1082,14 @@ impl Scene {
             .iter()
             .find(|ag| ag.seat == seat && ag.seen && !matches!(ag.mode, Mode::Leaving | Mode::Swapping))
         {
+            let id = ag.id.clone();
             if self.selected.as_ref() == Some(&ag.id) {
                 self.clear_selection();
             } else {
                 self.selected = Some(ag.id.clone());
                 self.task_page = 0;
             }
+            self.acknowledge_attention(&id);
         } else {
             self.clear_selection();
         }
@@ -1220,9 +1351,9 @@ impl Scene {
         let name = shorten(&ag.name, PLATE_LEN).to_ascii_uppercase();
         let w = text_width(&name, 1) + 6;
         let x = cx - (w >> 1);
-        let blink = ag.state == State::Wait && (self.t / 400) % 2 == 0;
+        let waiting = self.attention.contains_key(&ag.id);
         g.rect(x, y, w, 11, base::K);
-        let face = if blink {
+        let face = if waiting {
             base::Y
         } else if ag.codex {
             c::PLATE_CODEX
@@ -1307,28 +1438,41 @@ impl Scene {
 
     fn draw_overlays(&self, g: &mut Gfx) {
         let t = self.t;
-        let wl = self.waiting_list();
-        let focused = if let Some(id) = &self.selected {
-            self.agents.iter().position(|ag| &ag.id == id && ag.seen)
-        } else {
-            wl.get(self.focus).copied()
-        };
+        let focused = self
+            .selected
+            .as_deref()
+            .or_else(|| self.attention_id())
+            .and_then(|id| self.agents.iter().position(|ag| ag.id == id && ag.seen));
         for (k, ag) in self.agents.iter().enumerate() {
             if ag.mode != Mode::Seated {
                 continue;
             }
             let geo = seat_geom(ag.seat);
+            if self.attention.contains_key(&ag.id) {
+                let (x, y, w, h) = (geo.sx - 6, geo.sy + 5, 92, 57);
+                if focused == Some(k) {
+                    g.rect(x, y, w + 1, 2, c::GOLD);
+                    g.rect(x, y + h - 1, w + 1, 2, c::GOLD);
+                    g.rect(x, y, 2, h + 1, c::GOLD);
+                    g.rect(x + w - 1, y, 2, h + 1, c::GOLD);
+                } else {
+                    for (cx, cy, dx, dy) in [(x, y, 1, 1), (x + w, y, -1, 1), (x, y + h, 1, -1), (x + w, y + h, -1, -1)]
+                    {
+                        g.rect(cx - if dx < 0 { 6 } else { 0 }, cy, 7, 1, c::CHALK_DIM);
+                        g.rect(cx, cy - if dy < 0 { 6 } else { 0 }, 1, 7, c::CHALK_DIM);
+                    }
+                }
+            }
             match pose_of(t, ag) {
                 Pose::Raise => {
-                    let bob = ((t / 260) % 2) as i32;
                     let b = if ag.why == Why::Ask { &a::BUBBLE_ASK } else { &a::BUBBLE_BANG };
-                    g.blit(b, geo.sx + 29, geo.sy + SIT_Y - 14 - bob, None, false);
+                    g.blit(b, geo.sx + 29, geo.sy + SIT_Y - 14, None, false);
                 }
                 Pose::Think => g.blit(&a::BUBBLE_THINK, geo.sx + 45, geo.sy + SIT_Y - 11, None, false),
                 _ => {}
             }
-            if focused == Some(k) {
-                g.blit(&a::CURSOR, geo.sx + 7 + ((t / 220) % 2) as i32, geo.sy + SIT_Y + 6, None, false);
+            if focused == Some(k) && ag.state != State::Wait {
+                g.blit(&a::CURSOR, geo.sx + 7, geo.sy + SIT_Y + 6, None, false);
             }
         }
         for p in &self.particles {
@@ -1353,22 +1497,23 @@ impl Scene {
         }
     }
 
+    fn patron_look(&self, id: &str) -> (Pal, usize) {
+        if let Some(agent) = self.agents.iter().find(|ag| ag.id == id && ag.seen) {
+            (agent.pal, agent.style)
+        } else {
+            let look = self.appearance_seeds.get(id).map_or_else(|| look_for(id), |seed| look_seed(*seed));
+            (look.pal, look.style)
+        }
+    }
+
+    fn draw_patron_portrait(&self, g: &mut Gfx, id: &str, x: i32, y: i32) {
+        let (pal, style) = self.patron_look(id);
+        crate::review::draw_patron_portrait(g, &pal, style, x, y);
+    }
+
     /// Shared portrait and text layout for automatic alerts and manual focus.
-    fn draw_dialogue(&self, g: &mut Gfx, id: &str, state: State, title: &str, text: &str) {
-        let (fx, fy, fs) = (8, a::WIN_Y + 13, 34);
-        let agent = self.agents.iter().find(|ag| ag.id == id && ag.seen);
-        let look = look_for(id);
-        let pal = agent.map_or(&look.pal, |ag| &ag.pal);
-        let chair = agent.map_or(0, |ag| ag.seat % a::CHAIRS.len());
-        g.rect(fx, fy, fs, fs, c::WIN_BORDER_LO);
-        g.rect(fx + 1, fy + 1, fs - 2, fs - 2, c::WIN1);
-        g.rect(fx + 1, fy + 19, fs - 2, fs - 20, a::CHAIRS[chair][0]);
-        let head = match state {
-            State::Wait => &a::HEAD_SHOUT,
-            State::Idle => &a::HEAD_CLOSED,
-            State::Work => &a::HEAD_OPEN,
-        };
-        g.blit_scaled(head, fx + 3, fy + 5, Some(pal), 2, Some([fx + 1, fy + 1, fx + fs - 1, fy + fs - 1]));
+    fn draw_dialogue(&self, g: &mut Gfx, id: &str, _state: State, title: &str, text: &str) {
+        self.draw_patron_portrait(g, id, 8, a::WIN_Y + 13);
         g.text(&ellipsize(title, 66), 50, a::WIN_Y + 6, c::GOLD, 1, Some(c::TEXT_SHADOW));
         for (row, line) in text.lines().take(2).enumerate() {
             g.text(line, 50, a::WIN_Y + 19 + row as i32 * 19, c::TEXT, 2, Some(c::TEXT_SHADOW));
@@ -1378,40 +1523,83 @@ impl Scene {
     /// The message window: whoever waits for the human (portrait, name and
     /// what they want), else the party status. Focus never rotates on a timer.
     fn draw_message(&self, g: &mut Gfx, now: NaiveTime) {
-        if let Some(request) = self.selected.as_ref().and_then(|id| self.requests.iter().find(|r| &r.session == id)) {
-            let pages = task_pages(&request.text);
-            self.draw_dialogue(g, &request.session, State::Wait, &request.title, &pages[0]);
-            return;
-        }
         let t = self.t;
         let (x, y, w, h) = (0, a::WIN_Y, a::W as i32, a::H as i32 - a::WIN_Y);
-        let wl = self.waiting_list();
-        if let Some(&k) = wl.get(self.focus).filter(|_| self.selected.is_none()) {
-            let ag = &self.agents[k];
-            let says = if ag.why == Why::Ask { "HAS A QUESTION" } else { "NEEDS YOUR OK!" };
-            self.draw_dialogue(g, &ag.id, ag.state, &ellipsize(&ag.name, 33), says);
-            if wl.len() > 1 {
-                let n = format!("{}/{}", self.focus + 1, wl.len());
-                g.text(&n, x + w - 10 - text_width(&n, 1), y + 9, c::TEXT_DIM, 1, Some(c::TEXT_SHADOW));
+        if let Some(id) = self.attention_id() {
+            let session = self.sessions.iter().find(|s| s.id == id);
+            let request = self.requests.iter().position(|r| r.session == id);
+            let name = session.map_or(id, |s| s.name.as_str());
+            let permission = request.is_some() || session.is_some_and(|s| s.why == Why::Perm);
+            let status = if permission { "! APPROVAL NEEDED" } else { "? ANSWER NEEDED" };
+            let text = request
+                .map(|i| self.requests[i].text.as_str())
+                .or_else(|| {
+                    (!permission).then(|| self.details.iter().find(|d| d.id == id).map(|d| d.task.as_str())).flatten()
+                })
+                .filter(|text| !text.is_empty())
+                .unwrap_or(if permission {
+                    "OPEN REQUEST FOR PERMISSION DETAILS"
+                } else {
+                    "OPEN REQUEST TO READ THE QUESTION"
+                });
+            // The main question gets a 2x font; status and controls remain compact.
+            g.rect(3, y + 3, w - 6, 10, if self.attention_bright() { 0x4056a8 } else { c::WIN1 });
+            self.draw_patron_portrait(g, id, 8, y + 15);
+            g.text(&ellipsize(name, 55), 50, y + 5, c::GOLD, 1, None);
+            g.text(status, 50, y + 13, c::GOLD, 1, None);
+            let preview = crate::text::layout(text, 60);
+            if let Some(line) = preview.first() {
+                let line = ellipsize(&line.text, if self.next_attention_id().is_some() { 31 } else { 35 });
+                g.text(&line, 50, y + 22, c::TEXT, 2, Some(c::TEXT_SHADOW));
             }
-            if (t / 400) % 2 == 0 {
-                let (ax, ay) = (x + w - 16, y + h - 13);
-                for j in 0..4 {
-                    g.rect(ax + j, ay + j, 7 - 2 * j, 1, c::TEXT);
+            let viewed = self.attention.get(id).is_some_and(Option::is_none);
+            crate::review::draw_button(g, 50, y + 38, 140, 20, "VIEW REQUEST >");
+            g.text(if viewed { "SEEN - STILL PENDING" } else { "TAP PATRON TO ACKNOWLEDGE" }, 200, y + 45, c::GOLD, 1, None);
+            if self.next_attention_id().is_some() {
+                g.rect(435, y + 4, 1, h - 8, c::WIN_BORDER_LO);
+                let count = format!(
+                    "{}/{}",
+                    self.attention.keys().position(|key| key == id).unwrap_or(0) + 1,
+                    self.attention.len()
+                );
+                g.text(&count, 440, y + 9, c::GOLD, 1, None);
+                crate::review::draw_button(g, 439, y + 38, 35, 20, "NEXT");
+            }
+            g.rect(2, y + 1, w - 4, 2, if self.attention_bright() { base::W } else { c::GOLD });
+            return;
+        }
+        let resolved =
+            self.selected.as_deref().and_then(|id| self.resolved_attention.get(id).map(|r| (id, r))).or_else(|| {
+                if self.selected.is_none() && self.attention.is_empty() {
+                    self.resolved_attention.iter().max_by_key(|(_, (at, _))| at).map(|(id, r)| (id.as_str(), r))
+                } else {
+                    None
                 }
-            }
+            });
+        if let Some((id, (_, _))) = resolved.filter(|(_, (at, _))| self.t - at < 4000) {
+            let name = self.sessions.iter().find(|s| s.id == id).map_or(id, |s| s.name.as_str());
+            self.draw_dialogue(g, id, State::Work, &format!("{name} - REQUEST RESOLVED"), "NO LONGER WAITING");
             return;
         }
         if let Some(session) = self.sessions.iter().find(|s| Some(&s.id) == self.selected.as_ref()) {
             let pages = self.selected_task_pages();
             let page = self.task_page % pages.len();
-            let prefix = if session.state == State::Idle { "LAST" } else { "TASK" };
+            let previous_request = self.resolved_attention.get(&session.id).is_some_and(|(_, old)| {
+                old.as_ref().is_some_and(|text| self.details.iter().any(|d| d.id == session.id && &d.task == text))
+            });
+            let prefix = if previous_request {
+                "LAST REQUEST"
+            } else if session.state == State::Idle {
+                "LAST"
+            } else {
+                "TASK"
+            };
             let outside = !self.agents.iter().any(|ag| ag.id == session.id && ag.seen);
             let location = if outside { "OUTSIDE " } else { "" };
-            let name = if wl.is_empty() {
+            let name = if self.attention.is_empty() {
                 format!("{location}{prefix} {}", session.name)
             } else {
-                format!("!{} WAIT {location}{prefix} {}", wl.len(), session.name)
+                format!("!{} WAIT {location}{prefix} {}", self.attention.len(), session.name)
             };
             self.draw_dialogue(g, &session.id, session.state, &name, &pages[page]);
             // Vertical scrollbar; the surrounding 44x60 area is its hit target.
@@ -1472,7 +1660,10 @@ impl Scene {
         // Review is opaque. Drawing the hidden room first wastes a full scene
         // render on the board and delays the next touch sample.
         if let Some(review) = &self.review {
-            review.draw(&mut Gfx::new(fb));
+            let id = &review.request().session;
+            let name = self.sessions.iter().find(|s| &s.id == id).map_or(id.as_str(), |s| s.name.as_str());
+            let (pal, style) = self.patron_look(id);
+            review.draw_for_patron(&mut Gfx::new(fb), name, &pal, style);
             return;
         }
         paint_background(fb);
@@ -1508,12 +1699,136 @@ impl Scene {
         self.draw_overlays(&mut g);
         g.noclip();
         self.draw_message(&mut g, now);
+        if !self.attention.is_empty() && self.attention_id().is_none() {
+            g.rect(2, a::WIN_Y + 1, a::W as i32 - 4, 2, if self.attention_bright() { base::W } else { c::GOLD });
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn review_and_footer_keep_the_authoritative_patron_portrait() {
+        let now = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
+        for style in 0..3 {
+            let mut scene = Scene::new();
+            scene.set_sessions(&[session("a", State::Wait)]);
+            scene.set_appearance("a", (style << 20) | 1234);
+            let mut cafe = vec![0; a::W * a::H];
+            scene.render(&mut cafe, now);
+            scene.review = Some(crate::review::Review::new(
+                crate::approval::Request {
+                    id: "r".into(),
+                    session: "a".into(),
+                    title: "Permission".into(),
+                    tool_name: "Test".into(),
+                    text: "Synthetic request".into(),
+                },
+                true,
+            ));
+            let mut review = vec![0; a::W * a::H];
+            scene.render(&mut review, now);
+            for y in 0..36 {
+                assert_eq!(
+                    &cafe[(a::WIN_Y as usize + 15 + y) * a::W + 8..(a::WIN_Y as usize + 15 + y) * a::W + 42],
+                    &review[(9 + y) * a::W + 104..(9 + y) * a::W + 138]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn one_waiter_has_no_next_and_resolution_preserves_history() {
+        let mut scene = Scene::new();
+        scene.set_sessions(&[session("a", State::Wait)]);
+        scene.set_details(vec![SessionDetail { id: "a".into(), task: "May I run tests?".into(), target: None }]);
+        assert!(scene.next_attention_id().is_none());
+        scene.click(450, a::WIN_Y + 30);
+        assert!(scene.selected_id().is_none());
+        assert!(scene.attention_bright(), "disabled Next must not acknowledge a request");
+        scene.focus_patron("a".into());
+        scene.set_sessions(&[session("a", State::Work)]);
+        assert!(scene.attention_id().is_none());
+        assert_eq!(scene.resolved_attention["a"].1.as_deref(), Some("May I run tests?"));
+        let timestamp = scene.resolved_attention["a"].0;
+        scene.tick(4100);
+        scene.set_sessions(&[session("a", State::Work)]);
+        assert_eq!(scene.resolved_attention["a"].0, timestamp, "refresh cannot replay the resolved notification");
+        scene.set_sessions(&[session("a", State::Wait)]);
+        assert!(!scene.resolved_attention.contains_key("a"));
+    }
+
+    #[test]
+    fn attention_pulses_once_and_acknowledgement_survives_refresh() {
+        let mut scene = Scene::new();
+        let waiting = session("a", State::Wait);
+        scene.set_sessions(&[waiting.clone()]);
+        assert!(scene.attention_bright());
+        scene.tick(600);
+        assert!(!scene.attention_bright());
+        scene.set_sessions(&[waiting.clone()]);
+        assert!(!scene.attention_bright(), "refresh cannot restart a pulse");
+        scene.tick(600);
+        assert!(scene.attention_bright());
+        scene.click(100, a::WIN_Y + 25);
+        assert!(!scene.attention_bright());
+        assert!(scene.review.is_none());
+        scene.set_sessions(&[waiting.clone()]);
+        assert_eq!(scene.attention.get("a"), Some(&None));
+        scene.set_sessions(&[session("a", State::Work)]);
+        assert!(scene.attention.is_empty());
+        scene.set_sessions(&[waiting]);
+        assert!(scene.attention_bright());
+        scene.tick(28_800);
+        assert!(scene.attention_bright(), "pulse must continue near the end of the 30-second window");
+        scene.tick(1_200);
+        assert!(!scene.attention_bright(), "pulse must stop at 30 seconds");
+        assert!(scene.attention.contains_key("a"), "steady marker survives pulse expiry");
+    }
+
+    #[test]
+    fn attention_queue_includes_overflow_and_preserves_reading_selection() {
+        let mut scene = Scene::new();
+        let mut sessions: Vec<_> = (0..12).map(|i| session(&i.to_string(), State::Work)).collect();
+        sessions[10].state = State::Wait;
+        scene.set_sessions(&sessions);
+        assert_eq!(scene.attention_id(), Some("10"));
+        scene.focus_patron("0".into());
+        sessions[11].state = State::Wait;
+        scene.set_sessions(&sessions);
+        assert_eq!(scene.selected_id(), Some("0"));
+        scene.clear_selection();
+        assert_eq!(scene.attention_id(), Some("10"));
+        scene.click(450, a::WIN_Y + 30);
+        assert_eq!(scene.attention_id(), Some("11"));
+        assert!(scene.review.is_none());
+        scene.click(100, a::WIN_Y + 48);
+        let review = scene.review.as_ref().unwrap();
+        assert_eq!(review.request().session, "11");
+        assert!(review.decision.is_none());
+    }
+
+    #[test]
+    fn replacement_request_realerts_without_moving_selection() {
+        let mut scene = Scene::new();
+        scene.set_sessions(&[session("a", State::Wait), session("b", State::Work)]);
+        let request = crate::approval::Request {
+            id: "one".into(),
+            session: "a".into(),
+            title: "Permission".into(),
+            tool_name: "test".into(),
+            text: "May I run tests?".into(),
+        };
+        scene.set_requests(vec![request.clone()]);
+        scene.acknowledge_attention("a");
+        scene.focus_patron("b".into());
+        scene.set_requests(vec![request.clone()]);
+        assert!(!scene.attention_bright());
+        scene.set_requests(vec![crate::approval::Request { id: "two".into(), ..request }]);
+        assert!(scene.attention_bright());
+        assert_eq!(scene.selected_id(), Some("b"));
+    }
 
     fn session(id: &str, state: State) -> Session {
         Session {
