@@ -464,7 +464,7 @@ impl Client {
                 }
                 .into()
             } else if receipt {
-                "SENT - CHECK DESKTOP".into()
+                "DECISION SAVED - CHECK DESKTOP".into()
             } else if let Some(r) = r {
                 match r.state {
                     2 => "SENDING DECISION...",
@@ -475,7 +475,7 @@ impl Client {
                     8 => "OUTCOME UNKNOWN - CHECK DESKTOP",
                     _ => {
                         if !eligible {
-                            "ANSWER IN DESKTOP"
+                            "CONTINUE ON DESKTOP"
                         } else if !self.local_review {
                             "TAP TEXT TO ENABLE OPTIONS"
                         } else if !self.armed(now) {
@@ -487,7 +487,7 @@ impl Client {
                 }
                 .into()
             } else {
-                "READ ONLY - OPEN DESKTOP".into()
+                "DETAILS - CONTINUE ON DESKTOP".into()
             };
             review.set_anchor(v.review_anchor as usize);
             self.scene.review = Some(review);

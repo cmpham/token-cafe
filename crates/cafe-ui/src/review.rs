@@ -174,7 +174,7 @@ impl Review {
                 None,
             );
         } else if !self.status.is_empty() || !self.actionable {
-            g.text(if self.status.is_empty() { "ANSWER IN DESKTOP" } else { &self.status }, 12, 238, c::GOLD, 1, None);
+            g.text(if self.status.is_empty() { "CONTINUE ON DESKTOP" } else { &self.status }, 12, 238, c::GOLD, 1, None);
         } else {
             for (x, w, label, color) in [(12, 144, "DENY", c::WIN1), (168, 264, "APPROVE ONCE", 0x35784d)] {
                 if (x == 12 && !self.allow_deny) || (x == 168 && !self.allow_approve) {

@@ -898,9 +898,9 @@ impl Scene {
                 tool_name: String::new(),
                 id: String::new(),
                 session: id.clone(),
-                title: if permission { "APPROVAL IN DESKTOP" } else { "QUESTION / TASK" }.into(),
+                title: if permission { "APPROVAL ON DESKTOP" } else { "QUESTION / TASK" }.into(),
                 text: if permission {
-                    "Claude or Codex is waiting for permission.\n\nThis request is not linked to board approval.\nOpen Desktop to read and answer the exact request.\n\nDouble-tap here or tap DESKTOP >.".into()
+                    "Claude or Codex is waiting for permission.\n\nThis request is not linked to board approval.\nCheck the original session on your computer to read and answer the exact request.".into()
                 } else { self
                     .details
                     .iter()
@@ -1554,7 +1554,7 @@ impl Scene {
             }
             let viewed = self.attention.get(id).is_some_and(Option::is_none);
             crate::review::draw_button(g, 50, y + 38, 140, 20, "VIEW REQUEST >");
-            g.text(if viewed { "SEEN - STILL PENDING" } else { "TAP PATRON TO ACKNOWLEDGE" }, 200, y + 45, c::GOLD, 1, None);
+            g.text(if viewed { "SEEN - STILL PENDING" } else { "TAP MESSAGE TO ACKNOWLEDGE" }, 200, y + 45, c::GOLD, 1, None);
             if self.next_attention_id().is_some() {
                 g.rect(435, y + 4, 1, h - 8, c::WIN_BORDER_LO);
                 let count = format!(
@@ -1625,9 +1625,8 @@ impl Scene {
             return;
         }
         // With no selection, show the stable cafe summary.
-        let (mut working, mut idle, mut seated) = (0, 0, 0);
+        let (mut working, mut idle) = (0, 0);
         for ag in self.agents.iter().filter(|a| a.mode == Mode::Seated) {
-            seated += 1;
             working += (ag.state == State::Work) as usize;
             idle += (ag.state == State::Idle) as usize;
         }
@@ -1646,11 +1645,11 @@ impl Scene {
         let clock = format!("{:02}{colon}{:02}", now.hour(), now.minute());
         g.text(&clock, x + w - 12 - text_width(&clock, 2), y + 10, c::GOLD, 2, Some(c::TEXT_SHADOW));
         let line = if self.overflow > 0 {
-            format!("+{} OUTSIDE. TAP HERE FOR DETAILS", self.overflow)
-        } else if seated == 0 {
+            format!("+{} OUTSIDE. TAP A PATRON FOR DETAILS", self.overflow)
+        } else if self.sessions.is_empty() {
             "THE CAFE IS EMPTY. NO AGENTS ONLINE.".into()
         } else {
-            "TAP A PATRON OR HERE FOR DETAILS".into()
+            "TAP A PATRON FOR DETAILS".into()
         };
         g.text(&line, x + 12, y + 31, c::TEXT_DIM, 1, Some(c::TEXT_SHADOW));
     }
@@ -1866,7 +1865,7 @@ mod tests {
         scene.focus_patron("claude:pending".into());
         scene.review_input(true, 200, 240, false);
         let review = scene.review.as_ref().unwrap();
-        assert_eq!(review.request().title, "APPROVAL IN DESKTOP");
+        assert_eq!(review.request().title, "APPROVAL ON DESKTOP");
         assert!(review.request().text.contains("not linked to board approval"));
         assert!(!review.actionable);
     }
