@@ -412,48 +412,33 @@ const ARM = {
         'KSSK',
         '.KK.',
     ]),
+    // A compact wave: palm beside the head, elbow bent back to the shoulder.
     upA: S('arm.upA', [
-        '.KK.',
-        'KSSK',
-        'KSSK',
-        'KSSK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KcCK',
-        'KcCK',
-        'KcCK',
-        '.KK.',
+        '...KK..',
+        '..KSSK.',
+        '..KSSK.',
+        '..KsSK.',
+        '..KCCK.',
+        '..KcCK.',
+        '..KcCK.',
+        '.KcCCK.',
+        'KCCCK..',
+        'KCCK...',
+        '.KK....',
     ]),
     upB: S('arm.upB', [
-        '...KK',
-        '..KSSK',
-        '..KSSK',
-        '.KSSK.',
-        '.KCCK.',
-        '.KCCK.',
-        'KCCK..',
-        'KCCK..',
-        'KCCK..',
-        'KCCK..',
-        'KCCK..',
-        'KCCK..',
-        'KCCK..',
-        'KCCK..',
-        'KCCK..',
-        'KcCK..',
-        'KcCK..',
-        'KcCK..',
-        '.KK...',
-    ].map(r => r.padEnd(6, '.'))),
+        '....KK.',
+        '...KSSK',
+        '...KSSK',
+        '..KSsK.',
+        '..KCCK.',
+        '..KcCK.',
+        '..KcCK.',
+        '.KcCCK.',
+        'KCCCK..',
+        'KCCK...',
+        '.KK....',
+    ]),
     chin: S('arm.chin', [
         '.KKKK.',
         'KSSSSK',
@@ -565,8 +550,8 @@ function buildPoses(st) {
     ];
     P.think = compose('think', [[T, 0, 13], [ARM.left, 0, 15], ...head(HEAD.up, 1, 0, st), [ARM.chin, 8, 10]]);
     P.raise = [
-        compose('raiseA', [[T, 0, 13], [ARM.left, 0, 15], ...head(HEAD.shout, 1, 0, st), [ARM.upA, 14, -5]]),
-        compose('raiseB', [[T, 0, 13], [ARM.left, 0, 15], ...head(HEAD.shout, 1, 0, st), [ARM.upB, 13, -5]]),
+        compose('raiseA', [[T, 0, 13], [ARM.left, 0, 15], ...head(HEAD.shout, 1, 0, st), [ARM.upA, 12, 5]]),
+        compose('raiseB', [[T, 0, 13], [ARM.left, 0, 15], ...head(HEAD.shout, 1, 0, st), [ARM.upB, 12, 5]]),
     ];
     P.stretch = compose('stretch', [[T, 0, 13], ...head(HEAD.yawn, 1, 0, st), [ARM.behindL, -3, 6], [ARM.behindR, 12, 6]]);
     P.sip = [
@@ -988,7 +973,7 @@ function renderBackground() {
 
 const SIGN = 'TOKEN CAFE';
 function drawSign(t) {
-    const k = 2, w = textWidth(SIGN, k), x0 = (W - w) >> 1, y0 = 8;
+    const k = 3, w = textWidth(SIGN, k), x0 = (W - w) >> 1, y0 = 3;
     // a tube that dies for a moment now and then
     const cycle = t % 9000, dead = cycle > 7200 && cycle < 7700 && ((cycle / 90) | 0) % 2 === 0 ? 7 : -1;
     for (let pass = 0; pass < 2; pass++) {
@@ -1003,9 +988,14 @@ function drawSign(t) {
             }
         }
     }
-    const sub = 'OPEN 24H', sw = textWidth(sub);
-    const sx = (W - sw) >> 1;
-    text(sub, sx, y0 + 18, C.cyan, 1, C.cyanGlow);
+    // A tiny enamel sign, with a steady light and crisp lettering.
+    const sx = (W - 68) >> 1;
+    rect(sx, 25, 68, 10, C.cyanGlow);
+    rect(sx + 1, 26, 66, 8, BASE.K);
+    rect(sx + 4, 29, 2, 2, C.cyan);
+    text('OPEN', sx + 9, 26, C.cyan);
+    rect(sx + 36, 28, 1, 4, C.cyanGlow);
+    text('24H', sx + 42, 26, C.chalkHi);
 }
 
 function drawStars(t) {

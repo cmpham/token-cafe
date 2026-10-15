@@ -1123,8 +1123,14 @@ impl Scene {
                 }
             }
         }
-        let sub = "OPEN 24H";
-        g.text(sub, (a::W as i32 - text_width(sub, 1)) >> 1, y0 + 24, c::CYAN, 1, Some(c::CYAN_GLOW));
+        // A tiny enamel sign, with a steady light and crisp lettering.
+        let sx = (a::W as i32 - 68) >> 1;
+        g.rect(sx, 25, 68, 10, c::CYAN_GLOW);
+        g.rect(sx + 1, 26, 66, 8, base::K);
+        g.rect(sx + 4, 29, 2, 2, c::CYAN);
+        g.text("OPEN", sx + 9, 26, c::CYAN, 1, None);
+        g.rect(sx + 36, 28, 1, 4, c::CYAN_GLOW);
+        g.text("24H", sx + 42, 26, c::CHALK_HI, 1, None);
     }
 
     /// The chalkboard and its labels are in the background; only the values move.
