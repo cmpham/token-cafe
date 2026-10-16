@@ -10,7 +10,7 @@ Conversational questions and other requests have a read-only review and desktop 
 
 ## Install / remove
 
-Run `python3 tools/approval/install.py` to merge the hook into `~/.claude/settings.json`. The installer backs up the file, preserves other hooks/settings, and avoids duplicates. Use the same Python interpreter with `--remove` to remove only this hook. Installation is local to this machine; paths refer to this checkout, so reinstall if it moves. The app listens on `~/.token-cafe/approval.sock` in a private directory (0700), with socket mode 0600. Only one app instance owns the bridge. macOS and Linux use the same Unix-socket hook path; desktop URL navigation remains macOS-only.
+Run `python3 tools/approval/install.py` to merge the hook into `~/.claude/settings.json`. The installer backs up the file, preserves other hooks/settings, and avoids duplicates. Use the same Python interpreter with `--remove` to remove only this hook. Installation is local to this machine. The installer copies the bridge to `~/.token-cafe/claude_hook.py`, so it survives moving or deleting this checkout. Reinstall after updating the bridge code. It migrates old Token Café checkout registrations, preserves unrelated handlers, and honors `CLAUDE_CONFIG_DIR` for the settings location. Run `python3 tools/approval/install.py --check` to check registration, disabled hooks, and installed script freshness. This checks installation, not whether a live provider has invoked the hook. The app listens on `~/.token-cafe/approval.sock` in a private directory (0700), with socket mode 0600. Only one app instance owns the bridge. macOS and Linux use the same Unix-socket hook path; desktop URL navigation remains macOS-only.
 
 Official hook contract: https://code.claude.com/docs/en/hooks#permissionrequest
 
@@ -46,3 +46,40 @@ Verified with the installed Claude 2.1.295 runtime and a separate Claude Desktop
 The hook writes a private `~/.token-cafe/approval-hook-status.json` diagnostic containing only event and timestamp (no request contents). Events distinguish receipt, waiting, decision delivery, desktop handoff/expiry, and bridge errors. The wait budget is now 590 seconds (hook socket 595, Claude hook timeout 600) to allow time to read a long request. A request already pending before installation cannot be attached retrospectively; fresh Desktop requests were verified without restarting Claude Desktop.
 
 Codex request collection and response remain an explicit missing integration; the Claude tests do not establish Codex support.
+
+## Recovery from a missing approval bridge (2026-10-16)
+
+The installed hook referenced a deleted Codex worktree. Claude could still display
+its native permission dialog, but no request reached the running broker, so the
+board could only offer desktop handoff. The hook status file still contained an
+old successful event; its timestamp must be checked before interpreting it as
+current health.
+
+The installer now installs a private, durable script outside Git worktrees and
+replaces recognized stale registrations, including ones using an older Python
+interpreter. It backs up settings and preserves other hooks and permission rules.
+It does not disable sandboxing or grant persistent tool permissions.
+
+For a missing request:
+
+1. Run `python3 tools/approval/install.py --check`; reinstall if it needs repair.
+2. Confirm the companion is running and the board reports `synced v2`.
+3. Trigger a **fresh** permission request. A prompt whose hook already failed
+   cannot be reattached; answer it on desktop or cancel/retry it yourself.
+4. Check the timestamp/event in `~/.token-cafe/approval-hook-status.json`.
+   `waiting_for_board` proves the hook connected to the broker;
+   `decision_returned` means it returned a decision through that invocation.
+   Neither proves the tool executed successfully.
+
+Regression command: `python3 tools/approval/test_bridge.py`. Isolated tests cover
+migration from a deleted worktree, idempotent reinstall, custom config directories,
+preservation/removal, disabled hooks, exact allow/deny replies, desktop handoff,
+and an unavailable broker leaving the native prompt authoritative.
+
+Live repair verification: a synthetic `TEST ONLY` PermissionRequest reached the
+production companion and physical board. The user tapped Approve once on the
+board; the installed hook returned exactly `hookSpecificOutput` with
+`hookEventName: PermissionRequest` and `decision.behavior: allow`. No tool was
+executed by this fixture. Three isolated Python bridge tests and three Rust
+broker tests passed. Actual execution of the screenshot's command was not tested
+or authorized by this repair.
