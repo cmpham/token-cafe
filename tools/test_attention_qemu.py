@@ -78,9 +78,15 @@ def run(device, qmp, process):
     host.advance(600)
     dim = capture('04-new-request-dim')
     assert pixel(bright, 2, 213) != pixel(dim, 2, 213), 'footer accent did not pulse'
-    # Text stays readable and unchanged through the pulse.
-    for y in range(230, 237):
-        assert bright[(y * 480 + 50) * 3:(y * 480 + 180) * 3] == dim[(y * 480 + 50) * 3:(y * 480 + 180) * 3]
+    # A large surface must change, not just the old two-pixel accent.
+    changed = sum(pixel(bright, x, y) != pixel(dim, x, y)
+                  for y in range(212, 272) for x in range(480))
+    assert changed > 14000, f'footer pulse too small: {changed} pixels'
+    # The question's white glyphs stay in exactly the same positions in both phases.
+    white = bytes((247, 247, 255))  # TEXT after RGB565 conversion
+    for y in range(234, 248):
+        for x in range(50, 430):
+            assert (pixel(bright, x, y) == white) == (pixel(dim, x, y) == white)
     host.advance(600)
     host.present()
     phase2 = struct.unpack('<H', device.request(10, struct.pack('<I', (213 * 480 + 2) * 2))[:2])[0]

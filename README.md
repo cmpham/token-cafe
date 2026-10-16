@@ -133,7 +133,7 @@ cargo run --example screenshots -- --monologues    # preview rotation in target/
 
 ### Attention alerts
 
-A newly waiting patron pulses the footer accent for 30 seconds, then keeps an amber
+A newly waiting patron pulses the full footer background for 30 seconds, then keeps an amber
 frame until the request is resolved. A solid amber frame highlights the active
 patron; other waiting patrons keep quiet corner markers and steady nameplates.
 The footer shows the patron, approval/question type, a larger request preview,

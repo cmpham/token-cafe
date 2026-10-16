@@ -1,11 +1,22 @@
 # Attention UI: QEMU verification
 
-Verified on 2026-10-15 with the rebuilt Xtensa firmware in Espressif QEMU 9.2.2.
+Attention scenario rerun on 2026-10-16 with the rebuilt Xtensa firmware in Espressif QEMU 9.2.2.
 All sessions, requests, keys, and actions are synthetic. No real command was approved or run.
 
-The latest simplification rerun verifies taller footer controls, removal of the single-waiter rail, a short acknowledgement hint, and approval controls appearing after the guard period. Protocol and transition results below are from the preceding verification run.
+The October 15 simplification rerun verified taller footer controls, removal of the single-waiter rail, a short acknowledgement hint, and approval controls appearing after the guard period. Protocol and transition results below are from the preceding verification run.
 
-## Results
+## October 16: visible footer pulse
+
+The original pulse only changed a narrow header strip and a two-pixel edge. The new bright phase paints the full footer interior warm amber before drawing its text and controls; the dim phase restores the blue background. QEMU measured 19,403 changed pixels out of the 28,800-pixel footer (67%), with unchanged white preview glyphs. All 15 attention checks passed, including 30 seconds of pulsing, acknowledgement, sleep/wake, and guarded review. A native regression also verifies the full footer pulses while another patron is selected. The LCD damage/staging test passed. All 141 native workspace tests passed.
+
+![Pulse phases](pulse-phases.png)
+
+[Looping phase comparison](footer-pulse.gif) repeats two QEMU captures for illustration; the actual alert stops at 30 seconds or acknowledgement.
+
+The production application was flashed on October 16 with esptool hash verification after a private full-flash backup. The installed pre-update image matched the previous build byte-for-byte. Panel orientation, color polarity, touch mapping, pairing, and NVS were preserved. The board boots and advertises with the new image. After a user-authorized macOS Bluetooth off/on cycle and companion restart, the desktop window reports `TokenCafe-6336 synced v2`. Serial telemetry confirms `CONNECTED` and continued rendering (`draw_ms=25`, `pack_ms=16`, `lcd_ms=7` in one sample). Physical pulse visibility still requires the user to observe a new attention request.
+
+## Earlier verification
+
 
 - `test_attention_qemu.py`: PASS, 15 lifecycle checks and 14 QMP framebuffer captures, including the polished UI and the full 30-second pulse window.
 - `test_protocol_v2_qemu.py`: PASS at transport capacities 182, 244, and 509; additional seat identity, animation, sleep/wake, reconnect, 64-session, malformed body, and replay checks passed.

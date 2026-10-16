@@ -1525,6 +1525,11 @@ impl Scene {
     fn draw_message(&self, g: &mut Gfx, now: NaiveTime) {
         let t = self.t;
         let (x, y, w, h) = (0, a::WIN_Y, a::W as i32, a::H as i32 - a::WIN_Y);
+        // Pulse the full message surface: a thin edge is easy to miss on the LCD.
+        // Paint before text and controls so their foreground never flashes off.
+        if self.attention_bright() {
+            g.rect(x + 3, y + 3, w - 6, h - 6, 0x70451c);
+        }
         if let Some(id) = self.attention_id() {
             let session = self.sessions.iter().find(|s| s.id == id);
             let request = self.requests.iter().position(|r| r.session == id);
@@ -1543,7 +1548,6 @@ impl Scene {
                     "OPEN REQUEST TO READ THE QUESTION"
                 });
             // The main question gets a 2x font; status and controls remain compact.
-            g.rect(3, y + 3, w - 6, 10, if self.attention_bright() { 0x4056a8 } else { c::WIN1 });
             self.draw_patron_portrait(g, id, 8, y + 15);
             g.text(&ellipsize(name, 55), 50, y + 5, c::GOLD, 1, None);
             g.text(status, 50, y + 13, c::GOLD, 1, None);
@@ -1756,6 +1760,27 @@ mod tests {
         assert_eq!(scene.resolved_attention["a"].0, timestamp, "refresh cannot replay the resolved notification");
         scene.set_sessions(&[session("a", State::Wait)]);
         assert!(!scene.resolved_attention.contains_key("a"));
+    }
+
+    #[test]
+    fn attention_pulses_a_visible_surface_while_reading_another_patron() {
+        let mut scene = Scene::new();
+        scene.set_sessions(&[session("waiting", State::Wait), session("reading", State::Work)]);
+        scene.focus_patron("reading".into());
+        let now = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
+        let mut bright = vec![0; a::W * a::H];
+        let mut dim = bright.clone();
+        scene.render(&mut bright, now);
+        scene.tick(600);
+        scene.render(&mut dim, now);
+        let footer = a::WIN_Y as usize * a::W;
+        let changed = bright[footer..].iter().zip(&dim[footer..]).filter(|(a, b)| a != b).count();
+        assert!(changed > 14_000, "attention must change most of the footer, got {changed}");
+        assert_eq!(scene.selected_id(), Some("reading"));
+        scene.tick(600);
+        scene.acknowledge_attention("waiting");
+        scene.render(&mut bright, now);
+        assert_eq!(&bright[footer..], &dim[footer..], "acknowledgement restores the steady footer");
     }
 
     #[test]
