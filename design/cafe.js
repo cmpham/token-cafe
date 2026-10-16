@@ -78,7 +78,7 @@ const C = {
 /* Per-agent laptops. */
 const LAPTOP = {
     claude: { L: q('#ece2d2'), l: q('#c4b6a2'), A: q('#d97757'), a: q('#f4b090') },
-    codex:  { L: q('#3e4250'), l: q('#2a2d38'), A: q('#e8f0f4'), a: q('#6ae0d0') },
+    codex:  { L: q('#74a699'), l: q('#456f65'), A: q('#f7f3ef'), a: q('#afd3c6') },
 };
 
 /* Avatar looks, picked from a hash of the session id. */
@@ -606,17 +606,34 @@ const LID = S('lid', [
     'KKKKKKKKKKKKK',
 ]);
 
-/* Claude's lid shows the CLI's asterisk spinner; Codex's a blinking prompt. */
+/* Claude's lid shows the CLI's asterisk spinner; Codex's the ChatGPT knot. */
 const SPARK = [
     S('spark0', ['.......', '.......', '.......', '...A...', '.......', '.......', '.......']),
     S('spark1', ['.......', '.......', '..A.A..', '...A...', '..A.A..', '.......', '.......']),
     S('spark2', ['.......', '.A.A.A.', '..AAA..', '.AAaAA.', '..AAA..', '.A.A.A.', '.......']),
     S('spark3', ['A..A..A', '.A.A.A.', '..AAA..', 'AAAaAAA', '..AAA..', '.A.A.A.', 'A..A..A']),
 ];
-const PROMPT = [
-    S('prompt0', ['.......', '.A.....', '..A....', '...A...', '..A....', '.A.....', '.......']),
-    S('prompt1', ['.......', '.A.....', '..A....', '...A...', '..A....', '.A..aaa', '.......']),
-];
+// Compact knot: an open center avoids a checkerboard at native board scale.
+const CHATGPT = S('chatgpt', [
+    '...AAAA....',
+    '..A....AAA.',
+    '.AA.AAA..A.',
+    'A.AA...A..A',
+    'A.A.....A.A',
+    'A..A...AA.A',
+    '.A..AAA.AA.',
+    '.AAA....A..',
+    '....AAAA...',
+]);
+// A two-lobe highlight travels clockwise; the whole knot stays visible.
+const CHATGPT_WORK = Array.from({ length: 6 }, (_, frame) => S(`chatgptWork${frame}`,
+    CHATGPT.rows.map((row, y) => [...row].map((ch, x) => {
+        if (ch === '.') return ch;
+        const angle = (Math.atan2(y - 4, x - 5) + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2);
+        const sector = Math.floor(angle / (Math.PI / 3));
+        return (sector - frame + 6) % 6 < 2 ? 'A' : 'a';
+    }).join(''))));
+
 
 const PROPS = {
     duck: S('duck', [
@@ -1169,12 +1186,12 @@ function drawLaptop(sc, a, x, y) {
     rect(x - 1, y + 11, 15, 2, BASE.K);
     rect(x, y + 11, 13, 1, pal.l);
     let logo;
-    if (a.kind === 'codex') logo = PROMPT[a.state === 'work' ? ((sc.t / 450) | 0) % 2 : 1];
+    if (a.kind === 'codex') logo = a.state === 'work' ? CHATGPT_WORK[((sc.t / 260) | 0) % 6] : CHATGPT;
     else if (a.state === 'work') { const seq = [0, 1, 2, 3, 2, 1]; logo = SPARK[seq[((sc.t / 130) | 0) % seq.length]]; }
     else logo = SPARK[3];
     let lp = pal;
     if (a.state === 'wait' && ((sc.t / 300) | 0) % 2) lp = Object.assign({}, pal, { A: BASE.Y, a: BASE.W });
-    blit(logo, x + 3, y + 2, lp);
+    blit(logo, x + (a.kind === 'codex' ? 1 : 3), y + (a.kind === 'codex' ? 1 : 2), lp);
 }
 
 function drawPlate(sc, a, cx, y) {
@@ -1382,7 +1399,7 @@ function inventory() {
     Object.values(HEAD).forEach(add);
     Object.values(POSE).forEach(v => (Array.isArray(v) ? v.forEach(add) : add(v)));
     [CHAIR, LID, ZSMALL, ZBIG, CURSOR].forEach(add);
-    SPARK.forEach(add); PROMPT.forEach(add);
+    SPARK.forEach(add); add(CHATGPT); CHATGPT_WORK.forEach(add);
     Object.values(PROPS).forEach(add); Object.values(BUBBLE).forEach(add); Object.values(ICON).forEach(add);
     return all.map(s => ({ name: s.name, w: s.w, h: s.h, bytes4bpp: Math.ceil((s.w * s.h) / 2) }));
 }
@@ -1402,7 +1419,7 @@ function exportAssets() {
         PANTS: PANTS.map(q), CHAIRS: CHAIRS.map(p => p.map(q)),
         LOOK_V: q('#f4f2ec'), LOOK_F: q('#3a2420'), IDLE_TEXT: q('#7a7068'),
         ICON_LAPTOP_A: q('#9ad0ff'), ICON_LAPTOP_a: q('#3a70c0'),
-        HEAD, POSES, CHAIR, LID, SPARK, PROMPT, PROPS, BUBBLE, ZSMALL, ZBIG, KEYS, CURSOR, ICON, GLYPH, bg,
+        HEAD, POSES, CHAIR, LID, SPARK, CHATGPT, CHATGPT_WORK, PROPS, BUBBLE, ZSMALL, ZBIG, KEYS, CURSOR, ICON, GLYPH, bg,
     };
 }
 

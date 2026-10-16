@@ -1314,7 +1314,7 @@ impl Scene {
         g.rect(x + 1, y + 2, 12, 1, l[1]);
     }
 
-    /// Claude's lid shows its asterisk spinner, Codex's a blinking prompt.
+    /// Claude's lid shows its asterisk spinner, Codex's a clockwise highlight around the ChatGPT knot.
     fn draw_laptop(&self, g: &mut Gfx, ag: &Agent, x: i32, y: i32) {
         let t = self.t;
         let l = a::LAPTOP[ag.codex as usize];
@@ -1327,7 +1327,7 @@ impl Scene {
         g.rect(x - 1, y + 11, 15, 2, base::K);
         g.rect(x, y + 11, 13, 1, l[1]);
         let logo = if ag.codex {
-            &a::PROMPT[if ag.state == State::Work && (t / 450) % 2 == 0 { 0 } else { 1 }]
+            if ag.state == State::Work { &a::CHATGPT_WORK[((t / 260) % 6) as usize] } else { &a::CHATGPT }
         } else if ag.state == State::Work {
             const SEQ: [usize; 6] = [0, 1, 2, 3, 2, 1];
             &a::SPARK[SEQ[((t / 130) % 6) as usize]]
@@ -1338,7 +1338,7 @@ impl Scene {
             p.set(slot::A, base::Y);
             p.set(slot::a, base::W);
         }
-        g.blit(logo, x + 3, y + 2, Some(&p), false);
+        g.blit(logo, x + if ag.codex { 1 } else { 3 }, y + if ag.codex { 1 } else { 2 }, Some(&p), false);
     }
 
     fn draw_plate(&self, g: &mut Gfx, ag: Option<&Agent>, cx: i32, y: i32) {
@@ -1866,6 +1866,36 @@ mod tests {
             branch: None,
             active_subagents: None,
         }
+    }
+
+    #[test]
+    fn codex_logo_animates_only_while_working() {
+        let mut scene = Scene::new();
+        scene.set_sessions(&[session("2", State::Work)]);
+        let render = |scene: &Scene| {
+            let mut frame = vec![0; a::W * a::H];
+            scene.draw_laptop(&mut Gfx::new(&mut frame), &scene.agents[0], 10, 10);
+            frame
+        };
+        scene.t = 0;
+        let first = render(&scene);
+        scene.t = 259;
+        assert_eq!(first, render(&scene));
+        scene.t = 260;
+        assert_ne!(first, render(&scene));
+        scene.t = 1560;
+        assert_eq!(first, render(&scene));
+        scene.agents[0].state = State::Idle;
+        let idle = render(&scene);
+        scene.t = 1820;
+        assert_eq!(idle, render(&scene));
+        scene.agents[0].state = State::Wait;
+        scene.t = 0;
+        let waiting = render(&scene);
+        scene.t = 130;
+        assert_eq!(waiting, render(&scene));
+        scene.t = 300;
+        assert_ne!(waiting, render(&scene));
     }
 
     #[test]

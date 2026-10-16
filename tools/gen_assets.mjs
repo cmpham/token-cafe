@@ -24,7 +24,8 @@ const add = (name, s) => { sprites.push([name, s]); return name; };
 for (const [k, s] of Object.entries(A.HEAD)) add(`HEAD_${scream(k)}`, s);
 add('CHAIR', A.CHAIR); add('LID', A.LID);
 A.SPARK.forEach((s, i) => add(`SPARK_${i}`, s));
-A.PROMPT.forEach((s, i) => add(`PROMPT_${i}`, s));
+add('CHATGPT', A.CHATGPT);
+A.CHATGPT_WORK.forEach((s, i) => add(`CHATGPT_WORK_${i}`, s));
 for (const [k, s] of Object.entries(A.PROPS)) add(`PROP_${scream(k)}`, s);
 for (const [k, s] of Object.entries(A.BUBBLE)) add(`BUBBLE_${scream(k)}`, s);
 add('ZSMALL', A.ZSMALL); add('ZBIG', A.ZBIG);
@@ -90,7 +91,8 @@ for (const [name] of sprites) {
 R.push('');
 const group = (name, prefix, n) => R.push(`pub static ${name}: [Sprite; ${n}] = [${Array.from({ length: n }, (_, i) => `${prefix}_${i}`).join(', ')}];`);
 group('SPARK', 'SPARK', A.SPARK.length);
-group('PROMPT', 'PROMPT', A.PROMPT.length);
+group('CHATGPT_WORK', 'CHATGPT_WORK', A.CHATGPT_WORK.length);
+
 group('KEYS', 'KEY', A.KEYS.length);
 R.push('');
 

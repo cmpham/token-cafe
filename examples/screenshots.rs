@@ -123,6 +123,22 @@ fn gif(path: &str, frames: &[Vec<u8>], k: usize, delay_cs: u16) {
 
 fn main() {
     use {ForcedPose as P, Kind::*, State::*};
+    if std::env::args().any(|arg| arg == "--logo") {
+        let now = NaiveTime::from_hms_opt(21, 47, 0).unwrap();
+        let mut scene = Scene::new();
+        scene.set_sessions(&[
+            s("logo-claude", "Claude", Claude, Work, Why::None, P::Auto, 0),
+            s("logo-codex", "Codex", Codex, Work, Why::None, P::Auto, 0),
+        ]);
+        run(&mut scene, 2000);
+        let mut frames = Vec::new();
+        for _ in 0..24 {
+            frames.push(rgb(&scene, now, 3));
+            scene.tick(130);
+        }
+        gif("docs/logo-animation.gif", &frames, 3, 13);
+        return;
+    }
     if std::env::args().any(|arg| arg == "--attention") {
         let now = NaiveTime::from_hms_opt(21, 47, 0).unwrap();
         let mut scene = Scene::new();
