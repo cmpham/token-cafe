@@ -11,6 +11,7 @@ fn main() {
     std::fs::create_dir_all("target/review-previews").unwrap();
     let mut review = Review::new(
         Request {
+            choices: 0,
             id: "preview-request".into(),
             session: "preview-session".into(),
             title: "sg-FSA-003: Enforce FundSub environment policy for file access".into(),

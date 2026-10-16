@@ -15,6 +15,8 @@ pub enum Outcome {
     Delivered(Decision),
     Failed(Decision),
     Closed,
+    /// Native provider resolved this request; not a decision sent by this broker.
+    External(Option<Decision>),
 }
 struct Pending {
     request: Request,
@@ -35,7 +37,13 @@ impl Broker {
     }
     /// Remove before delivery: repeated touches cannot answer twice.
     pub fn decide(&self, id: &str, decision: Decision) -> bool {
-        self.pending.lock().unwrap().remove(id).is_some_and(|p| p.reply.send(Some(decision)).is_ok())
+        let mut pending = self.pending.lock().unwrap();
+        let Some(p) = pending.get(id) else { return false };
+        let valid = match decision {
+            Decision::Choice(n) => n < p.request.choices,
+            _ => p.request.choices == 0,
+        };
+        valid && pending.remove(id).is_some_and(|p| p.reply.send(Some(decision)).is_ok())
     }
     pub fn cancel(&self, id: &str) {
         if let Some(p) = self.pending.lock().unwrap().remove(id) {
@@ -97,22 +105,36 @@ impl Broker {
         let Ok(v) = serde_json::from_str::<Value>(&line) else { return Ok(()) };
         let Some(session) = v["session_id"].as_str().filter(|s| !s.is_empty() && s.len() < 200) else { return Ok(()) };
         let Some(tool) = v["tool_name"].as_str().filter(|s| !s.is_empty()) else { return Ok(()) };
-        if v["hook_event_name"] != "PermissionRequest" || !v["tool_input"].is_object() {
+        let codex = v["hook_event_name"] == "TokenCafeCodexRequest";
+        if (!codex && v["hook_event_name"] != "PermissionRequest") || !v["tool_input"].is_object() {
             return Ok(());
         }
         let mut random = [0; 16];
         std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
         let id: String = random.iter().map(|b| format!("{b:02x}")).collect();
+        let choices = if codex { v["choices"].as_u64().unwrap_or(0) } else { 0 };
+        if choices != 0 && !(2..=4).contains(&choices) {
+            return Ok(());
+        }
         let request = Request {
+            choices: choices as u8,
             id: id.clone(),
-            session: format!("claude:{session}"),
-            title: format!("ALLOW {tool}?"),
+            session: format!("{}:{session}", if codex { "codex" } else { "claude" }),
+            title: if choices > 0 { "CHOOSE AN ANSWER".into() } else { format!("ALLOW {tool}?") },
             tool_name: tool.to_owned(),
-            text: format!(
-                "{}\n\nWorking directory: {}\nClaude session: {session}",
-                serde_json::to_string_pretty(&v["tool_input"])?,
-                v["cwd"].as_str().unwrap_or("Unknown")
-            ),
+            text: if choices > 0 {
+                v["question_text"]
+                    .as_str()
+                    .filter(|s| !s.is_empty() && s.len() <= 32768)
+                    .ok_or_else(|| std::io::Error::other("Missing question text"))?
+                    .to_owned()
+            } else {
+                format!(
+                    "{}\n\nWorking directory: {}\nSession: {session}",
+                    serde_json::to_string_pretty(&v["tool_input"])?,
+                    v["cwd"].as_str().unwrap_or("Unknown")
+                )
+            },
         };
         stream.set_nonblocking(true)?;
         let (tx, rx) = mpsc::channel();
@@ -125,6 +147,8 @@ impl Broker {
         }
         let start = Instant::now();
         let mut decision = None;
+        let mut external = None;
+        let mut notice = Vec::new();
         while start.elapsed() < Duration::from_secs(590) {
             if let Ok(d) = rx.try_recv() {
                 decision = d;
@@ -133,27 +157,54 @@ impl Broker {
             let mut byte = [0];
             match stream.read(&mut byte) {
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => (),
+                Ok(1) => {
+                    notice.push(byte[0]);
+                    if byte[0] == b'\n' || notice.len() > 256 {
+                        if let Ok(v) = serde_json::from_slice::<Value>(&notice)
+                            && v["resolved"] == true
+                        {
+                            if self.pending.lock().unwrap().remove(&id).is_none() {
+                                // A board decision already won; preserve its queued response.
+                                notice.clear();
+                                continue;
+                            }
+                            external = Some(Outcome::External(match v["decision"].as_str() {
+                                Some("allow") => Some(Decision::Allow),
+                                Some("deny") => Some(Decision::Deny),
+                                _ => None,
+                            }));
+                        }
+                        break;
+                    }
+                    continue;
+                }
                 _ => break, // closed/cancelled provider: invalidate immediately
             }
             std::thread::sleep(Duration::from_millis(20));
         }
         self.pending.lock().unwrap().remove(&id);
-        stream.set_nonblocking(false)?;
-        stream.set_write_timeout(Some(Duration::from_secs(2)))?;
         let result = match decision {
+            Some(Decision::Choice(n)) if codex => json!({"choice": n}),
+            Some(d) if codex => json!({"decision": if d == Decision::Allow { "accept" } else { "decline" }}),
             Some(d) => {
                 json!({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":if d == Decision::Allow {"allow"} else {"deny"}}}})
             }
             None => json!({}), // native provider prompt remains authoritative
         };
-        let delivered = writeln!(stream, "{result}").is_ok();
+        // A native answer often closes the socket first. Even socket setup can
+        // fail then (not just write); always publish the terminal outcome.
+        let delivered = stream
+            .set_nonblocking(false)
+            .and_then(|()| stream.set_write_timeout(Some(Duration::from_secs(2))))
+            .and_then(|()| writeln!(stream, "{result}"))
+            .is_ok();
         self.record(
             id,
-            match decision {
+            external.unwrap_or(match decision {
                 Some(d) if delivered => Outcome::Delivered(d),
                 Some(d) => Outcome::Failed(d),
                 None => Outcome::Closed,
-            },
+            }),
         );
         Ok(())
     }
@@ -163,6 +214,48 @@ impl Broker {
 mod tests {
     use super::*;
     #[test]
+    fn desktop_resolution_removes_controls_without_returning_a_hook_decision() {
+        for (label, expected, close) in [
+            ("allow", Some(Decision::Allow), false),
+            ("deny", Some(Decision::Deny), false),
+            ("unknown", None, false),
+            ("allow", Some(Decision::Allow), true),
+        ] {
+            let broker = Broker::default();
+            let worker = broker.clone();
+            let (mut client, server) = UnixStream::pair().unwrap();
+            let thread = std::thread::spawn(move || worker.handle(server).unwrap());
+            writeln!(
+                client,
+                "{}",
+                json!({"hook_event_name":"PermissionRequest","session_id":"qa","tool_name":"Bash","tool_input":{}})
+            )
+            .unwrap();
+            let until = Instant::now() + Duration::from_secs(2);
+            let id = loop {
+                if let Some(r) = broker.requests().first() {
+                    break r.id.clone();
+                }
+                assert!(Instant::now() < until);
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            writeln!(client, "{}", json!({"resolved":true,"decision":label})).unwrap();
+            if close {
+                drop(client);
+                thread.join().unwrap();
+            } else {
+                thread.join().unwrap();
+                let mut reply = String::new();
+                client.read_to_string(&mut reply).unwrap();
+                assert_eq!(reply.trim(), "{}");
+            }
+            assert!(broker.requests().is_empty());
+            assert_eq!(broker.outcome(&id), Some(Outcome::External(expected)));
+            assert!(!broker.decide(&id, Decision::Allow));
+            assert!(!broker.decide(&id, Decision::Deny));
+        }
+    }
+    #[test]
     fn decisions_are_exactly_once_and_never_guess_a_request() {
         let broker = Broker::default();
         let (tx, rx) = mpsc::channel();
@@ -170,6 +263,7 @@ mod tests {
             "one".into(),
             Pending {
                 request: Request {
+                    choices: 0,
                     id: "one".into(),
                     session: "claude:a".into(),
                     title: "Test".into(),
@@ -229,6 +323,46 @@ mod tests {
         drop(client);
         handle.join().unwrap();
         assert!(broker.requests().is_empty());
+    }
+
+    #[test]
+    fn codex_requests_are_not_misrepresented_as_claude_approvals() {
+        // These are app-server messages, not Claude PermissionRequest hooks.
+        // A transport/provider adapter is required before either can be answered.
+        for (method, params) in [
+            (
+                "item/commandExecution/requestApproval",
+                json!({
+                    "threadId": "synthetic", "turnId": "turn", "itemId": "command",
+                    "command": "echo synthetic", "cwd": "/tmp"
+                }),
+            ),
+            (
+                "item/fileChange/requestApproval",
+                json!({
+                    "threadId": "synthetic", "turnId": "turn", "itemId": "edit"
+                }),
+            ),
+            (
+                "item/tool/requestUserInput",
+                json!({
+                    "threadId": "synthetic", "turnId": "turn", "itemId": "question",
+                    "questions": [{"id": "color", "header": "Color", "question": "Pick a test color",
+                        "options": [{"label": "Blue", "description": "Test A"},
+                                    {"label": "Green", "description": "Test B"}]}]
+                }),
+            ),
+        ] {
+            let broker = Broker::default();
+            let (mut client, server) = UnixStream::pair().unwrap();
+            writeln!(client, "{}", json!({"id": 1, "method": method, "params": params})).unwrap();
+            broker.handle(server).unwrap();
+            let mut response = String::new();
+            client.read_to_string(&mut response).unwrap();
+            assert!(response.is_empty(), "must not fabricate a Codex response");
+            assert!(broker.requests().is_empty());
+            assert!(!broker.decide("1", Decision::Allow));
+        }
     }
 
     #[test]

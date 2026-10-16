@@ -178,7 +178,7 @@ impl Authority {
                             } else if r.state != 1 {
                                 status = 3;
                                 reason = 12;
-                            } else if s.provider != 1
+                            } else if !matches!(s.provider, 1 | 2)
                                 || !r.desktop_only_reason.is_empty()
                                 || !r.allowed_decisions.contains(&a.decision)
                             {

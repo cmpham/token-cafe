@@ -88,8 +88,8 @@ pub fn request_digest(
         || session.is_empty()
         || !(1..=2).contains(&provider)
         || body_len > 32768
-        || decisions.len() > 2
-        || decisions.iter().any(|x| !(1..=2).contains(x))
+        || decisions.len() > 4
+        || decisions.iter().any(|x| !(1..=6).contains(x))
         || decisions.windows(2).any(|x| x[0] >= x[1])
     {
         return Err(Error::Invalid);

@@ -67,13 +67,17 @@ pub fn validate(model: &Model) -> Result<()> {
                 || r.tool_name.len() > 192
                 || r.desktop_only_reason.len() > 192
                 || r.digest.len() != 32
-                || r.allowed_decisions.len() > 2
-                || r.allowed_decisions.iter().any(|d| !matches!(d, 1 | 2))
+                || r.allowed_decisions.len() > 4
+                || r.allowed_decisions.iter().any(|d| !matches!(d, 1..=6))
+                || (r.allowed_decisions.iter().any(|d| *d >= 3)
+                    && (s.provider != 2
+                        || r.allowed_decisions.len() < 2
+                        || r.allowed_decisions.iter().enumerate().any(|(i, d)| *d != 3 + i as i32)))
                 || r.allowed_decisions.windows(2).any(|p| p[0] >= p[1])
                 || (r.allowed_decisions.is_empty() && r.desktop_only_reason.is_empty())
                 || (!r.desktop_only_reason.is_empty() && !r.allowed_decisions.is_empty())
                 || r.delivered_decision < 0
-                || r.delivered_decision > 2
+                || r.delivered_decision > 6
                 || (r.state == 3 && r.delivered_decision == 0)
             {
                 return Err(Error::Invalid);

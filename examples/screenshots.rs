@@ -157,6 +157,7 @@ fn main() {
         sessions[1].why = Why::Ask;
         scene.set_sessions(&sessions);
         scene.set_requests(vec![token_cafe::approval::Request {
+            choices: 0,
             id: "preview-approval".into(),
             session: "checkout".into(),
             title: "Run tests".into(),

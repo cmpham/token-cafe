@@ -306,7 +306,7 @@ pub unsafe extern "C" fn cafe_engine_journal(e: *mut Engine, data: *const u8, le
             p += 16;
             let decision = *data.get(p)? as i32;
             p += 1;
-            if !(1..=2).contains(&decision) {
+            if !(1..=6).contains(&decision) {
                 return None;
             }
             let mut strings = vec![];

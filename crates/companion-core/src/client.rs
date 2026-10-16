@@ -35,6 +35,7 @@ enum Target {
     Back,
     Desktop(String),
     Decision(i32, Vec<u8>),
+    Choice(u8, Vec<u8>),
     Dismiss,
     None,
 }
@@ -342,6 +343,7 @@ impl Client {
             .filter_map(|session| {
                 let request = session.approval.as_ref().filter(|r| r.state == 1)?;
                 Some(UiRequest {
+                    choices: request.allowed_decisions.iter().filter(|d| **d >= 3).count() as u8,
                     id: request.id.clone(),
                     session: session.id.clone(),
                     title: request.title.clone(),
@@ -417,6 +419,7 @@ impl Client {
             let s = m.sessions.get(&v.selected_session_id).ok_or(Error::Invalid)?;
             let r = if v.review_kind == 1 { s.approval.as_ref() } else { None };
             let request = UiRequest {
+                choices: r.map_or(0, |r| r.allowed_decisions.iter().filter(|d| **d >= 3).count() as u8),
                 id: r.map_or_else(String::new, |r| r.id.clone()),
                 session: s.id.clone(),
                 title: r.map_or_else(|| s.title.clone(), |r| r.title.clone()),
@@ -468,9 +471,9 @@ impl Client {
             } else if let Some(r) = r {
                 match r.state {
                     2 => "SENDING DECISION...",
-                    3 => "SENT TO CLAUDE",
+                    3 => "DECISION SENT",
                     5 => "REQUEST EXPIRED",
-                    6 => "REQUEST CANCELLED",
+                    6 => Review::resolved_status(r.delivered_decision),
                     7 => "DELIVERY FAILED",
                     8 => "OUTCOME UNKNOWN - CHECK DESKTOP",
                     _ => {
@@ -648,12 +651,23 @@ impl Client {
                     Target::None
                 };
             }
+            if let Some(n) = r.choice_at(x, y) {
+                return Target::Choice(n, self.review_identity.clone());
+            }
             if y >= 220 && r.dismiss_pending && (12..432).contains(&x) {
                 return Target::Dismiss;
             }
             if y >= 220 {
                 return if r.actionable && r.status.is_empty() {
-                    if (12..156).contains(&x) && r.allow_deny {
+                    if r.request().choices > 0 {
+                        if (168..432).contains(&x) {
+                            r.selected_choice.map_or(Target::None, |n| {
+                                Target::Decision(3 + i32::from(n), self.review_identity.clone())
+                            })
+                        } else {
+                            Target::None
+                        }
+                    } else if (12..156).contains(&x) && r.allow_deny {
                         Target::Decision(2, self.review_identity.clone())
                     } else if (168..432).contains(&x) && r.allow_approve {
                         Target::Decision(1, self.review_identity.clone())
@@ -861,6 +875,16 @@ impl Client {
                     self.rendered_identity.clear();
                     self.last_tap = None;
                     self.sync(now)?;
+                }
+            }
+            Target::Choice(n, identity) => {
+                if identity == self.review_identity {
+                    if let Some(r) = &mut self.scene.review {
+                        r.selected_choice = Some(n);
+                    }
+                    self.displayed_at = None;
+                    self.rendered_identity.clear();
+                    self.last_tap = None;
                 }
             }
             Target::Decision(decision, identity) => {

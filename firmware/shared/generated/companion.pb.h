@@ -75,7 +75,11 @@ typedef enum _token_cafe_v2_RequestState {
 typedef enum _token_cafe_v2_Decision {
     token_cafe_v2_Decision_DECISION_UNSPECIFIED = 0,
     token_cafe_v2_Decision_DECISION_APPROVE_ONCE = 1,
-    token_cafe_v2_Decision_DECISION_DENY = 2
+    token_cafe_v2_Decision_DECISION_DENY = 2,
+    token_cafe_v2_Decision_DECISION_CHOICE_1 = 3,
+    token_cafe_v2_Decision_DECISION_CHOICE_2 = 4,
+    token_cafe_v2_Decision_DECISION_CHOICE_3 = 5,
+    token_cafe_v2_Decision_DECISION_CHOICE_4 = 6
 } token_cafe_v2_Decision;
 
 /* Request digest uses the explicit length-prefixed preimage in the spec,
@@ -211,7 +215,7 @@ typedef struct _token_cafe_v2_Request {
     token_cafe_v2_BlobRef body_blob;
     token_cafe_v2_RequestState state;
     pb_size_t allowed_decisions_count;
-    token_cafe_v2_Decision allowed_decisions[2];
+    token_cafe_v2_Decision allowed_decisions[4];
     char desktop_only_reason[193];
     token_cafe_v2_Decision delivered_decision;
     char tool_name[193]; /* <=192 UTF-8 bytes, digest-covered */
@@ -410,8 +414,8 @@ extern "C" {
 #define _token_cafe_v2_RequestState_ARRAYSIZE ((token_cafe_v2_RequestState)(token_cafe_v2_RequestState_REQUEST_UNKNOWN+1))
 
 #define _token_cafe_v2_Decision_MIN token_cafe_v2_Decision_DECISION_UNSPECIFIED
-#define _token_cafe_v2_Decision_MAX token_cafe_v2_Decision_DECISION_DENY
-#define _token_cafe_v2_Decision_ARRAYSIZE ((token_cafe_v2_Decision)(token_cafe_v2_Decision_DECISION_DENY+1))
+#define _token_cafe_v2_Decision_MAX token_cafe_v2_Decision_DECISION_CHOICE_4
+#define _token_cafe_v2_Decision_ARRAYSIZE ((token_cafe_v2_Decision)(token_cafe_v2_Decision_DECISION_CHOICE_4+1))
 
 #define _token_cafe_v2_Page_MIN token_cafe_v2_Page_PAGE_UNSPECIFIED
 #define _token_cafe_v2_Page_MAX token_cafe_v2_Page_PAGE_REVIEW
@@ -494,7 +498,7 @@ extern "C" {
 #define token_cafe_v2_Delta_init_default         {0, 0, 0, {token_cafe_v2_Session_init_default, token_cafe_v2_Session_init_default}, 0, {"", "", "", "", "", "", "", ""}, false, token_cafe_v2_View_init_default, false, token_cafe_v2_Usage_init_default, false, 0}
 #define token_cafe_v2_BlobRef_init_default       {{0, {0}}, 0}
 #define token_cafe_v2_Session_init_default       {"", _token_cafe_v2_Provider_MIN, "", _token_cafe_v2_SessionStatus_MIN, _token_cafe_v2_WaitingReason_MIN, 0, 0, 0, false, token_cafe_v2_BlobRef_init_default, 0, 0, false, token_cafe_v2_Request_init_default, false, "", false, 0, "", false, token_cafe_v2_BlobRef_init_default}
-#define token_cafe_v2_Request_init_default       {"", {0, {0}}, "", false, token_cafe_v2_BlobRef_init_default, _token_cafe_v2_RequestState_MIN, 0, {_token_cafe_v2_Decision_MIN, _token_cafe_v2_Decision_MIN}, "", _token_cafe_v2_Decision_MIN, ""}
+#define token_cafe_v2_Request_init_default       {"", {0, {0}}, "", false, token_cafe_v2_BlobRef_init_default, _token_cafe_v2_RequestState_MIN, 0, {_token_cafe_v2_Decision_MIN, _token_cafe_v2_Decision_MIN, _token_cafe_v2_Decision_MIN, _token_cafe_v2_Decision_MIN}, "", _token_cafe_v2_Decision_MIN, ""}
 #define token_cafe_v2_View_init_default          {"", _token_cafe_v2_Page_MIN, 0, "", 0, 0, "", 0, {0, {0}}, _token_cafe_v2_ReviewKind_MIN, false, token_cafe_v2_BlobRef_init_default}
 #define token_cafe_v2_Usage_init_default         {"", ""}
 #define token_cafe_v2_BlobGet_init_default       {{0, {0}}}
@@ -516,7 +520,7 @@ extern "C" {
 #define token_cafe_v2_Delta_init_zero            {0, 0, 0, {token_cafe_v2_Session_init_zero, token_cafe_v2_Session_init_zero}, 0, {"", "", "", "", "", "", "", ""}, false, token_cafe_v2_View_init_zero, false, token_cafe_v2_Usage_init_zero, false, 0}
 #define token_cafe_v2_BlobRef_init_zero          {{0, {0}}, 0}
 #define token_cafe_v2_Session_init_zero          {"", _token_cafe_v2_Provider_MIN, "", _token_cafe_v2_SessionStatus_MIN, _token_cafe_v2_WaitingReason_MIN, 0, 0, 0, false, token_cafe_v2_BlobRef_init_zero, 0, 0, false, token_cafe_v2_Request_init_zero, false, "", false, 0, "", false, token_cafe_v2_BlobRef_init_zero}
-#define token_cafe_v2_Request_init_zero          {"", {0, {0}}, "", false, token_cafe_v2_BlobRef_init_zero, _token_cafe_v2_RequestState_MIN, 0, {_token_cafe_v2_Decision_MIN, _token_cafe_v2_Decision_MIN}, "", _token_cafe_v2_Decision_MIN, ""}
+#define token_cafe_v2_Request_init_zero          {"", {0, {0}}, "", false, token_cafe_v2_BlobRef_init_zero, _token_cafe_v2_RequestState_MIN, 0, {_token_cafe_v2_Decision_MIN, _token_cafe_v2_Decision_MIN, _token_cafe_v2_Decision_MIN, _token_cafe_v2_Decision_MIN}, "", _token_cafe_v2_Decision_MIN, ""}
 #define token_cafe_v2_View_init_zero             {"", _token_cafe_v2_Page_MIN, 0, "", 0, 0, "", 0, {0, {0}}, _token_cafe_v2_ReviewKind_MIN, false, token_cafe_v2_BlobRef_init_zero}
 #define token_cafe_v2_Usage_init_zero            {"", ""}
 #define token_cafe_v2_BlobGet_init_zero          {{0, {0}}}
@@ -957,18 +961,18 @@ extern const pb_msgdesc_t token_cafe_v2_ActionResult_msg;
 #define token_cafe_v2_BlobGet_size               34
 #define token_cafe_v2_BlobRef_size               40
 #define token_cafe_v2_BlobUnavailable_size       36
-#define token_cafe_v2_Delta_size                 4849
-#define token_cafe_v2_Envelope_size              4895
+#define token_cafe_v2_Delta_size                 4857
+#define token_cafe_v2_Envelope_size              4903
 #define token_cafe_v2_Heartbeat_size             28
 #define token_cafe_v2_HelloAck_size              102
 #define token_cafe_v2_Hello_size                 152
 #define token_cafe_v2_ProtocolError_size         208
-#define token_cafe_v2_Request_size               800
+#define token_cafe_v2_Request_size               804
 #define token_cafe_v2_Resync_size                13
-#define token_cafe_v2_Session_size               1642
+#define token_cafe_v2_Session_size               1646
 #define token_cafe_v2_SnapshotBegin_size         506
 #define token_cafe_v2_SnapshotCommit_size        51
-#define token_cafe_v2_SnapshotPart_size          3307
+#define token_cafe_v2_SnapshotPart_size          3315
 #define token_cafe_v2_Usage_size                 52
 #define token_cafe_v2_View_size                  426
 

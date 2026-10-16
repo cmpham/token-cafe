@@ -859,6 +859,12 @@ impl Scene {
                 self.review = None;
                 return None;
             }
+            if let Some(n) = review.choice_at(x, y) {
+                if !double {
+                    review.selected_choice = Some(n);
+                }
+                return None;
+            }
             if (y < 48 && x >= 380) || (double && (72..212).contains(&y) && x < 436) {
                 let id = review.request().session.clone();
                 self.handoff_request = Some(review.request().id.clone());
@@ -869,7 +875,13 @@ impl Scene {
                 review.page(y >= 142);
             }
             if !double && can_decide && (220..264).contains(&y) && review.actionable && review.status.is_empty() {
-                review.decision = if (12..156).contains(&x) {
+                review.decision = if review.request().choices > 0 {
+                    if (168..432).contains(&x) {
+                        review.selected_choice.map(crate::approval::Decision::Choice)
+                    } else {
+                        None
+                    }
+                } else if (12..156).contains(&x) {
                     Some(crate::approval::Decision::Deny)
                 } else if (168..432).contains(&x) {
                     Some(crate::approval::Decision::Allow)
@@ -894,7 +906,7 @@ impl Scene {
             let request = self.requests.iter().find(|r| r.session == id).cloned();
             let actionable = request.is_some();
             let permission = self.sessions.iter().any(|s| s.id == id && s.state == State::Wait && s.why == Why::Perm);
-            let request = request.unwrap_or_else(|| crate::approval::Request {
+            let request = request.unwrap_or_else(|| crate::approval::Request { choices: 0,
                 tool_name: String::new(),
                 id: String::new(),
                 session: id.clone(),
@@ -1534,7 +1546,7 @@ impl Scene {
             let session = self.sessions.iter().find(|s| s.id == id);
             let request = self.requests.iter().position(|r| r.session == id);
             let name = session.map_or(id, |s| s.name.as_str());
-            let permission = request.is_some() || session.is_some_and(|s| s.why == Why::Perm);
+            let permission = request.is_some_and(|i| self.requests[i].choices == 0) || session.is_some_and(|s| s.why == Why::Perm);
             let status = if permission { "! APPROVAL NEEDED" } else { "? ANSWER NEEDED" };
             let text = request
                 .map(|i| self.requests[i].text.as_str())
@@ -1722,6 +1734,7 @@ mod tests {
             scene.render(&mut cafe, now);
             scene.review = Some(crate::review::Review::new(
                 crate::approval::Request {
+                    choices: 0,
                     id: "r".into(),
                     session: "a".into(),
                     title: "Permission".into(),
@@ -1838,6 +1851,7 @@ mod tests {
         let mut scene = Scene::new();
         scene.set_sessions(&[session("a", State::Wait), session("b", State::Work)]);
         let request = crate::approval::Request {
+            choices: 0,
             id: "one".into(),
             session: "a".into(),
             title: "Permission".into(),
@@ -1929,6 +1943,7 @@ mod tests {
     fn review_keeps_request_identity_and_requires_verified_input() {
         let mut scene = Scene::new();
         let request = crate::approval::Request {
+            choices: 0,
             tool_name: "Bash".into(),
             id: "one".into(),
             session: "claude:test".into(),

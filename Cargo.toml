@@ -64,3 +64,7 @@ objc2-app-kit = { version = "0.2.2", default-features = false, features = ["NSEv
 [[example]]
 name = "protocol_board_qa"
 required-features = ["bluetooth"]
+
+[[example]]
+name = "codex_bridge_qa"
+required-features = ["bluetooth"]

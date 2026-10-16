@@ -9,6 +9,8 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
+from claude_hook import RequestWatch
 
 ROOT = Path(__file__).resolve().parent
 
@@ -78,6 +80,44 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(result.stdout, '')
         status = json.loads((self.home / '.token-cafe/approval-hook-status.json').read_text())
         self.assertEqual(status['event'], 'bridge_unavailable')
+
+    def test_desktop_progress_retires_only_observed_permission_wait(self):
+        root = self.home / 'custom-claude/sessions'
+        root.mkdir()
+        status = root / '42.json'
+        request = {'session_id':'synthetic', 'tool_name':'Bash', 'tool_input':{'command':'true'}}
+        with patch.dict(os.environ, self.env):
+            status.write_text(json.dumps({'sessionId':'synthetic','status':'busy'}))
+            watch = RequestWatch(request)
+            self.assertIsNone(watch.poll(), 'initial busy state is not a decision')
+            status.write_text(json.dumps({'sessionId':'other','status':'waiting'}))
+            self.assertIsNone(watch.poll())
+            status.write_text(json.dumps({'sessionId':'synthetic','status':'waiting','waitingFor':'permission prompt'}))
+            self.assertIsNone(watch.poll())
+            status.write_text(json.dumps({'sessionId':'synthetic','status':'busy'}))
+            self.assertEqual(watch.poll(), {'resolved':True})
+
+    def test_transcript_resolution_uses_exact_tool_id_and_never_guesses_denial(self):
+        path = self.home / 'transcript.jsonl'
+        request = {'session_id':'synthetic','transcript_path':str(path),
+                   'tool_name':'Bash','tool_input':{'command':'true'}}
+        call = {'type':'tool_use','id':'current','name':'Bash','input':{'command':'true'}}
+        def write(block, mode='a'):
+            with path.open(mode) as out:
+                out.write(json.dumps({'message':{'content':[block]}}) + '\n')
+        for is_error, expected in [(False, 'allow'), (True, None)]:
+            write(call, 'w')
+            with patch.dict(os.environ, self.env):
+                watch = RequestWatch(request)
+                write({'type':'tool_result','tool_use_id':'other','is_error':False})
+                self.assertIsNone(watch.poll())
+                write({'type':'tool_result','tool_use_id':'current','is_error':is_error})
+                self.assertEqual(watch.poll(), {'resolved':True,'decision':expected})
+        # A completed earlier invocation of the same command is not this request.
+        with patch.dict(os.environ, self.env):
+            watch = RequestWatch(request)
+            self.assertIsNone(watch.tool_id)
+            self.assertIsNone(watch.poll())
 
     def test_disabled_hooks_report_unhealthy_without_overriding_setting(self):
         self.settings.write_text(json.dumps({'disableAllHooks': True}))

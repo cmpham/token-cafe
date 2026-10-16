@@ -4,6 +4,7 @@
 //! part of the window that changed since the buffer was last shown is
 //! repainted and reported to the compositor: a quiet café costs little.
 
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::error::Error;
 use std::num::NonZeroU32;
@@ -204,6 +205,41 @@ fn double_click_interval() -> Duration {
 fn supports_pinning(display: winit::raw_window_handle::RawDisplayHandle) -> bool {
     use winit::raw_window_handle::RawDisplayHandle;
     matches!(display, RawDisplayHandle::AppKit(_) | RawDisplayHandle::Xlib(_) | RawDisplayHandle::Xcb(_))
+}
+
+/// Permission requests override provider status while their connections are
+/// live. The usual request-free frame can borrow the collector snapshot.
+fn approval_sessions<'a>(
+    providers: &'a [token_cafe::scene::Session],
+    requests: &[token_cafe::approval::Request],
+) -> Cow<'a, [token_cafe::scene::Session]> {
+    use token_cafe::scene::{ForcedPose, Kind, Session, State, Why};
+    if requests.is_empty() {
+        return Cow::Borrowed(providers);
+    }
+    let mut sessions = providers.to_vec();
+    for session in &mut sessions {
+        if let Some(r) = requests.iter().find(|r| r.session == session.id) {
+            session.state = State::Wait;
+            session.why = if r.choices > 0 { Why::Ask } else { Why::Perm };
+        }
+    }
+    for request in requests {
+        if !sessions.iter().any(|s| s.id == request.session) {
+            sessions.push(Session {
+                id: request.session.clone(),
+                name: if request.session.starts_with("codex:") { "Codex request" } else { "Claude approval" }.into(),
+                kind: if request.session.starts_with("codex:") { Kind::Codex } else { Kind::Claude },
+                state: State::Wait,
+                why: if request.choices > 0 { Why::Ask } else { Why::Perm },
+                pose: ForcedPose::Auto,
+                age_s: 0,
+                branch: None,
+                active_subagents: None,
+            });
+        }
+    }
+    Cow::Owned(sessions)
 }
 
 struct App {
@@ -412,28 +448,7 @@ impl App {
             }
         }
         let requests = self.approvals.as_ref().map_or_else(Vec::new, |b| b.requests());
-        let mut sessions = self.provider_sessions.clone();
-        for session in &mut sessions {
-            if requests.iter().any(|r| r.session == session.id) {
-                session.state = token_cafe::scene::State::Wait;
-                session.why = token_cafe::scene::Why::Perm;
-            }
-        }
-        for request in &requests {
-            if !sessions.iter().any(|s| s.id == request.session) {
-                sessions.push(token_cafe::scene::Session {
-                    id: request.session.clone(),
-                    name: "Claude approval".into(),
-                    kind: token_cafe::scene::Kind::Claude,
-                    state: token_cafe::scene::State::Wait,
-                    why: token_cafe::scene::Why::Perm,
-                    pose: token_cafe::scene::ForcedPose::Auto,
-                    age_s: 0,
-                    branch: None,
-                    active_subagents: None,
-                });
-            }
-        }
+        let sessions = approval_sessions(&self.provider_sessions, &requests);
         self.scene.set_requests(requests);
         self.scene.set_sessions(&sessions);
         #[cfg(feature = "bluetooth")]
@@ -493,7 +508,19 @@ impl App {
                 match outcome {
                     token_cafe::approval::Outcome::Delivered(_) => review.status = "DECISION RETURNED TO HOOK".into(),
                     token_cafe::approval::Outcome::Failed(_) => review.status = "DELIVERY FAILED - OPEN DESKTOP".into(),
-                    token_cafe::approval::Outcome::Closed => (),
+                    token_cafe::approval::Outcome::Closed | token_cafe::approval::Outcome::External(_) => {
+                        review.actionable = false;
+                        review.status = match outcome {
+                            token_cafe::approval::Outcome::External(Some(token_cafe::approval::Decision::Allow)) => {
+                                "APPROVED ON DESKTOP"
+                            }
+                            token_cafe::approval::Outcome::External(Some(token_cafe::approval::Decision::Deny)) => {
+                                "DENIED ON DESKTOP"
+                            }
+                            _ => "REQUEST RESOLVED",
+                        }
+                        .into();
+                    }
                 }
             }
             if let Some(decision) = review.decision.take() {
@@ -764,6 +791,47 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn approval_overlay_borrows_quiet_frames_and_restores_provider_state() {
+        use token_cafe::scene::{ForcedPose, Kind, Session, State, Why};
+        let providers = vec![Session {
+            id: "claude:moon".into(),
+            name: "Moon Café".into(),
+            kind: Kind::Claude,
+            state: State::Work,
+            why: Why::None,
+            pose: ForcedPose::Auto,
+            age_s: 17,
+            branch: Some("feature/moon".into()),
+            active_subagents: Some(2),
+        }];
+        assert!(matches!(approval_sessions(&providers, &[]), Cow::Borrowed(_)));
+        let request = token_cafe::approval::Request {
+            choices: 0,
+            id: "permission".into(),
+            session: providers[0].id.clone(),
+            title: "Fixture permission".into(),
+            tool_name: "Read".into(),
+            text: "Synthetic fixture".into(),
+        };
+        let missing = token_cafe::approval::Request { session: "claude:missing".into(), ..request.clone() };
+        let sessions = approval_sessions(&providers, &[request, missing.clone(), missing]);
+        assert!(matches!(sessions, Cow::Owned(_)));
+        assert_eq!(sessions.len(), 2, "multiple requests for one missing session add one patron");
+        assert_eq!(sessions[0].state, State::Wait);
+        assert_eq!(sessions[0].why, Why::Perm);
+        assert_eq!(sessions[0].age_s, 17);
+        assert_eq!(sessions[0].branch, providers[0].branch);
+        assert_eq!(sessions[0].active_subagents, Some(2));
+        assert_eq!(sessions[1].id, "claude:missing");
+        assert_eq!(sessions[1].state, State::Wait);
+        assert_eq!(sessions[1].why, Why::Perm);
+        let restored = approval_sessions(&providers, &[]);
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].state, State::Work);
+        assert_eq!(restored[0].why, Why::None);
+    }
 
     #[test]
     fn pinning_support_matches_native_backends() {

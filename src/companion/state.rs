@@ -40,9 +40,10 @@ fn appearance(s: &str) -> u32 {
 /// Move a submitting request to its final wire state; true when the broker had an outcome.
 fn settle(r: &mut Request, outcome: Option<Outcome>) -> bool {
     let (state, decision) = match outcome {
-        Some(Outcome::Delivered(d)) => (3, if d == Decision::Allow { 1 } else { 2 }),
+        Some(Outcome::Delivered(d)) => (3, d.code()),
         Some(Outcome::Failed(_)) => (7, 0),
         Some(Outcome::Closed) => (6, 0),
+        Some(Outcome::External(d)) => (6, d.map_or(0, Decision::code)),
         None => return false,
     };
     r.state = state;
@@ -93,7 +94,7 @@ impl Store {
         let input = scene.sessions().to_vec();
         let details = scene.details().to_vec();
         let requests = scene.requests().to_vec();
-        self.terminal.retain(|_, (r, t)| t.elapsed() < Duration::from_secs(if r.state == 2 { 30 } else { 5 }));
+        self.terminal.retain(|_, (r, t)| t.elapsed() < Duration::from_secs(if matches!(r.state, 2 | 6) { 30 } else { 5 }));
         // Desktop decisions bypass the authority; the broker's record finishes them.
         for (r, at) in self.terminal.values_mut() {
             let outcome = self.broker.as_ref().and_then(|b| b.outcome(&r.id));
@@ -143,20 +144,29 @@ impl Store {
                     let body = self.blob(&r.text);
                     let title = bounded(&r.title, 192);
                     let tool_name = bounded(&r.tool_name, 192);
-                    let reason =
-                        if r.title.len() > 192 || r.tool_name.len() > 192 || !cafe_ui::review::Review::identity_fits(r)
-                        {
-                            "REQUEST IDENTITY TOO LONG"
-                        } else if r.text.len() > 32768 {
-                            "REQUEST TOO LONG"
-                        } else {
-                            ""
-                        };
-                    let decisions = if reason.is_empty() { vec![1, 2] } else { vec![] };
+                    let reason = if r.choices != 0 && (!(2..=4).contains(&r.choices) || s.kind != scene::Kind::Codex) {
+                        "UNSUPPORTED QUESTION"
+                    } else if r.title.len() > 192
+                        || r.tool_name.len() > 192
+                        || !cafe_ui::review::Review::identity_fits(r)
+                    {
+                        "REQUEST IDENTITY TOO LONG"
+                    } else if r.text.len() > 32768 {
+                        "REQUEST TOO LONG"
+                    } else {
+                        ""
+                    };
+                    let decisions = if !reason.is_empty() {
+                        vec![]
+                    } else if r.choices > 0 {
+                        (3..3 + r.choices as i32).collect()
+                    } else {
+                        vec![1, 2]
+                    };
                     let digest = crypto::request_digest(
                         &r.id,
                         &id,
-                        1,
+                        if s.kind == scene::Kind::Codex { 2 } else { 1 },
                         &title,
                         &tool_name,
                         &body.sha256.as_slice().try_into().unwrap(),
@@ -265,15 +275,16 @@ impl Store {
         }
         if next.view.page == 2 {
             let s = next.sessions.get(&next.view.selected_session_id);
-            let valid = s.is_some_and(|s| match next.view.review_kind {
-                1 => s
-                    .approval
-                    .as_ref()
-                    .is_some_and(|r| r.id == next.view.review_request_id && r.body_blob == next.view.review_blob),
-                2 => s.task_blob == next.view.review_blob,
-                3 => s.unlinked_review_blob == next.view.review_blob,
-                _ => false,
-            });
+            let valid = next.view.review_blob.is_some()
+                && s.is_some_and(|s| match next.view.review_kind {
+                    1 => s
+                        .approval
+                        .as_ref()
+                        .is_some_and(|r| r.id == next.view.review_request_id && r.body_blob == next.view.review_blob),
+                    2 => s.task_blob == next.view.review_blob,
+                    3 => s.unlinked_review_blob == next.view.review_blob,
+                    _ => false,
+                });
             if !valid {
                 next.view.page = 1;
                 next.view.review_kind = 0;
@@ -367,6 +378,7 @@ impl Store {
                     .and_then(|b| std::str::from_utf8(b).ok())
                     .unwrap_or("TEXT UNAVAILABLE - OPEN DESKTOP");
                 let request = crate::approval::Request {
+                    choices: r.map_or(0, |r| r.allowed_decisions.iter().filter(|d| **d >= 3).count() as u8),
                     id: r.map_or_else(String::new, |r| r.id.clone()),
                     session: real(&s.id).unwrap_or_else(|| s.id.clone()),
                     title: r.map_or_else(|| s.title.clone(), |r| r.title.clone()),
@@ -389,7 +401,8 @@ impl Store {
                                 }
                             }
                             2 => "SENDING DECISION...",
-                            3 => "SENT TO CLAUDE",
+                            3 => "DECISION SENT",
+                            6 => crate::review::Review::resolved_status(r.delivered_decision),
                             _ => "CHECK DESKTOP",
                         })
                         .into();
@@ -400,9 +413,7 @@ impl Store {
         }
     }
     pub fn decide(&self, request: &str, decision: i32) -> bool {
-        self.broker
-            .as_ref()
-            .is_some_and(|b| b.decide(request, if decision == 1 { Decision::Allow } else { Decision::Deny }))
+        Decision::from_code(decision).is_some_and(|d| self.broker.as_ref().is_some_and(|b| b.decide(request, d)))
     }
 }
 
@@ -425,6 +436,32 @@ mod tests {
         }]);
         scene.set_details(vec![scene::SessionDetail { id: "claude:a".into(), target: None, task: "Full task".into() }]);
         scene
+    }
+    #[test]
+    fn replacing_review_without_task_returns_to_cafe() {
+        let mut scene = scene();
+        scene.set_details(vec![]);
+        let mut request = crate::approval::Request {
+            choices: 0,
+            id: "first".into(),
+            session: "claude:a".into(),
+            title: "ALLOW Bash?".into(),
+            tool_name: "Bash".into(),
+            text: "true".into(),
+        };
+        scene.set_requests(vec![request.clone()]);
+        let mut store = Store::new([1; 16]);
+        store.ingest(&mut scene, None);
+        scene.focus_patron("claude:a".into());
+        scene.review = Some(crate::review::Review::new(request.clone(), true));
+        store.ingest(&mut scene, None);
+        assert_eq!(store.authority.model.view.page, 2);
+        request.id = "second".into();
+        scene.set_requests(vec![request]);
+        store.ingest(&mut scene, None);
+        assert_eq!(store.authority.model.view.page, 1);
+        assert_eq!(store.authority.model.sessions["claude:a"].approval.as_ref().unwrap().id, "second");
+        assert!(scene.review.is_none());
     }
     #[test]
     fn remote_selection_survives_desktop_collection_tick() {
@@ -454,6 +491,7 @@ mod tests {
     fn oversize_request_is_read_only_and_oldest_request_wins() {
         let mut scene = scene();
         let request = crate::approval::Request {
+            choices: 0,
             id: "first".into(),
             session: "claude:a".into(),
             title: "ALLOW Bash?".into(),
@@ -495,6 +533,7 @@ mod tests {
     #[test]
     fn desktop_decision_settles_request_and_then_yields_to_the_next_one() {
         let request = |id: &str| crate::approval::Request {
+            choices: 0,
             id: id.into(),
             session: "claude:a".into(),
             title: "ALLOW Bash?".into(),

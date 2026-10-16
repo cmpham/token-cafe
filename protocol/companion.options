@@ -18,7 +18,7 @@
 token_cafe.v2.SnapshotPart.sessions max_count:2
 token_cafe.v2.Delta.upsert_sessions max_count:2
 token_cafe.v2.Delta.remove_session_ids max_count:8 max_size:129
-token_cafe.v2.Request.allowed_decisions max_count:2
+token_cafe.v2.Request.allowed_decisions max_count:4
 token_cafe.v2.BlobChunk.data max_size:512
 token_cafe.v2.Usage.tokens_display max_size:25
 token_cafe.v2.Usage.cost_display max_size:25

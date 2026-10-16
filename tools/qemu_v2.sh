@@ -26,9 +26,13 @@ case "${1:-build}" in
   else idf.py "${args[@]}"; fi
   ;;
  test)
+  CARGO_HOME="${CARGO_HOME:-/tmp/token-cafe-cargo}" RUSTUP_HOME="${RUSTUP_HOME:-/tmp/token-cafe-rustup}" \
+   "${CARGO_HOME:-/tmp/token-cafe-cargo}/bin/cargo" build --manifest-path "$ROOT/Cargo.toml" --offline --release --example codex_bridge_qa
   python "$ROOT/tools/test_attention_qemu.py"
   python "$ROOT/tools/test_protocol_v2_qemu.py" "${@:2}"
   python "$ROOT/tools/test_transition_qemu.py"
+  python "$ROOT/tools/test_codex_qemu.py"
+  python "$ROOT/tools/test_desktop_resolution_qemu.py"
   exec python "$ROOT/tools/test_board_performance_qemu.py"
   ;;
  *) exit 2 ;;

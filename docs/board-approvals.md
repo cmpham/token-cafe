@@ -2,11 +2,11 @@
 
 ## Supported behavior
 
-Tap a waiting patron, then double-tap its bottom preview to open the full question. The review screen has a 44px bottom action row and a right-side page rail. Text preserves command case, punctuation and line breaks; non-ASCII/control characters are shown as explicit Unicode escapes. Tap the upper/lower rail to page. Double-tap the question body, or tap Desktop, to hand off to that session and close the review. Café returns without answering.
+Tap a waiting patron, then tap VIEW in its bottom preview to open the full question. The review screen has a 44px bottom action row and a right-side page rail. Text preserves command case, punctuation and line breaks; non-ASCII/control characters are shown as explicit Unicode escapes. Tap the upper/lower rail to page. Double-tap the question body, or tap Desktop, to hand off to that session and close the review. Café returns without answering.
 
-Only live Claude `PermissionRequest` hooks expose **Approve once** and **Deny**. These return `allow`/`deny` through the exact hook invocation, without changing permission rules or tool arguments. Requests expire after 590 seconds, after a provider disconnect, or when handed to the desktop. Failure/timeout leaves Claude's native permission flow in control. A result says “Decision returned to hook”; it does not claim the requested action executed successfully.
+Live Claude `PermissionRequest` hooks expose **Approve once** and **Deny**. These return `allow`/`deny` through the exact hook invocation, without changing permission rules or tool arguments. Requests expire after 590 seconds, after a provider disconnect, or when handed to the desktop. Failure/timeout leaves Claude's native permission flow in control. A result says “Decision returned to hook”; it does not claim the requested action executed successfully.
 
-Conversational questions and other requests have a read-only review and desktop handoff. No decision is inferred from transcript text. Codex desktop approvals are **not implemented**: this machine's running app-server processes do not expose an attachable control socket. Starting a separate app-server would not answer their existing requests. Existing Claude prompts that predate hook installation also stay in the desktop app. Claude sandbox network prompts do not fire PermissionRequest hooks.
+Unlinked conversational questions and other requests have a read-only review and desktop handoff. The opt-in Codex relay below supports bounded choices and approvals for clients that launch through it. No decision is inferred from transcript text. Codex desktop approvals are **not implemented**: this machine's running app-server processes do not expose an attachable control socket. Starting a separate app-server would not answer their existing requests. Existing Claude prompts that predate hook installation also stay in the desktop app. Claude sandbox network prompts do not fire PermissionRequest hooks.
 
 ## Install / remove
 
@@ -45,7 +45,7 @@ Verified with the installed Claude 2.1.295 runtime and a separate Claude Desktop
 
 The hook writes a private `~/.token-cafe/approval-hook-status.json` diagnostic containing only event and timestamp (no request contents). Events distinguish receipt, waiting, decision delivery, desktop handoff/expiry, and bridge errors. The wait budget is now 590 seconds (hook socket 595, Claude hook timeout 600) to allow time to read a long request. A request already pending before installation cannot be attached retrospectively; fresh Desktop requests were verified without restarting Claude Desktop.
 
-Codex request collection and response remain an explicit missing integration; the Claude tests do not establish Codex support.
+At the time of this Claude verification, Codex response integration was missing; these Claude tests do not establish Codex support.
 
 ## Recovery from a missing approval bridge (2026-10-16)
 
@@ -83,3 +83,115 @@ board; the installed hook returned exactly `hookSpecificOutput` with
 executed by this fixture. Three isolated Python bridge tests and three Rust
 broker tests passed. Actual execution of the screenshot's command was not tested
 or authorized by this repair.
+
+## Codex relay integration (2026-10-16)
+
+The opt-in `tools/approval/codex_relay.py` relays an owning client's app-server
+stdio connection. Configure that client's server launch command as:
+
+```sh
+python3 /absolute/path/to/token-cafe/tools/approval/codex_relay.py -- codex app-server --listen stdio://
+```
+
+The rebuilt Token Cafe companion must be running and the board must use matching
+firmware. This command is a server transport for an app-server client, not an
+interactive terminal client. No model turn starts and no permission is granted
+just by launching it. Remove the wrapper to stop offering board requests.
+
+**Existing Codex Desktop sessions remain unsupported.** Read-only inspection
+found no attachable control socket on the running Desktop processes. Starting
+another server cannot answer their requests. No Desktop session was restarted or
+answered during this work. Rollout files are detection-only, never a response
+channel. Official contract: [Codex app-server](https://learn.chatgpt.com/docs/app-server).
+
+Supported through the relay:
+
+- Command approval with the full command: **Approve once** or **Deny**.
+- File-change approval after the full changes have arrived in `item/started`.
+- One to three questions with two to four unique, single-choice options each.
+  The review shows the question and numbered labels, with descriptions available
+  by paging. Select an option, then tap **Submit option N**. Nothing is selected
+  by default. Selecting does not submit and resets the presentation/quiet guard.
+  All questions must be answered before one complete RPC reply is sent.
+
+Free text, Other, secret input, multi-select, oversized content, persistent grants,
+scoped network/extra-permission grants, incomplete diffs, and unavailable brokers
+remain in the owning client. The original request is always forwarded to that
+client. The first board or native answer wins. Native answers, resolved requests,
+turn changes, and disconnection cancel the associated board socket. A new relay
+connection never replays old replies. A board delivery receipt confirms delivery
+to the adapter, not tool execution or eventual model success.
+
+The relay binds each pending answer to its connection, JSON-RPC request ID,
+thread and turn. Each board question gets a separate random broker request ID.
+Choice responses preserve the exact question IDs and option labels. The protocol
+adds decision values 3–6 for options 1–4, permits at most four decisions, and hashes
+that ordered list plus the complete question text. Only Codex requests can use
+contiguous choice codes. Existing stale-digest, immutable-review, touch, and
+receipt protections also apply to choices. Upgrade companion and firmware together;
+the renderer asset-digest handshake rejects mismatched versions.
+
+### Reproducible verification
+
+```sh
+python3 tools/approval/test_bridge.py
+python3 tools/approval/test_codex_relay.py
+cargo test --workspace --all-targets
+bash tools/qemu_v2.sh build
+bash tools/qemu_v2.sh test
+```
+
+`tools/test_codex_qemu.py` drives synthetic app-server requests through the real
+relay, a private Rust broker/Store/Authority, encrypted QEMU transport, and the
+Xtensa firmware renderer/touch handler, then checks the exact RPC reply. It does
+not execute a model turn or a command. Generated captures and results are under
+`target/protocol-v2-qa/codex-*`. Physical-panel/touch and live Codex-provider
+verification remain separate from these emulator tests. This change has not been
+flashed onto the physical board.
+
+Verification results for this implementation: 145 workspace tests and 49
+Bluetooth-disabled tests passed; the three Claude bridge tests and six Codex
+relay tests passed. The full `qemu_v2.sh test` suite passed, including all eleven
+Codex cases (allow, deny, file allow, four choices, multi-question, stale digest /
+reconnect / turn cancellation, resolved cancellation, and native answer).
+Clippy passed with the existing `cloned_ref_to_slice_refs` warnings in unrelated
+scene tests allowed; the unmodified strict lint command still reports those.
+The multi-question run found and fixed a missing-body review transition that
+could otherwise retain the previous question. Its focused regression also passes.
+
+## Desktop answers retire board approvals (2026-10-16)
+
+Claude Desktop can finish its permission dialog while the parallel PermissionRequest
+hook is still waiting. Socket liveness alone is not evidence of a pending dialog.
+The installed hook now watches that session's observed permission-wait transition
+and the result of an unambiguously matched tool invocation in its transcript. It
+sends a resolution notice over the same broker socket and returns no permission
+decision. Transcript errors are not interpreted as denials: they can also be
+execution failures or interruptions. A known success says `APPROVED ON DESKTOP`;
+otherwise the board says `REQUEST RESOLVED`. Explicit denial notices are rendered
+as `DENIED ON DESKTOP`, but the current Claude lifecycle watcher cannot reliably
+identify every native denial. These notices only retire controls; they never
+authorize execution.
+
+The broker records terminal outcomes even if socket setup or writing fails after
+the provider disconnects. It rejects late board decisions. Resolved reviews are
+read-only and retained for 30 seconds while their session remains present. The
+normal collector status stops the patron's attention indication when Claude
+continues. Fresh requests get their own request identity and remain actionable.
+Reinstall with `python3 tools/approval/install.py` after updating the script;
+update the companion and firmware together for matching renderer digests.
+
+Validation: 146 workspace tests; five Python hook tests; full QEMU regression
+suite, including `test_desktop_resolution_qemu.py`. The new test runs the actual
+hook against synthetic session files/transcripts and the real broker/Store, then
+makes the first board touch only after the native result. It covers success,
+error/denial with unknown outcome, and continuation before a tool result. In all
+three cases the stale buttons cannot emit a decision. This is isolated emulator
+verification, not a claim that a real Claude Desktop permission was answered.
+
+Deployment: the durable hook was reinstalled and passed `--check`; the matching
+macOS companion was rebuilt and restarted. A private 4 MiB flash backup was saved
+before flashing the production semantic image to `/dev/cu.usbmodem2101`. Esptool
+verified the written hashes, and the companion window reported
+`TokenCafe-6336 synced v2` after reconnecting. Physical visual/touch confirmation
+of a fresh real Claude Desktop approval remains pending user verification.

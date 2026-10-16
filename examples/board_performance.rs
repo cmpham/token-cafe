@@ -56,6 +56,7 @@ fn main() {
     ] {
         scene.review = Some(Review::new(
             Request {
+                choices: 0,
                 id: "profile".into(),
                 session: "profile".into(),
                 title: "Profile".into(),
