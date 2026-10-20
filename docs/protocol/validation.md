@@ -293,3 +293,25 @@ The production image is 315,296 bytes smaller than the starting image.
 The optimized production firmware was flashed with hash verification, original
 pairing restored, and matching desktop app restarted. Post-restoration telemetry
 confirmed continuing frames (draw 29 ms, pack 15 ms, LCD 24 ms) and live BLE traffic.
+
+## October 20: desktop connection instruction
+
+The board now renders **START TOKEN CAFE / ON YOUR DESKTOP** before its first
+session snapshot and after desktop disconnection, with reminders to keep the app
+open and Bluetooth on. Disconnection wakes a sleeping screen. A valid snapshot
+automatically replaces the instruction with the cafe.
+
+Companion-core tests, Clippy, formatting, production/QEMU builds, and the existing
+QEMU protocol suite passed. The new connection-screen QEMU test covers cold boot,
+an absent app, authentication before a snapshot, disconnect while asleep, ignored
+offline touches, and reconnect on the same engine without rebooting. Its rendered
+instruction capture was visually checked for legibility and fit.
+
+Preserved a private full 4 MiB flash backup and pairing files under
+`target/esp/backups/connection-hint-20261020/`. Updated only the production app
+partition, preserving NVS and pairing identity; esptool verified its hash.
+Serial confirmed the intended ELF (`573215f7a` prefix), LCD startup, rendering
+without the desktop, and continuing frames after reconnect. The restarted
+desktop reported `TokenCafe-6336 synced v2`. Physical instruction-screen appearance
+remains unconfirmed. Logs and the evidence manifest are under
+`target/connection-hint-*`; captures are under `target/protocol-v2-qa/connection-*`.

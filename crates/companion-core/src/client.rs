@@ -14,9 +14,27 @@ use alloc::{
 };
 use cafe_ui::{
     approval::Request as UiRequest,
+    gfx::{Gfx, text_width},
     review::Review,
     scene::{self, Scene},
 };
+
+/// Also used before authentication, when the board has no client yet.
+pub fn render_desktop_hint(frame: &mut [u32]) {
+    frame.fill(0x181021);
+    let mut g = Gfx::new(frame);
+    g.rect(24, 28, 432, 212, 0x5a465e);
+    g.rect(26, 30, 428, 208, 0x241b2e);
+    for (text, y, scale, color) in [
+        ("WAITING FOR DESKTOP", 55, 1, 0xbdb6c6),
+        ("START TOKEN CAFE", 96, 2, 0xffd352),
+        ("ON YOUR DESKTOP", 122, 2, 0xf7f3ef),
+        ("KEEP THE APP OPEN WITH BLUETOOTH ON.", 172, 1, 0xf7f3ef),
+        ("THIS BOARD WILL CONNECT AUTOMATICALLY.", 193, 1, 0xbdb6c6),
+    ] {
+        g.text(text, (480 - text_width(text, scale)) / 2, y, color, scale, None);
+    }
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct Receipt {
     pub authority: Vec<u8>,
@@ -152,6 +170,7 @@ impl Client {
     }
     pub fn disconnect(&mut self) {
         self.connected = false;
+        self.sleeping = false;
         self.replica.disconnect();
         self.intents.clear();
         self.outgoing.clear();
@@ -597,6 +616,10 @@ impl Client {
             .unwrap()
     }
     pub fn render(&mut self, frame: &mut [u32], now: u64) {
+        if !self.connected || !self.replica.ready {
+            render_desktop_hint(frame);
+            return;
+        }
         self.scene.render(frame, self.local_time(now));
         self.feedback(|x, y| frame[y as usize * 480 + x as usize] = 0xffd95f);
     }

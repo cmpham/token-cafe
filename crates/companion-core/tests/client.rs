@@ -7,6 +7,29 @@ use companion_core::{
     wire::{envelope::Payload, *},
 };
 use std::collections::BTreeMap;
+
+#[test]
+fn desktop_hint_covers_startup_and_disconnect_until_snapshot() {
+    let mut expected = vec![0; 480 * 272];
+    companion_core::client::render_desktop_hint(&mut expected);
+    let mut frame = vec![0; 480 * 272];
+    let mut waiting = Client::new("qa".into(), vec![1; 16], true, 0);
+    waiting.render(&mut frame, 0);
+    assert_eq!(frame, expected);
+
+    let (mut synced, _, _) = setup();
+    synced.render(&mut frame, 10_000);
+    assert_ne!(frame, expected);
+    synced.sleeping = true;
+    synced.disconnect();
+    assert!(!synced.sleeping, "connection loss must wake the instruction screen");
+    synced.render(&mut frame, 10_001);
+    assert_eq!(frame, expected);
+    assert!(!synced.armed(10_001));
+    tap(&mut synced, 250, 240, 10_002);
+    assert!(actions(&mut synced).is_empty());
+}
+
 fn setup() -> (Client, Authority, Peer) {
     let body = b"printf 'synthetic approval fixture'\nNo actual command is executed.";
     let b = sync::blob(body).unwrap();

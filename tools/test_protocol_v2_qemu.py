@@ -35,9 +35,10 @@ class Device:
   assert status==(0 if ok else 1),(op,status,body)
   return body
 class Host:
- def __init__(self,d,cap):
-  self.d=d;self.cap=cap;self.time=0;self.tx=0;self.rx=0;self.ids=[0,0];self.partial=[None,None];self.actions=[];self.assets=None
-  d.request(9,struct.pack('<H',cap));idle=d.request(1);assert idle==b'\0\x07qa-qemu'
+ def __init__(self,d,cap,reset=True,now=0):
+  self.d=d;self.cap=cap;self.time=now;self.tx=0;self.rx=0;self.ids=[0,0];self.partial=[None,None];self.actions=[];self.assets=None
+  if reset:d.request(9,struct.pack('<H',cap))
+  idle=d.request(1);assert idle==b'\0\x07qa-qemu'
   hn=os.urandom(16);d.request(2,b'\x01'+hn);r=d.request(1);assert r[0]==2 and len(r)==33
   transcript=b'tc-auth-v2'+lp('qa-qemu')+hn+r[1:17]
   assert hmac.digest(KEY,b'board'+transcript,'sha256')[:16]==r[17:]

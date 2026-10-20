@@ -3,7 +3,7 @@
 extern crate alloc;
 use alloc::{boxed::Box, string::String, vec, vec::Vec};
 use companion_core::{
-    client::{Client, Receipt},
+    client::{Client, Receipt, render_desktop_hint},
     crypto::{self, Keys},
     transport::Transport,
 };
@@ -248,8 +248,11 @@ pub unsafe extern "C" fn cafe_engine_touch(e: *mut Engine, pressed: u8, x: i32, 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cafe_engine_draw(e: *mut Engine, now: u64) -> bool {
     let e = unsafe { &mut *e };
-    let Some(c) = &mut e.client else { return false };
-    c.render(&mut e.frame, now);
+    if let Some(c) = &mut e.client {
+        c.render(&mut e.frame, now);
+    } else {
+        render_desktop_hint(&mut e.frame);
+    }
     true
 }
 #[unsafe(no_mangle)]

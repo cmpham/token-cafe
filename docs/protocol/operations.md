@@ -43,6 +43,13 @@ out USB injected-touch and framebuffer-capture commands. Never print or commit k
 
 Window title reports the BLE connection/synchronization state. A connected radio
 is not enough: the host waits for an applied model revision before reporting sync.
+Before the first synchronization and whenever the desktop disconnects, the board
+shows **START TOKEN CAFE / ON YOUR DESKTOP**, with a reminder to keep the app open
+and Bluetooth on. The instruction clears automatically after a valid session
+snapshot arrives. Losing a connection also wakes a sleeping board to show it.
+`tools/test_connection_hint_qemu.py` checks cold boot without the app, waiting for
+a snapshot, disconnect during sleep, ignored offline touches, and recovery on
+the same engine without rebooting. It runs as part of `tools/qemu_v2.sh test`.
 The QA suite writes `results.json`, `latency.json`, `actions.jsonl`, serial/host logs,
 and six screen captures. LCD completion timestamps measure software presentation,
 not physical photon response. RAM screenshots cannot detect wiring or panel color faults.
