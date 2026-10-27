@@ -92,8 +92,17 @@ The original mixed checkout was preserved. Validation completed:
   confirmed wiring-test mode with approvals disabled.
 
 Local logs are under ignored `target/external-io-qa/`. The physical switch
-produced six debounced press/release pairs in the diagnostic serial log. The
-user reports that the external LED does not light. LED polarity, breadboard
-continuity and GPIO17 wiring still need physical diagnosis. Production deployment
-and live approval acceptance remain pending; the board is left in the diagnostic
-image with approvals disabled. No GPIO17 voltage measurement has been made.
+produced six debounced press/release pairs in the diagnostic serial log. The LED
+initially stayed dark because it was reversed. The user reversed it and confirmed
+that it works in the button-controlled diagnostic. No GPIO17 voltage measurement
+was needed.
+
+Production firmware was then built and flashed on 2026-10-27 using
+`tools/qemu_v2.sh board-flash /dev/cu.usbmodem1101`, with esptool hash verification.
+Both `CONFIG_TC_EXTERNAL_IO_DIAGNOSTIC` and `CONFIG_TC_QA_USB` are disabled in the
+production config. Serial startup confirmed GPIO17/GPIO18 initialization,
+NV3041A initialization and production BLE advertising. The existing compatible
+Pokémon desktop companion reconnected and its window reported
+`BLE: TokenCafe-6336 synced v2`; its display settings and other desktop windows
+were preserved. A real provider approval using the physical button has not yet
+been exercised; no real pending request was dispatched by automated testing.
