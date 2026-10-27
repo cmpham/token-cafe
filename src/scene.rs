@@ -3,12 +3,15 @@
 //! collector only says which sessions exist and what state each is in;
 //! everything that moves is decided here.
 
+use crate::assets::{H, W};
+
 use std::f64::consts::PI;
 
 use chrono::{NaiveTime, Timelike};
 
 use crate::assets::{self as a, Pal, Sprite, base, c, slot};
 use crate::gfx::{Gfx, text_width};
+use crate::patrons::Animation;
 
 pub const SEATS: usize = 8;
 const NAME_LEN: usize = 12; // shown in the message window
@@ -179,6 +182,8 @@ impl Particle {
 }
 
 pub struct Scene {
+    pub patrons: crate::patrons::Patrons,
+    pub selected_seat: Option<usize>,
     /// Milliseconds of animation so far.
     t: i64,
     /// In arrival order.
@@ -362,6 +367,8 @@ impl Scene {
         let bg =
             a::BG.as_chunks::<3>().0.iter().map(|p| (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32).collect();
         Scene {
+            patrons: crate::patrons::Patrons::default(),
+            selected_seat: None,
             t: 0,
             agents: Vec::new(),
             particles: Vec::new(),
@@ -392,7 +399,10 @@ impl Scene {
             let k = match self.agents.iter().position(|a| a.id == s.id) {
                 Some(k) => k,
                 None => {
-                    let Some(seat) = (0..SEATS).find(|&i| self.seat_free(i)) else {
+                    // Match the provider grouping used by the private branch.
+                    let right = s.kind == Kind::Codex;
+                    let Some(seat) = (0..SEATS).find(|&i| (i % COLS as usize >= 2) == right && self.seat_free(i))
+                    else {
                         overflow += 1;
                         continue;
                     };
@@ -730,17 +740,48 @@ impl Scene {
         }
         let ag = self.agents.iter().find(|a| a.seat == i);
         if let Some(ag) = ag.filter(|a| a.mode == Mode::Seated) {
+            if self.patrons.is_creature(i) {
+                // Contact overlaps the desktop, but stays behind the laptop lid
+                // so the lower body cannot cut through its logo.
+                g.clip(geo.sx + 29, geo.sy + 30, geo.sx + 55, geo.sy + 32);
+                self.draw_creature(g, ag);
+                g.clip(0, 0, a::W as i32, a::WIN_Y);
+            }
             if pose_of(self.t, ag) == Pose::Sleep {
                 self.draw_closed_laptop(g, ag, geo.sx + LID_X - 1, geo.sy + DESK_Y + 2);
             } else {
                 self.draw_laptop(g, ag, geo.sx + LID_X, geo.sy + LID_Y);
             }
+            if self.patrons.is_creature(i) {
+                if pose_of(self.t, ag) == Pose::Sip {
+                    self.patrons.cup(g, i, (geo.sx + 40, geo.sy + 31), (self.t + ag.phase) as u64);
+                }
+                if pose_of(self.t, ag) == Pose::Type {
+                    self.patrons.keyboard_paws(g, i, (geo.sx + 40, geo.sy + 31), (self.t + ag.phase) as u64);
+                }
+            }
         }
         self.draw_plate(g, ag, geo.sx + 40, y + 9);
     }
 
+    fn draw_creature(&self, g: &mut Gfx, ag: &Agent) -> bool {
+        let geo = seat_geom(ag.seat);
+        let animation = match pose_of(self.t, ag) {
+            Pose::Type => Animation::Type,
+            Pose::Think => Animation::Think,
+            Pose::Raise => Animation::Wave,
+            Pose::Sip => Animation::Sip,
+            Pose::Sleep => Animation::Sleep,
+            Pose::Stretch => Animation::Stretch,
+        };
+        self.patrons.draw(g, ag.seat, (geo.sx + 40, geo.sy + 31), animation, (self.t + ag.phase) as u64)
+    }
+
     fn draw_seated(&self, g: &mut Gfx, ag: &Agent) {
         let geo = seat_geom(ag.seat);
+        if self.draw_creature(g, ag) {
+            return;
+        }
         let p = &a::POSES[ag.style];
         let t = self.t + ag.phase;
         let spr = match pose_of(self.t, ag) {
@@ -755,6 +796,15 @@ impl Scene {
     }
 
     fn draw_walker(&self, g: &mut Gfx, ag: &Agent) {
+        let animation = match ag.dir {
+            Dir::Up => Animation::WalkUp,
+            Dir::Down => Animation::WalkDown,
+            Dir::Left => Animation::WalkLeft,
+            Dir::Right => Animation::WalkRight,
+        };
+        if self.patrons.draw(g, ag.seat, (jround(ag.x), jround(ag.y)), animation, ag.dist as u64) {
+            return;
+        }
         let p = &a::POSES[ag.style];
         let f = (ag.dist / 7.0) as i32 % 4;
         let mut flip = false;
@@ -783,6 +833,11 @@ impl Scene {
     }
 
     fn draw_overlays(&self, g: &mut Gfx) {
+        if let Some(seat) = self.selected_seat.filter(|&s| s < SEATS) {
+            let geo = seat_geom(seat);
+            g.rect(geo.sx + 12, geo.sy + 48, 56, 1, c::GOLD);
+            g.text(&format!("{}", seat + 1), geo.sx + 5, geo.sy + 40, c::GOLD, 1, None);
+        }
         let t = self.t;
         let wl = self.waiting_list();
         let focused = wl.get(self.focus).copied();
@@ -840,7 +895,9 @@ impl Scene {
             g.rect(fx + 1, fy + 1, fs - 2, fs - 2, c::WIN1);
             g.rect(fx + 1, fy + 1 + 18, fs - 2, fs - 20, a::CHAIRS[ag.seat % a::CHAIRS.len()][0]);
             let bx = [fx + 1, fy + 1, fx + fs - 1, fy + fs - 1];
-            g.blit_scaled(&a::HEAD_SHOUT, fx + 3, fy + 5, Some(&ag.pal), 2, Some(bx));
+            if !self.patrons.draw(g, ag.seat, (fx + 17, fy + 33), Animation::Wave, (self.t + ag.phase) as u64) {
+                g.blit_scaled(&a::HEAD_SHOUT, fx + 3, fy + 5, Some(&ag.pal), 2, Some(bx));
+            }
             let tx = fx + fs + 8;
             let name = shorten(&ag.name, NAME_LEN).to_ascii_uppercase();
             g.text(&name, tx, y + 9, c::GOLD, 2, Some(c::TEXT_SHADOW));
@@ -898,7 +955,16 @@ impl Scene {
 
     /// Draw the café as of the last tick, with the clocks at local time `now`.
     pub fn render(&self, fb: &mut [u32], now: NaiveTime) {
-        fb.copy_from_slice(&self.bg);
+        if fb.len() == W * H {
+            fb.copy_from_slice(&self.bg);
+        } else {
+            assert_eq!(fb.len(), W * H * 4);
+            for y in 0..H * 2 {
+                for x in 0..W * 2 {
+                    fb[y * W * 2 + x] = self.bg[y / 2 * W + x / 2];
+                }
+            }
+        }
         let mut g = Gfx::new(fb);
         // the room's window is part of the background, so the scene stays above it
         g.clip(0, 0, a::W as i32, a::WIN_Y);
@@ -936,7 +1002,161 @@ impl Scene {
 
 #[cfg(test)]
 mod tests {
-    use super::shorten;
+    use super::*;
+
+    #[test]
+    fn providers_keep_their_side_across_refreshes_and_overflow() {
+        let mut scene = Scene::new();
+        let mut list: Vec<_> = (0..10)
+            .map(|i| Session {
+                id: i.to_string(),
+                name: "test".into(),
+                kind: if i % 2 == 0 { Kind::Claude } else { Kind::Codex },
+                state: State::Work,
+                why: Why::None,
+                pose: ForcedPose::Auto,
+                age_s: 0,
+            })
+            .collect();
+        scene.set_sessions(&list);
+        assert_eq!(scene.agents.len(), 8);
+        assert_eq!(scene.overflow, 2);
+        let seats: Vec<_> = scene.agents.iter().map(|a| (a.id.clone(), a.seat)).collect();
+        assert!(scene.agents.iter().all(|a| (a.seat % 4 >= 2) == a.codex));
+        list.reverse();
+        scene.set_sessions(&list);
+        for (id, seat) in seats {
+            assert_eq!(scene.agents.iter().find(|a| a.id == id).unwrap().seat, seat);
+        }
+        let mut solo = Scene::new();
+        for s in &mut list {
+            s.kind = Kind::Codex;
+        }
+        solo.set_sessions(&list);
+        assert_eq!(solo.agents.len(), 4);
+        assert_eq!(solo.overflow, 6);
+        assert!(solo.agents.iter().all(|a| a.seat % 4 >= 2));
+    }
+
+    #[test]
+    fn creature_contact_does_not_overpaint_laptop_logo() {
+        let mut scene = Scene::new();
+        scene.set_sessions(&[Session {
+            id: "logo-test".into(),
+            name: "test".into(),
+            kind: Kind::Claude,
+            state: State::Wait,
+            why: Why::Perm,
+            pose: ForcedPose::Auto,
+            age_s: 0,
+        }]);
+        let geo = seat_geom(0);
+        for name in &crate::patrons::NAMES[1..] {
+            scene.patrons.assign(&format!("1={name}")).unwrap();
+            for k in [1, 2] {
+                for t in [0, 280, 650, 1100] {
+                    scene.t = t;
+                    let mut expected = vec![0; W * H * k * k];
+                    scene.draw_laptop(&mut Gfx::new(&mut expected), &scene.agents[0], geo.sx + LID_X, geo.sy + LID_Y);
+                    let mut actual = vec![0; W * H * k * k];
+                    scene.draw_desk(&mut Gfx::new(&mut actual), 0);
+                    for y in (geo.sy + LID_Y)..(geo.sy + LID_Y + 11) {
+                        for x in (geo.sx + LID_X)..(geo.sx + LID_X + 13) {
+                            for dy in 0..k {
+                                for dx in 0..k {
+                                    let i = (y as usize * k + dy) * W * k + x as usize * k + dx;
+                                    assert_eq!(actual[i], expected[i], "{name} at {t}, scale {k}, pixel {x},{y}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn all_creatures_animate_inside_the_actual_seated_scene() {
+        let mut scene = Scene::new();
+        scene.set_sessions(&[Session {
+            id: "pose-test".into(),
+            name: "test".into(),
+            kind: Kind::Claude,
+            state: State::Work,
+            why: Why::Perm,
+            pose: ForcedPose::Auto,
+            age_s: 0,
+        }]);
+        scene.agents[0].phase = 0;
+        for name in &crate::patrons::NAMES[1..] {
+            scene.patrons.assign(&format!("1={name}")).unwrap();
+            for (state, force, start, duration) in [
+                (State::Work, ForcedPose::Auto, 3000, 180),
+                (State::Work, ForcedPose::Think, 0, 850),
+                (State::Wait, ForcedPose::Auto, 0, 280),
+                (State::Idle, ForcedPose::Sip, 0, 1100),
+                (State::Idle, ForcedPose::Sleep, 0, 1000),
+                (State::Idle, ForcedPose::Stretch, 0, 650),
+            ] {
+                scene.agents[0].state = state;
+                scene.agents[0].force = force;
+                let mut rendered = Vec::new();
+                for t in [start, start + duration] {
+                    scene.t = t;
+                    let mut fb = vec![0; a::W * a::H];
+                    scene.render(&mut fb, NaiveTime::from_hms_opt(12, 0, 0).unwrap());
+                    // Exclude status bubbles, laptop and particles: inspect the
+                    // visible head/torso to catch a static sprite behind effects.
+                    rendered.push(
+                        (51..70).flat_map(|y| (25..56).map(move |x| y * a::W + x)).map(|i| fb[i]).collect::<Vec<_>>(),
+                    );
+                }
+                let changed = rendered[0].iter().zip(&rendered[1]).filter(|(a, b)| a != b).count();
+                assert!(changed >= 3, "{name} {force:?} {state:?}: visible body did not animate ({changed})");
+            }
+        }
+    }
+
+    #[test]
+    fn creature_configuration_survives_updates_arrivals_and_departures() {
+        let mut scene = Scene::new();
+        scene.patrons = crate::patrons::Patrons::roster("mixed").unwrap();
+        let session = |id: &str, state| Session {
+            id: id.into(),
+            name: "demo".into(),
+            kind: Kind::Claude,
+            state,
+            why: Why::Perm,
+            pose: ForcedPose::Auto,
+            age_s: 0,
+        };
+        scene.set_sessions(&[session("one", State::Wait)]);
+        let config = scene.patrons.clone();
+        let mut frame = vec![0; a::W * a::H];
+        let now = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
+        scene.render(&mut frame, now);
+        // A creature portrait must differ from the legacy human portrait.
+        let creature = frame.clone();
+        scene.patrons = crate::patrons::Patrons::default();
+        scene.render(&mut frame, now);
+        assert_ne!(&frame[199 * a::W..], &creature[199 * a::W..]);
+        scene.patrons = config.clone();
+        scene.set_sessions(&[session("one", State::Idle), session("two", State::Work)]);
+        assert!(scene.agents.iter().any(|a| a.mode == Mode::Arriving));
+        for _ in 0..200 {
+            scene.tick(33);
+            scene.render(&mut frame, now);
+        }
+        scene.set_sessions(&[session("two", State::Wait)]);
+        assert!(scene.agents.iter().any(|a| a.mode == Mode::Leaving));
+        for _ in 0..200 {
+            scene.tick(33);
+            scene.render(&mut frame, now);
+        }
+        assert_eq!(scene.patrons, config);
+        assert_eq!(scene.agents.len(), 1);
+        assert_eq!(scene.agents[0].state, State::Wait);
+    }
 
     #[test]
     fn shorten_keeps_the_suffix() {

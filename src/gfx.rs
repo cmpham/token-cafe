@@ -1,4 +1,4 @@
-//! Software drawing into the 320x240 frame (0x00RRGGBB pixels): rectangles,
+//! Software drawing in 320x240 room coordinates, with a 1x or 2x framebuffer (0x00RRGGBB pixels): rectangles,
 //! shadows, palette sprites and the 5x7 font, the primitives design/cafe.js
 //! draws with. Every call clips to the screen and to the current clip
 //! rectangle.
@@ -18,6 +18,7 @@ impl Pal {
 
 pub struct Gfx<'a> {
     fb: &'a mut [u32],
+    pub scale: usize,
     cx0: i32,
     cy0: i32,
     cx1: i32,
@@ -39,8 +40,9 @@ fn glyph(ch: u8) -> &'static [u8; 7] {
 
 impl<'a> Gfx<'a> {
     pub fn new(fb: &'a mut [u32]) -> Self {
-        assert_eq!(fb.len(), W * H);
-        Gfx { fb, cx0: 0, cy0: 0, cx1: W as i32, cy1: H as i32 }
+        let scale = if fb.len() == W * H * 4 { 2 } else { 1 };
+        assert_eq!(fb.len(), W * H * scale * scale);
+        Gfx { fb, scale, cx0: 0, cy0: 0, cx1: W as i32, cy1: H as i32 }
     }
 
     /// Half-open box.
@@ -59,15 +61,23 @@ impl<'a> Gfx<'a> {
         if x < self.cx0 || y < self.cy0 || x >= self.cx1 || y >= self.cy1 {
             return;
         }
-        self.fb[y as usize * W + x as usize] = c;
+        self.rect(x, y, 1, 1, c);
+    }
+
+    /// A physical pixel in the high-detail layer; clip remains in room coordinates.
+    pub fn detail_px(&mut self, x: i32, y: i32, c: u32) {
+        let k = self.scale as i32;
+        if x >= self.cx0 * k && y >= self.cy0 * k && x < self.cx1 * k && y < self.cy1 * k {
+            self.fb[y as usize * W * self.scale + x as usize] = c;
+        }
     }
 
     pub fn rect(&mut self, x: i32, y: i32, w: i32, h: i32, c: u32) {
         let (x0, y0) = (x.max(self.cx0), y.max(self.cy0));
         let (x1, y1) = ((x + w).min(self.cx1), (y + h).min(self.cy1));
-        for j in y0..y1 {
-            for i in x0..x1 {
-                self.fb[j as usize * W + i as usize] = c;
+        for j in y0 * self.scale as i32..y1 * self.scale as i32 {
+            for i in x0 * self.scale as i32..x1 * self.scale as i32 {
+                self.fb[j as usize * W * self.scale + i as usize] = c;
             }
         }
     }
@@ -77,9 +87,9 @@ impl<'a> Gfx<'a> {
         let (x0, y0) = (x.max(self.cx0), y.max(self.cy0));
         let (x1, y1) = ((x + w).min(self.cx1), (y + h).min(self.cy1));
         let scale = |v: u32| ((v & 255) as f64 * k) as u32;
-        for j in y0..y1 {
-            for i in x0..x1 {
-                let p = &mut self.fb[j as usize * W + i as usize];
+        for j in y0 * self.scale as i32..y1 * self.scale as i32 {
+            for i in x0 * self.scale as i32..x1 * self.scale as i32 {
+                let p = &mut self.fb[j as usize * W * self.scale + i as usize];
                 *p = (scale(*p >> 16) << 16) | (scale(*p >> 8) << 8) | scale(*p);
             }
         }

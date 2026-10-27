@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 
 use softbuffer::{Context, Rect, Surface};
 use token_cafe::assets::{H, W};
-use token_cafe::scene::Scene;
+use token_cafe::patrons::{Patrons, ROSTERS};
+use token_cafe::scene::{SEATS, Scene};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
@@ -49,11 +50,13 @@ impl Area {
 
 /// The pixels that differ between two frames, or None.
 fn diff(a: &[u32], b: &[u32]) -> Option<Area> {
+    let k = if a.len() == W * H * 4 { 2 } else { 1 };
+    let stride = W * k;
     let mut area: Option<Area> = None;
-    for (y, (ra, rb)) in a.as_chunks::<W>().0.iter().zip(b.as_chunks::<W>().0.iter()).enumerate() {
+    for (y, (ra, rb)) in a.chunks_exact(stride).zip(b.chunks_exact(stride)).enumerate() {
         let Some(x0) = ra.iter().zip(rb).position(|(p, q)| p != q) else { continue };
-        let x1 = W - ra.iter().zip(rb).rev().position(|(p, q)| p != q).unwrap();
-        let row = Area { x0, y0: y, x1, y1: y + 1 };
+        let x1 = stride - ra.iter().zip(rb).rev().position(|(p, q)| p != q).unwrap();
+        let row = Area { x0: x0 / k, y0: y / k, x1: x1.div_ceil(k), y1: y / k + 1 };
         area = Some(area.map_or(row, |a| a.union(row)));
     }
     area
@@ -77,6 +80,7 @@ fn fit(w: usize, h: usize) -> Fit {
 /// touched, or None when the area falls outside the window.
 fn paint(fb: &[u32], out: &mut [u32], w: usize, h: usize, area: Area, full: bool) -> Option<Rect> {
     let f = fit(w, h);
+    let detail = if fb.len() == W * H * 4 { 2 } else { 1 };
     if full {
         out.fill(0);
     }
@@ -88,11 +92,11 @@ fn paint(fb: &[u32], out: &mut [u32], w: usize, h: usize, area: Area, full: bool
     let mut row = vec![0u32; x1 - x0];
     let mut row_of = usize::MAX;
     for y in y0..y1 {
-        let sy = (y - f.oy) / f.k;
+        let sy = (y - f.oy) * detail / f.k;
         if sy != row_of {
-            let src = &fb[sy * W..(sy + 1) * W];
+            let src = &fb[sy * W * detail..(sy + 1) * W * detail];
             for (i, px) in row.iter_mut().enumerate() {
-                *px = src[(x0 + i - f.ox) / f.k];
+                *px = src[(x0 + i - f.ox) * detail / f.k];
             }
             row_of = sy;
         }
@@ -110,6 +114,8 @@ struct Shown {
 struct App {
     rx: Receiver<Update>,
     scale: u32,
+    selected_seat: usize,
+    roster_index: usize,
     shown: Option<Shown>,
     scene: Scene,
     fb: Vec<u32>,
@@ -125,16 +131,18 @@ struct App {
     occluded: bool,
 }
 
-pub fn run(rx: Receiver<Update>, scale: u32) -> Result<(), Box<dyn Error>> {
+pub fn run(rx: Receiver<Update>, scale: u32, patrons: Patrons, roster_index: usize) -> Result<(), Box<dyn Error>> {
     let event_loop = EventLoop::new()?;
     let now = Instant::now();
     let mut app = App {
         rx,
         scale,
+        selected_seat: 0,
+        roster_index,
         shown: None,
         scene: Scene::new(),
-        fb: vec![0; W * H],
-        on_screen: vec![0; W * H],
+        fb: vec![0; W * H * 4],
+        on_screen: vec![0; W * H * 4],
         history: VecDeque::new(),
         size: (0, 0),
         last: now,
@@ -143,11 +151,20 @@ pub fn run(rx: Receiver<Update>, scale: u32) -> Result<(), Box<dyn Error>> {
         stale: true,
         occluded: false,
     };
+    app.scene.patrons = patrons;
     event_loop.run_app(&mut app)?;
     Ok(())
 }
 
 impl App {
+    fn patron_title(&self) -> String {
+        format!(
+            "Token Café — Seat {}: {} | P roster · Tab seat · [ ] character",
+            self.selected_seat + 1,
+            self.scene.patrons.name(self.selected_seat)
+        )
+    }
+
     /// Apply what the feeders sent, advance the scene and render it.
     fn step(&mut self) {
         while let Ok(u) = self.rx.try_recv() {
@@ -231,6 +248,22 @@ impl App {
     fn key(&mut self, el: &ActiveEventLoop, key: Key) {
         let Some(s) = &self.shown else { return };
         match key.as_ref() {
+            Key::Character("p" | "P") => {
+                self.roster_index = (self.roster_index + 1) % ROSTERS.len();
+                self.scene.patrons = Patrons::roster(ROSTERS[self.roster_index]).unwrap();
+                self.scene.selected_seat = Some(self.selected_seat);
+                s.window.set_title(&self.patron_title());
+            }
+            Key::Named(NamedKey::Tab) => {
+                self.selected_seat = (self.selected_seat + 1) % SEATS;
+                self.scene.selected_seat = Some(self.selected_seat);
+                s.window.set_title(&self.patron_title());
+            }
+            Key::Character(c @ ("[" | "]")) => {
+                self.scene.patrons.cycle(self.selected_seat, c == "[");
+                self.scene.selected_seat = Some(self.selected_seat);
+                s.window.set_title(&self.patron_title());
+            }
             Key::Character("q") => el.exit(),
             Key::Character("f") | Key::Named(NamedKey::F11) => {
                 let full = if s.window.fullscreen().is_some() { None } else { Some(Fullscreen::Borderless(None)) };
@@ -253,7 +286,7 @@ impl ApplicationHandler for App {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Token Café")
+            .with_title(self.patron_title())
             .with_inner_size(LogicalSize::new(W as u32 * self.scale, H as u32 * self.scale))
             .with_min_inner_size(LogicalSize::new(W as u32, H as u32));
         // app_id (Wayland) / WM_CLASS (X11) "token-cafe", for window rules
@@ -319,6 +352,28 @@ mod tests {
 
     fn frame() -> Vec<u32> {
         (0..W * H).map(|i| (i * 7 + i / W) as u32 & 0xffff).collect()
+    }
+
+    #[test]
+    fn high_detail_damage_and_downscaling_match_full_repaints() {
+        let old = vec![0; W * H * 4];
+        let mut new = old.clone();
+        new[20 * W * 2 + 41] = 0xffffff;
+        new[21 * W * 2 + 40] = 0x123456;
+        let area = diff(&old, &new).unwrap();
+        assert_eq!(area, Area { x0: 20, y0: 10, x1: 21, y1: 11 });
+        for k in 1..=6 {
+            let (w, h) = (W * k + 20, H * k + 20);
+            let mut full = vec![0; w * h];
+            let mut partial = full.clone();
+            paint(&new, &mut full, w, h, Area::ALL, true);
+            paint(&old, &mut partial, w, h, Area::ALL, true);
+            paint(&new, &mut partial, w, h, area, false);
+            assert_eq!(full, partial);
+        }
+        let mut native = vec![0; W * H * 4];
+        paint(&new, &mut native, W * 2, H * 2, Area::ALL, true);
+        assert_eq!(native, new, "native presentation must retain every detail pixel");
     }
 
     #[test]

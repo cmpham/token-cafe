@@ -21,7 +21,7 @@ They type while they work, nap while you're away, and raise a hand when they nee
 
 ## What you're looking at
 
-Each session is a patron with their own look (skin, hair, shirt, hairstyle, all derived from the session id, so they're the same person every time). What they're doing tells you what your agent is doing:
+Each session is a patron. The desktop starts with a mixed dragon/Pokémon roster, with distinct creatures assigned to the eight seats. The human roster retains the original session-derived skin, hair and clothes. What they're doing tells you what your agent is doing:
 
 | Your agent is… | The patron… |
 |---|---|
@@ -29,7 +29,7 @@ Each session is a patron with their own look (skin, hair, shirt, hairstyle, all 
 | **Idle** | stretches, fetches a coffee after 2 minutes, and falls asleep on a closed laptop after 10 |
 | **Waiting for you** | raises a hand: `!` for a permission prompt, `?` for a question. The nameplate blinks and the message window calls them out by name, cycling through everyone waiting |
 
-New sessions walk in from the door, finished ones walk out, and a ninth waits outside until a seat frees up.
+New sessions walk in from the door and finished ones walk out. Claude occupies the four seats left of the aisle; Codex occupies the four on the right. Additional sessions wait outside until a seat on their provider’s side frees up.
 
 <div align="center">
 <img src="docs/arrivals.gif" alt="Three new patrons walk in from the door and take their seats while one leaves" width="640">
@@ -69,6 +69,9 @@ The bundle is for local use; it is not signed for distribution or notarized. Fin
 
 | Key | |
 |---|---|
+| `P` | cycle human / dragon / Pokémon / mixed rosters |
+| `Tab` | select the next seat |
+| `[` / `]` | previous / next character for the selected seat |
 | `1` – `6` | resize the window to that many times 320×240 |
 | `f` / `F11` | fullscreen (nice on a spare monitor) |
 | `Esc` | leave fullscreen |
@@ -78,6 +81,28 @@ The café is drawn at 320×240 and scaled by the largest whole number that fits,
 
 > [!NOTE]
 > On a tiling window manager the window gets tiled like any other. Its Wayland app id and X11 class are both `token-cafe`, so you can write a window rule to float or pin it.
+
+## Patron characters
+
+![Dragon and Pokémon collection](docs/patrons.png)
+
+Choose `humans`, `dragons`, `pokemon`, or `mixed` (default). Eight Wings of Fire-inspired dragons and eight Pokémon are bundled, using generated dragon/Dragonite pose sheets and credited PMDCollab Pokémon animations; see [art sources, credits and generation prompt](assets/patrons/SOURCES.md).
+
+```sh
+./target/release/token-cafe --demo --patrons dragons
+./target/release/token-cafe --patrons mixed --seat 1=winter --seat 4=eevee
+./target/release/token-cafe --list-patrons
+```
+
+Press **P** to cycle rosters, **Tab** to select the next seat, and **[ / ]** to change that seat's character. Seat 1 is initially selected; seats run left-to-right across the top row, then the bottom row. The title shows the selected seat and character, and editing highlights its desk. Selecting a creature already assigned elsewhere swaps the two seats. Humans can repeat, keeping their individual session-derived appearance. Changing rosters resets all seat choices.
+
+`--seat N=NAME` can be repeated; assignments apply in order after `--patrons`, regardless of option position. Choices last for the current run; use startup arguments to reproduce a layout. Assignments belong to seats, including empty seats, and survive session refreshes. Creature portraits match their seat characters. Creatures have separate animated typing, thinking, waving, sipping, sleeping and stretching poses. Seated bodies sit behind the desk; alternating forepaws overlap the keyboard area. Walking uses gait frames and rear views for upward travel. The human roster retains its original animations.
+
+![Animated mixed café roster](docs/cafe-mixed.gif)
+
+The [visual QA record](docs/qa/REVIEW.md) includes paired pose frames, walking timelines, and native desktop screenshots.
+
+Regenerate the art contact sheet with `python3 tools/build_patrons.py` (Pillow), and café previews with `cargo run --example screenshots -- --patrons`.
 
 ## How it knows
 
@@ -127,3 +152,5 @@ The renderer and window dependencies are cross-platform, but Windows process dis
 ## Credits
 
 The café started life on a 2.8″ ESP32-S3 desk display, as a little JRPG-style net café that sat next to the keyboard. This app brings the same patrons to your desktop.
+
+Patrons render from 64×64 animation cells onto a 640×480 desktop frame, while furniture and text keep the original pixel grid. Dragon artwork is recompiled from the full-size sources; Pokémon retain their native sprite detail. Window shortcuts 1–6 keep their existing sizes.
