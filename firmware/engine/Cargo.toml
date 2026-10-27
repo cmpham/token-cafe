@@ -6,6 +6,7 @@ edition = "2024"
 [lib]
 crate-type = ["staticlib"]
 [dependencies]
+cafe-ui = { path = "../../crates/cafe-ui", default-features = false }
 companion-core = { path = "../../crates/companion-core", default-features = false }
 [profile.release]
 panic = "abort"

@@ -6,4 +6,7 @@ config TC_QA_USB
     bool "Local USB injection and framebuffer capture for QA"
     depends on TC_BOARD_JC4827W543
     default n
+config TC_EXTERNAL_IO_DIAGNOSTIC
+    bool "LED/button wiring test only (no Bluetooth or approvals)"
+    default n
 endmenu

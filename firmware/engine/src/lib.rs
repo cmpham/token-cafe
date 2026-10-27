@@ -246,6 +246,26 @@ pub unsafe extern "C" fn cafe_engine_touch(e: *mut Engine, pressed: u8, x: i32, 
     true
 }
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn cafe_engine_approval_waiting(e: *mut Engine) -> bool {
+    unsafe { &*e }.client.as_ref().is_some_and(Client::approval_waiting)
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cafe_engine_approval_button(e: *mut Engine, pressed: bool, now: u64) -> bool {
+    let e = unsafe { &mut *e };
+    let ok = if let Some(c) = &mut e.client {
+        let ok = c.approval_button(pressed, now, &mut persist).is_ok();
+        e.receipts.clone_from(&c.receipts);
+        ok
+    } else {
+        true
+    };
+    if !ok || !e.pump() {
+        e.fail();
+        return false;
+    }
+    true
+}
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn cafe_engine_draw(e: *mut Engine, now: u64) -> bool {
     let e = unsafe { &mut *e };
     if let Some(c) = &mut e.client {
@@ -343,4 +363,21 @@ pub unsafe extern "C" fn cafe_engine_journal(e: *mut Engine, data: *const u8, le
     } else {
         false
     }
+}
+
+/// Local wiring test: no connection or decision methods are invoked.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cafe_engine_io_diagnostic(e: *mut Engine, out: *mut u16, pressed: bool) {
+    let e = unsafe { &mut *e };
+    e.frame.fill(0x181021);
+    let mut g = cafe_ui::gfx::Gfx::new(&mut e.frame);
+    for (text, y) in [
+        ("LED / BUTTON WIRING TEST", 40),
+        ("APPROVALS DISABLED", 85),
+        (if pressed { "BUTTON: PRESSED" } else { "BUTTON: RELEASED" }, 135),
+        ("LED BLINKS; HOLD BUTTON = SOLID", 185),
+    ] {
+        g.text(text, 24, y, 0xffd352, 1, None);
+    }
+    unsafe { cafe_engine_pack(e, out) };
 }

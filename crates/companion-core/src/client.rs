@@ -88,6 +88,8 @@ pub struct Client {
     // Display time only; all input and approval deadlines remain monotonic.
     local_clock: Option<(u32, u64)>,
     contact: Option<Contact>,
+    approval_button_down: bool,
+    approval_button_contact: Option<(Target, u64)>,
     last_tap: Option<(Target, u64, i32, i32)>,
     last_touch: u64,
     attention_identities: BTreeMap<String, Vec<u8>>,
@@ -125,6 +127,8 @@ impl Client {
             last_heartbeat: now,
             local_clock: None,
             contact: None,
+            approval_button_down: false,
+            approval_button_contact: None,
             last_tap: None,
             last_touch: now,
             attention_identities: BTreeMap::new(),
@@ -169,6 +173,7 @@ impl Client {
         self.outgoing.pop_front()
     }
     pub fn disconnect(&mut self) {
+        self.approval_button_contact = None;
         self.connected = false;
         self.sleeping = false;
         self.replica.disconnect();
@@ -405,6 +410,7 @@ impl Client {
         if new_attention {
             self.attention_awake_until = now.saturating_add(60_000);
             self.sleeping = false;
+            self.approval_button_contact = None;
             // A wake or new request cannot reuse an in-flight gesture or armed review.
             self.wake_contact |= self.contact.is_some();
             self.contact = None;
@@ -456,6 +462,7 @@ impl Client {
                 identity.push(r.state as u8);
             }
             if identity != self.review_identity {
+                self.approval_button_contact = None;
                 self.review_identity = identity;
                 self.displayed_at = None;
                 self.rendered_identity.clear();
@@ -516,6 +523,7 @@ impl Client {
             self.scene.review = Some(review);
         } else {
             self.scene.review = None;
+            self.approval_button_contact = None;
             self.review_identity.clear();
             self.rendered_identity.clear();
             self.displayed_at = None;
@@ -724,6 +732,98 @@ impl Client {
         }
         self.scene.visible_patron_at(x, y).map_or(Target::None, |s| Target::Patron(s.into()))
     }
+    /// LED means an actionable approve-once request is pending, even outside review.
+    pub fn approval_waiting(&self) -> bool {
+        self.connected
+            && self.replica.ready
+            && self.can_decide
+            && self.replica.model.sessions.values().any(|s| {
+                s.approval.as_ref().is_some_and(|r| {
+                    r.state == 1
+                        && r.desktop_only_reason.is_empty()
+                        && r.allowed_decisions.contains(&1)
+                        && !self.receipts.iter().any(|x| x.request == r.id && x.digest == r.digest)
+                })
+            })
+    }
+    /// A physical press approves only the already presented, locally opened review.
+    /// The caller supplies debounced edges. A held switch cannot approve a new request.
+    pub fn approval_button(
+        &mut self,
+        pressed: bool,
+        now: u64,
+        persist: &mut impl FnMut(&[Receipt]) -> bool,
+    ) -> Result<()> {
+        if pressed == self.approval_button_down {
+            return Ok(());
+        }
+        self.approval_button_down = pressed;
+        if pressed {
+            let target = self.target(250, 240);
+            self.approval_button_contact =
+                if self.armed(now) && matches!(target, Target::Decision(1, _)) { Some((target, now)) } else { None };
+            self.sleeping = false;
+            self.last_touch = now;
+            self.last_tap = None;
+        } else {
+            let contact = self.approval_button_contact.take();
+            self.last_touch = now;
+            if let Some((target, down)) = contact
+                && now.saturating_sub(down) <= 800
+                && self.connected
+                && self.replica.ready
+                && self.local_review
+                && !self.sleeping
+                && self.contact.is_none()
+                && self.rendered_identity == self.review_identity
+                && matches!(&target, Target::Decision(1, id) if *id == self.review_identity)
+                && self
+                    .scene
+                    .review
+                    .as_ref()
+                    .is_some_and(|r| r.actionable && r.allow_approve && r.request().choices == 0)
+                && self.receipts.len() < 8
+            {
+                self.submit_decision(1, now, persist)?;
+            }
+        }
+        Ok(())
+    }
+    fn submit_decision(&mut self, decision: i32, now: u64, persist: &mut impl FnMut(&[Receipt]) -> bool) -> Result<()> {
+        let v = self.view();
+        let Some(s) = self.replica.model.sessions.get(&v.selected_session_id) else { return Ok(()) };
+        let r = s.approval.as_ref().ok_or(Error::Invalid)?;
+        let a = Action {
+            kind: 7,
+            session_id: s.id.clone(),
+            request_id: r.id.clone(),
+            request_digest: r.digest.clone(),
+            displayed_body_sha256: r.body_blob.as_ref().unwrap().sha256.clone(),
+            decision,
+            ..Default::default()
+        };
+        let receipt = Receipt {
+            authority: self.authority.clone(),
+            session: s.id.clone(),
+            request: r.id.clone(),
+            digest: r.digest.clone(),
+            decision,
+        };
+        if self.intents.len() >= 32 || self.outgoing.len() >= 32 {
+            return Err(Error::Limit);
+        }
+        let mut next = self.receipts.clone();
+        next.push(receipt);
+        if persist(&next) {
+            self.receipts = next;
+            self.receipt_wait = Some(now);
+            self.issue(a, now)?;
+        } else if let Some(r) = &mut self.scene.review {
+            r.status = "STORAGE ERROR - OPEN DESKTOP".into();
+            r.actionable = false;
+        }
+        Ok(())
+    }
     /// Raw contact samples: pressed=1, released=0, cancelled/multiple=2.
     pub fn touch(
         &mut self,
@@ -733,6 +833,8 @@ impl Client {
         now: u64,
         persist: &mut impl FnMut(&[Receipt]) -> bool,
     ) -> Result<()> {
+        // Any simultaneous screen gesture cancels a physical-button approval.
+        self.approval_button_contact = None;
         if pressed == 2 {
             self.contact = None;
             self.last_tap = None;
@@ -913,38 +1015,7 @@ impl Client {
             }
             Target::Decision(decision, identity) => {
                 if c.armed && identity == self.review_identity && self.receipts.len() < 8 {
-                    let v = self.view();
-                    let Some(s) = self.replica.model.sessions.get(&v.selected_session_id) else { return Ok(()) };
-                    let r = s.approval.as_ref().ok_or(Error::Invalid)?;
-                    let a = Action {
-                        kind: 7,
-                        session_id: s.id.clone(),
-                        request_id: r.id.clone(),
-                        request_digest: r.digest.clone(),
-                        displayed_body_sha256: r.body_blob.as_ref().unwrap().sha256.clone(),
-                        decision,
-                        ..Default::default()
-                    };
-                    let receipt = Receipt {
-                        authority: self.authority.clone(),
-                        session: s.id.clone(),
-                        request: r.id.clone(),
-                        digest: r.digest.clone(),
-                        decision,
-                    };
-                    if self.intents.len() >= 32 || self.outgoing.len() >= 32 {
-                        return Err(Error::Limit);
-                    }
-                    let mut next = self.receipts.clone();
-                    next.push(receipt);
-                    if persist(&next) {
-                        self.receipts = next;
-                        self.receipt_wait = Some(now);
-                        self.issue(a, now)?;
-                    } else if let Some(r) = &mut self.scene.review {
-                        r.status = "STORAGE ERROR - OPEN DESKTOP".into();
-                        r.actionable = false;
-                    }
+                    self.submit_decision(decision, now, persist)?;
                 }
             }
             Target::None => (),

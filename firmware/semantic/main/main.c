@@ -1,4 +1,6 @@
 #include "engine.h"
+#include "external_io.h"
+#include "driver/gpio.h"
 #include "board.h"
 #include "pairing.h"
 #include "check.h"
@@ -92,12 +94,45 @@ static void qa_task(void *arg){
  }
 }
 #endif
+// P4 UART1 is repurposed as GPIO; no UART1 peripheral is installed.
+#define APPROVAL_LED GPIO_NUM_17
+#define APPROVAL_BUTTON GPIO_NUM_18
+static ExternalButton button;
+static void external_io_init(void) {
+ ESP_ERROR_CHECK(gpio_reset_pin(APPROVAL_LED));
+ ESP_ERROR_CHECK(gpio_set_level(APPROVAL_LED,0));
+ ESP_ERROR_CHECK(gpio_set_direction(APPROVAL_LED,GPIO_MODE_OUTPUT));
+ gpio_config_t input={.pin_bit_mask=1ULL<<APPROVAL_BUTTON,.mode=GPIO_MODE_INPUT,
+  .pull_up_en=GPIO_PULLUP_ENABLE,.pull_down_en=GPIO_PULLDOWN_DISABLE,.intr_type=GPIO_INTR_DISABLE};
+ ESP_ERROR_CHECK(gpio_config(&input));
+ button=external_button_init(gpio_get_level(APPROVAL_BUTTON)==0,now_ms());
+ ESP_LOGI("EXT_IO","GPIO17 LED; GPIO18 active-low button; startup release required");
+}
+#if CONFIG_TC_EXTERNAL_IO_DIAGNOSTIC
+static void external_io_diagnostic(void) {
+ ESP_LOGW("EXT_IO","WIRING TEST ONLY: Bluetooth and approvals disabled");
+ bool drawn=false,last=false;
+ for(;;){uint64_t now=now_ms();
+  if(external_button_sample(&button,gpio_get_level(APPROVAL_BUTTON)==0,now))
+   ESP_LOGI("EXT_IO","BUTTON %s",button.stable?"PRESSED":"RELEASED");
+  // Blink when released, solid while held. Input still requires release after boot.
+  ESP_ERROR_CHECK(gpio_set_level(APPROVAL_LED,button.stable||((now/500)%2)));
+  if(!drawn||last!=button.stable){last=button.stable;drawn=true;
+   cafe_engine_io_diagnostic(engine,frame,last);board_present((uint8_t *)frame);}
+  vTaskDelay(pdMS_TO_TICKS(5));
+ }
+}
+#endif
 void app_main(void){
  ESP_ERROR_CHECK(nvs_flash_init());ESP_ERROR_CHECK(nvs_open("cafe_v2",NVS_READWRITE,&storage));
  lock=xSemaphoreCreateMutex();TC_CHECK(lock);rx_packets=xQueueCreate(32,sizeof(RxPacket));TC_CHECK(rx_packets);frame=cafe_alloc(TC_FRAME_BYTES,4);TC_CHECK(frame);memset(frame,0,TC_FRAME_BYTES);
  engine=cafe_engine_new((const uint8_t *)TC_DEVICE_ID,strlen(TC_DEVICE_ID),pairing_key,182,TC_INJECTION);TC_CHECK(engine);
  size_t size=0;esp_err_t stored=nvs_get_blob(storage,"receipts",NULL,&size);if(stored==ESP_OK){TC_CHECK(size<=4096);uint8_t *b=cafe_alloc(size,4);TC_CHECK(b);ESP_ERROR_CHECK(nvs_get_blob(storage,"receipts",b,&size));TC_CHECK(cafe_engine_journal(engine,b,size));cafe_free(b);}else TC_CHECK(stored==ESP_ERR_NVS_NOT_FOUND);
+ external_io_init();
  board_init();
+#if CONFIG_TC_EXTERNAL_IO_DIAGNOSTIC
+ external_io_diagnostic();return;
+#endif
  #if CONFIG_TC_QA_USB
  TC_CHECK(xTaskCreate(qa_task,"usb_qa",6144,NULL,2,NULL)==pdPASS);
  #endif
@@ -107,6 +142,12 @@ void app_main(void){
   if(input_ms&&input_kind==1){feedback_held=cafe_engine_feedback(engine,frame);if(feedback_held){board_present_feedback((uint8_t *)frame,input_x,input_y);display_ms=now_ms();last_render=display_ms;ESP_LOGI("V2","FEEDBACK input=%lu lcd=%lu",(unsigned long)input_ms,(unsigned long)display_ms);input_ms=0;}}now=now_ms();
   uint32_t state=cafe_engine_status(engine);if(asleep!=((state&4)!=0)){asleep=(state&4)!=0;board_backlight(!asleep);}
   uint64_t render_started=now_ms();if(!asleep&&now-last_render>=(feedback_held?150:33)&&cafe_engine_draw(engine,now)){uint64_t drawn=now_ms();cafe_engine_pack(engine,frame);uint64_t begun=now_ms();board_present((uint8_t *)frame);display_ms=now_ms();cafe_engine_presented(engine,display_ms);frame_number++;last_render=now;if(input_ms){ESP_LOGI("V2","LOCAL kind=%u input=%lu commit=%lu lcd=%lu",input_kind,(unsigned long)input_ms,(unsigned long)commit_ms,(unsigned long)display_ms);input_ms=0;}if(frame_number%300==0)ESP_LOGI("V2","FRAME draw_ms=%lu pack_ms=%lu lcd_ms=%lu heap=%u largest=%u minimum=%u",(unsigned long)(drawn-render_started),(unsigned long)(begun-drawn),(unsigned long)(now_ms()-begun),(unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),(unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),(unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));}
+  now=now_ms();
+  if(external_button_sample(&button,gpio_get_level(APPROVAL_BUTTON)==0,now)){
+   ESP_LOGI("EXT_IO","BUTTON %s",button.stable?"PRESSED":"RELEASED");
+   healthy=cafe_engine_approval_button(engine,button.stable,now)&&healthy;
+  }
+  ESP_ERROR_CHECK(gpio_set_level(APPROVAL_LED,healthy&&cafe_engine_approval_waiting(engine)));
   if(!healthy&&conn!=BLE_HS_CONN_HANDLE_NONE)ble_gap_terminate(conn,BLE_ERR_REM_USER_CONN_TERM);
   if(conn==BLE_HS_CONN_HANDLE_NONE){pending=0;}else if(subscribed){for(int sent=0;sent<8;sent++){if(!pending)pending=cafe_engine_next(engine,packet,sizeof(packet));if(!pending)break;struct os_mbuf *om=ble_hs_mbuf_from_flat(packet,pending);if(!om)break;int rc=ble_gatts_notify_custom(conn,tx_handle,om);if(!rc){pending=0;continue;}if(rc!=BLE_HS_ENOMEM&&rc!=BLE_HS_EBUSY){pending=0;ble_gap_terminate(conn,BLE_ERR_REM_USER_CONN_TERM);}break;}}
   xSemaphoreGive(lock);vTaskDelay(1);

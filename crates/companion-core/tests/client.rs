@@ -597,3 +597,125 @@ fn creature_rosters_reach_board_through_snapshot_and_delta() {
         assert!(companion_core::model::validate(&host.model).is_err());
     }
 }
+
+fn arm_external_button(c: &mut Client) {
+    open(c);
+    let mut frame = vec![0; 480 * 272];
+    c.render(&mut frame, 10350);
+    c.presented(10350);
+    c.tick(11000).unwrap();
+    assert!(c.armed(11000));
+    actions(c);
+}
+#[test]
+fn physical_button_requires_review_and_fresh_press_then_persists_once() {
+    let (mut c, _, _) = setup();
+    assert!(c.approval_waiting());
+    c.approval_button(true, 10001, &mut |_| true).unwrap();
+    c.approval_button(false, 10002, &mut |_| true).unwrap();
+    assert!(actions(&mut c).is_empty());
+    arm_external_button(&mut c);
+    c.approval_button(false, 11000, &mut |_| true).unwrap();
+    assert!(actions(&mut c).is_empty(), "release alone cannot approve");
+    c.approval_button(true, 11010, &mut |_| true).unwrap();
+    c.approval_button(true, 11020, &mut |_| true).unwrap();
+    assert!(actions(&mut c).is_empty(), "press does not dispatch before release");
+    c.tick(11030).unwrap();
+    c.approval_button(false, 11060, &mut |_| true).unwrap();
+    let aa = actions(&mut c);
+    assert_eq!(aa.len(), 1);
+    assert_eq!((aa[0].kind, aa[0].decision), (7, 1));
+    assert_eq!(aa[0].request_id, "qa-1");
+    assert_eq!(c.receipts.len(), 1);
+    assert!(!c.approval_waiting());
+    c.approval_button(true, 12000, &mut |_| true).unwrap();
+    c.approval_button(false, 12050, &mut |_| true).unwrap();
+    assert!(actions(&mut c).is_empty());
+}
+#[test]
+fn physical_button_rejects_withdrawal_resolution_and_disconnect_during_press() {
+    for mode in 0..4 {
+        let (mut c, mut h, _) = setup();
+        arm_external_button(&mut c);
+        c.approval_button(true, 11010, &mut |_| true).unwrap();
+        if mode == 0 {
+            c.disconnect();
+        } else {
+            let old = h.model.clone();
+            let s = h.model.sessions.get_mut("claude:test").unwrap();
+            match mode {
+                1 => s.approval = None,
+                2 => s.approval.as_mut().unwrap().state = 6,
+                _ => s.approval.as_mut().unwrap().state = 5,
+            }
+            h.model.revision += 1;
+            for e in sync::update(&old, &h.model, &[1; 16], &[2; 16]).unwrap() {
+                let raw = codec::encode(&e).unwrap();
+                c.receive(e, &raw, 11030).unwrap();
+            }
+        }
+        c.approval_button(false, 11060, &mut |_| panic!("stale press must not persist")).unwrap();
+        assert!(actions(&mut c).iter().all(|a| a.kind != 7));
+        assert!(!c.approval_waiting());
+    }
+}
+#[test]
+fn physical_button_cancels_for_touch_long_hold_sleep_and_storage_failure() {
+    for mode in 0..4 {
+        let (mut c, _, _) = setup();
+        arm_external_button(&mut c);
+        if mode == 2 {
+            c.sleeping = true;
+        }
+        c.approval_button(true, 11010, &mut |_| true).unwrap();
+        if mode == 0 {
+            c.touch(2, 0, 0, 11020, &mut |_| true).unwrap();
+        }
+        let release = if mode == 1 { 12000 } else { 11060 };
+        c.approval_button(false, release, &mut |_| mode != 3).unwrap();
+        assert!(actions(&mut c).iter().all(|a| a.kind != 7));
+        assert!(c.receipts.is_empty());
+    }
+}
+#[test]
+fn physical_button_held_before_review_never_approves_after_it_opens() {
+    let (mut c, _, _) = setup();
+    c.approval_button(true, 10001, &mut |_| true).unwrap();
+    arm_external_button(&mut c);
+    c.approval_button(false, 11060, &mut |_| panic!("held before review")).unwrap();
+    assert!(actions(&mut c).is_empty());
+}
+#[test]
+fn physical_button_survives_unrelated_model_update_without_switching_request() {
+    let (mut c, mut h, _) = setup();
+    arm_external_button(&mut c);
+    c.approval_button(true, 11010, &mut |_| true).unwrap();
+    let old = h.model.clone();
+    h.model.revision += 1;
+    h.model.usage.tokens_display = "123".into();
+    for e in sync::update(&old, &h.model, &[1; 16], &[2; 16]).unwrap() {
+        let raw = codec::encode(&e).unwrap();
+        c.receive(e, &raw, 11030).unwrap();
+    }
+    c.approval_button(false, 11060, &mut |_| true).unwrap();
+    assert_eq!(actions(&mut c).iter().filter(|a| a.kind == 7).count(), 1);
+}
+
+#[test]
+fn physical_button_does_not_bypass_lcd_presentation_or_desktop_only_review() {
+    for present in [false, true] {
+        let (mut c, _, _) = setup();
+        open(&mut c);
+        if present {
+            let mut f = vec![0; 480 * 272];
+            c.render(&mut f, 10350);
+            c.presented(10350);
+            c.scene.review.as_mut().unwrap().allow_approve = false;
+        }
+        actions(&mut c);
+        c.tick(11000).unwrap();
+        c.approval_button(true, 11010, &mut |_| panic!("not eligible")).unwrap();
+        c.approval_button(false, 11060, &mut |_| panic!("not eligible")).unwrap();
+        assert!(actions(&mut c).is_empty());
+    }
+}

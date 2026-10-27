@@ -16,12 +16,14 @@ case "${1:-build}" in
   cd build
   python -m esptool --chip esp32s3 merge_bin --fill-flash-size 16MB -o merged-binary.bin @flash_args
   ;;
- board-build|board-qa-build|board-flash|board-qa-flash)
+ board-build|board-qa-build|board-flash|board-qa-flash|board-io-build|board-io-flash)
   bash "$ROOT/tools/build_engine.sh" --offline
   cd "$ROOT/firmware/semantic"
   args=(build)
   if [[ "$1" == *-flash ]]; then [[ $# == 2 ]] || exit 2; args=(-p "$2" -b 460800 flash); fi
-  if [[ "$1" == board-qa-* ]]; then
+  if [[ "$1" == board-io-* ]]; then
+   idf.py -B build-io -D SDKCONFIG=sdkconfig.io -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.io.defaults' "${args[@]}"
+  elif [[ "$1" == board-qa-* ]]; then
    idf.py -B build-qa -D SDKCONFIG=sdkconfig.qa -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.qa.defaults' "${args[@]}"
   else idf.py "${args[@]}"; fi
   ;;

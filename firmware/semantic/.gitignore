@@ -3,5 +3,7 @@
 /sdkconfig.old
 /sdkconfig.qa
 /sdkconfig.qa.old
+/sdkconfig.io
+/sdkconfig.io.old
 /managed_components/
 /main/pairing.h

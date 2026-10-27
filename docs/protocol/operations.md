@@ -6,6 +6,9 @@ USB or an external battery supplies power only. The board stores its provisioned
 secret in firmware and unresolved decision receipts in NVS. Keep full flash
 backups private: they contain secrets. There is no OTA rollback on this 4MB board.
 
+For a P4 GPIO17 LED and GPIO18 approval button, see
+[the wiring diagnostic and production procedure](../external-approval-io.md).
+
 ## Repeatable development sequence
 
 1. Read `companion-v2.md`, `review.md`, and `test-plan.md`.
