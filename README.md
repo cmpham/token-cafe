@@ -199,6 +199,14 @@ host build. Preview the new footer and its animation with:
 cargo run --example screenshots -- --attention
 ```
 
+## Android companion
+
+The native [Android app](android/README.md) reuses the Rust pixel renderer,
+supports an offline demo, and connects to desktop sessions over USB using a
+local read-only bridge. Android emulator checks pass; physical-device validation
+is still pending. See its build, pairing instructions and screenshots.
+
+
 ## Windows porting notes
 
 The renderer and window dependencies are cross-platform, but Windows process discovery is not implemented. A Windows backend needs executable paths (`codex.exe`), arguments, working directories, process start times and open rollout files (or the existing SQLite fallback). It also needs native home/cache paths and validation of Claude's process identity format.

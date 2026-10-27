@@ -5,7 +5,7 @@ edition = "2024"
 description = "The Claude Code and Codex sessions on this machine as patrons of a JRPG-style night net café, in a desktop window"
 
 [workspace]
-members = ["crates/cafe-ui", "crates/companion-core"]
+members = ["crates/cafe-ui", "crates/companion-core", "crates/android-client"]
 
 [dependencies]
 cafe-ui = { path = "crates/cafe-ui" }

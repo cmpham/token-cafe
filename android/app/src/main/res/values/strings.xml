@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">Token Café</string>
+    <string name="demo">Demo</string>
+    <string name="connect_usb">Connect USB</string>
+    <string name="demo_status">Offline demo · tap patrons to explore</string>
+    <string name="connecting">Connecting to desktop…</string>
+    <string name="live_status">Live desktop · USB connected</string>
+    <string name="retrying">%1$s · retrying</string>
+    <string name="connect_title">Connect to your desktop</string>
+    <string name="connect_message">Connect by USB, start the Android bridge, and run adb reverse tcp:38417 tcp:38417. Paste its pairing token below.</string>
+    <string name="pairing_hint">Pairing token from desktop bridge</string>
+    <string name="pairing_error">Enter the 64-character pairing token</string>
+    <string name="cancel">Cancel</string>
+    <string name="connect">Connect</string>
+    <string name="pairing_rejected">Pairing rejected · check the desktop token</string>
+    <string name="snapshot_too_large">Desktop snapshot too large</string>
+    <string name="incompatible">Desktop snapshot incompatible · update both apps</string>
+    <string name="disconnected">USB disconnected · start the bridge and check adb reverse</string>
+    <string name="cafe_description">Animated Token Café. Tap a patron to read their task; drag the task scrollbar to read more. Rotate for a larger café.</string>
+</resources>

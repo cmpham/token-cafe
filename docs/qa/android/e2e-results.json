@@ -1,0 +1,66 @@
+[
+  {
+    "check": "Cold launch and offline demo in portrait",
+    "result": "pass"
+  },
+  {
+    "check": "Live process discovery and transcript parsing through real Rust bridge",
+    "result": "pass"
+  },
+  {
+    "check": "Pairing, live transport, JNI rendering and patron selection",
+    "result": "pass"
+  },
+  {
+    "check": "Touch scrollbar reaches final task text",
+    "result": "pass"
+  },
+  {
+    "check": "Session-file update becomes waiting-question alert on Android",
+    "result": "pass"
+  },
+  {
+    "check": "Permission alert rendered without approval dispatch",
+    "result": "pass"
+  },
+  {
+    "check": "Idle state labels the task as historical",
+    "result": "pass"
+  },
+  {
+    "check": "Landscape recreation preserves pairing and correctly maps touch",
+    "result": "pass"
+  },
+  {
+    "check": "Background/foreground resumes fresh live state",
+    "result": "pass"
+  },
+  {
+    "check": "Transport loss clears stale task and shows recovery instructions",
+    "result": "pass"
+  },
+  {
+    "check": "Transport restoration automatically reconnects",
+    "result": "pass"
+  },
+  {
+    "check": "Bridge restart rotates token and rejects the old credential",
+    "result": "pass"
+  },
+  {
+    "check": "Replacement token pairs with restarted real bridge",
+    "result": "pass"
+  },
+  {
+    "check": "Process exit removes session and selected task",
+    "result": "pass"
+  },
+  {
+    "check": "Demo button leaves live mode",
+    "result": "pass"
+  },
+  {
+    "check": "No Java or native fatal crash logged",
+    "result": "pass"
+  }
+]
