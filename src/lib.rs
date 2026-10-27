@@ -6,5 +6,6 @@
 pub mod assets;
 pub mod collect;
 pub mod gfx;
+pub mod patrons;
 pub mod scene;
 pub mod usage;

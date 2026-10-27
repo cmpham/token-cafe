@@ -16,6 +16,7 @@ use std::thread;
 use std::time::Duration;
 
 use token_cafe::collect::Collector;
+use token_cafe::patrons::{NAMES, Patrons, ROSTERS};
 use token_cafe::scene::{ForcedPose, Kind, Session, State, Usage, Why};
 use token_cafe::usage::{Counter, human};
 
@@ -101,7 +102,7 @@ fn demo_feed(tx: Sender<Update>) {
         s("1a342e2a", "migrate-34", Claude, Idle, Why::None, P::Sleep),
         s("c0dex9f1", "infra", Codex, Wait, Why::Ask, P::Auto),
         s("01a10a65", "web-app", Codex, Idle, Why::None, P::Sip),
-        s("9a7c33d0", "billing", Claude, Idle, Why::None, P::Stretch),
+        s("9a7c33d0", "billing", Codex, Idle, Why::None, P::Stretch),
         s("01a11478", "ml-pipeline-6e", Codex, Work, Why::None, P::Auto),
     ];
     let _ = tx.send(Update::Usage(Usage { tokens: 1_624_000_000.0, usd: 693.70 }));
@@ -132,18 +133,38 @@ fn print_once() {
 }
 
 fn usage_text() -> &'static str {
-    "usage: token-cafe [--demo | --print] [--scale N]\n\
+    "usage: token-cafe [--demo | --print] [--scale N] [--patrons STYLE] [--seat N=NAME]\n\
      \n  --demo     a fixed list that shows every pose\
      \n  --print    print the sessions and this month's usage, and exit\
      \n  --scale N  start at N times 320x240 (default 3)\
-     \n\nkeys: 1-6 window size, f / F11 fullscreen, Esc leave fullscreen, q quit"
+     \n  --patrons STYLE  humans, dragons, pokemon, mixed (default mixed)\
+     \n  --seat N=NAME    assign a character to seat 1-8; repeatable\
+     \n  --list-patrons   list character names and exit\
+     \n\nkeys: P roster, Tab seat, [ / ] character, 1-6 window size, f / F11 fullscreen, Esc leave fullscreen, q quit"
 }
 
 fn main() {
     let (mut demo, mut print, mut scale) = (false, false, 3u32);
+    let mut roster = "mixed".to_string();
+    let mut assignments = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--list-patrons" => return println!("{}", NAMES.join("\n")),
+            "--patrons" => match args.next().filter(|v| ROSTERS.contains(&v.as_str())) {
+                Some(v) => roster = v,
+                None => {
+                    eprintln!("--patrons expects {}", ROSTERS.join(", "));
+                    std::process::exit(2);
+                }
+            },
+            "--seat" => match args.next() {
+                Some(v) => assignments.push(v),
+                None => {
+                    eprintln!("--seat expects NUMBER=CHARACTER");
+                    std::process::exit(2);
+                }
+            },
             "--demo" => demo = true,
             "--print" => print = true,
             "--scale" => match args.next().and_then(|v| v.parse().ok()).filter(|&k| (1..=16).contains(&k)) {
@@ -154,6 +175,14 @@ fn main() {
             other => return eprintln!("unknown argument {other}\n\n{}", usage_text()),
         }
     }
+    let mut patrons = Patrons::roster(&roster).unwrap();
+    for spec in assignments {
+        if let Err(e) = patrons.assign(&spec) {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    }
+    let roster_index = ROSTERS.iter().position(|n| *n == roster).unwrap();
     if print {
         return print_once();
     }
@@ -165,7 +194,7 @@ fn main() {
         thread::spawn(move || sessions_feed(tx));
         thread::spawn(move || usage_feed(tx2));
     }
-    if let Err(e) = app::run(rx, scale) {
+    if let Err(e) = app::run(rx, scale, patrons, roster_index) {
         eprintln!("token-cafe: {e}");
         std::process::exit(1);
     }

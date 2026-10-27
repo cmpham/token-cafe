@@ -127,10 +127,32 @@ fn main() {
         s("1a342e2a", "migrate-34", Claude, Idle, Why::None, P::Sleep, 0),
         s("c0dex9f1", "infra", Codex, Wait, Why::Ask, P::Auto, 10),
         s("01a10a65", "web-app", Codex, Idle, Why::None, P::Sip, 0),
-        s("9a7c33d0", "billing", Claude, Idle, Why::None, P::Stretch, 0),
+        s("9a7c33d0", "billing", Codex, Idle, Why::None, P::Stretch, 0),
         s("01a11478", "ml-pipeline-6e", Codex, Work, Why::None, P::Auto, 0),
     ]);
     run(&mut cafe, 2600);
+    if std::env::args().any(|arg| arg == "--patrons") {
+        for roster in ["dragons", "pokemon", "mixed"] {
+            cafe.patrons = token_cafe::patrons::Patrons::roster(roster).unwrap();
+            png(&format!("docs/cafe-{roster}.png"), &rgb(&cafe, late, 3), 3);
+            let mut enc = gif::Encoder::new(
+                BufWriter::new(File::create(format!("docs/cafe-{roster}.gif")).unwrap()),
+                (W * 3) as u16,
+                (H * 3) as u16,
+                &[],
+            )
+            .unwrap();
+            enc.set_repeat(gif::Repeat::Infinite).unwrap();
+            for _ in 0..48 {
+                let pixels = rgb(&cafe, late, 3);
+                let mut frame = gif::Frame::from_rgb_speed((W * 3) as u16, (H * 3) as u16, &pixels, 10);
+                frame.delay = 10;
+                enc.write_frame(&frame).unwrap();
+                run(&mut cafe, 100);
+            }
+        }
+        return;
+    }
     png("docs/cafe.png", &rgb(&cafe, late, 3), 3);
 
     // A quiet night: the poses come from how long each has been idle.
