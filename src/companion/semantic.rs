@@ -97,10 +97,11 @@ impl SemanticMirror {
                     let status = status.clone();
                     tasks.push(tokio::spawn(async move {
                         loop {
+                            status.lock().unwrap()[i] = format!("{} connecting", board.name);
                             let text = match run(&board, shared.clone(), status.clone(), i).await {
                                 Ok(()) => "disconnected".into(),
                                 Err(e) => {
-                                    eprintln!("BLE v2 {}: {e}", board.name);
+                                    eprintln!("{} BLE v2 {}: {e}", chrono::Local::now().format("%H:%M:%S"), board.name);
                                     format!("disconnected: {e}")
                                 }
                             };
@@ -141,7 +142,7 @@ fn advertised_name_matches(observed: &str, expected: &str) -> bool {
             .and_then(|s| s.rsplit_once(" ["))
             .is_some_and(|(_, advertised)| advertised == expected)
 }
-async fn connect(board: &Board, start: Instant) -> Result<Link, Error> {
+async fn discover(board: &Board) -> Result<Peripheral, Error> {
     let manager = Manager::new().await?;
     let adapter = manager.adapters().await?.into_iter().next().ok_or("No BLE adapter")?;
     adapter.start_scan(ScanFilter { services: vec![SERVICE] }).await?;
@@ -159,9 +160,30 @@ async fn connect(board: &Board, start: Instant) -> Result<Link, Error> {
     if candidates.len() != 1 {
         return Err("Registered board absent or ambiguous".into());
     }
-    let peripheral = candidates.remove(0);
-    peripheral.connect().await?;
+    Ok(candidates.remove(0))
+}
+
+// Keep ownership of the peripheral outside the cancellable setup future so even
+// a timeout during connect/authentication explicitly tears down the OS link.
+async fn connection_setup<T>(
+    operation: impl std::future::Future<Output = Result<T, Error>>,
+    cleanup: impl std::future::Future<Output = ()>,
+    deadline: Duration,
+) -> Result<T, Error> {
+    let result = match timeout(deadline, operation).await {
+        Ok(result) => result,
+        Err(_) => Err("BLE connection/authentication timed out".into()),
+    };
+    if result.is_err() {
+        let _ = timeout(Duration::from_secs(2), cleanup).await;
+    }
+    result
+}
+async fn connect(board: &Board, start: Instant) -> Result<Link, Error> {
+    let peripheral =
+        timeout(Duration::from_secs(15), discover(board)).await.map_err(|_| "BLE discovery timed out")??;
     let setup = async {
+        peripheral.connect().await?;
         peripheral.discover_services().await?;
         let chars = peripheral.characteristics();
         let auth = chars.iter().find(|c| c.uuid == AUTH).ok_or("Board needs v2 firmware")?;
@@ -205,12 +227,15 @@ async fn connect(board: &Board, start: Instant) -> Result<Link, Error> {
             epoch: keys.epoch.to_vec(),
             device: board.device.clone(),
         })
-    }
-    .await;
-    if setup.is_err() {
-        let _ = peripheral.disconnect().await;
-    }
-    setup
+    };
+    connection_setup(
+        setup,
+        async {
+            let _ = peripheral.disconnect().await;
+        },
+        Duration::from_secs(30),
+    )
+    .await
 }
 async fn run(
     board: &Board,
@@ -219,7 +244,8 @@ async fn run(
     index: usize,
 ) -> Result<(), Error> {
     let start = Instant::now();
-    let mut link = timeout(Duration::from_secs(30), connect(board, start)).await??;
+    let mut link = connect(board, start).await?;
+    status.lock().unwrap()[index] = format!("{} synchronizing v2", board.name);
     let result = serve(board, &mut link, shared, status, index, start).await;
     let _ = timeout(Duration::from_secs(2), link.peripheral.disconnect()).await;
     result
@@ -366,7 +392,7 @@ pub async fn exercise_fixture(
         return Err("Fixture host requires exactly one QA-class board".into());
     }
     let start = Instant::now();
-    let mut link = timeout(Duration::from_secs(30), connect(&boards[0], start)).await??;
+    let mut link = connect(&boards[0], start).await?;
     let mut authority = companion_core::authority::Authority { model };
     let epoch = [0x51; 16];
     let mut peer = Peer::new(boards[0].device.clone(), link.epoch.clone(), true, true);
@@ -450,5 +476,43 @@ mod discovery_tests {
         assert!(advertised_name_matches("Old [TokenCafe-QA]", "TokenCafe-QA"));
         assert!(!advertised_name_matches("Old [TokenCafe-QA-other]", "TokenCafe-QA"));
         assert!(!advertised_name_matches("TokenCafe-QA [Other]", "TokenCafe-QA"));
+    }
+}
+
+#[cfg(test)]
+mod reconnect_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn timeout_during_setup_disconnects_before_retry() {
+        let disconnected = AtomicBool::new(false);
+        let result: Result<(), Error> = connection_setup(
+            std::future::pending(),
+            async {
+                disconnected.store(true, Ordering::SeqCst);
+            },
+            Duration::from_millis(1),
+        )
+        .await;
+        assert!(result.unwrap_err().to_string().contains("timed out"));
+        assert!(disconnected.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn setup_failure_disconnects_but_success_keeps_link() {
+        for success in [false, true] {
+            let disconnected = AtomicBool::new(false);
+            let result = connection_setup(
+                async { if success { Ok(()) } else { Err("authentication failed".into()) } },
+                async {
+                    disconnected.store(true, Ordering::SeqCst);
+                },
+                Duration::from_secs(1),
+            )
+            .await;
+            assert_eq!(result.is_ok(), success);
+            assert_eq!(disconnected.load(Ordering::SeqCst), !success);
+        }
     }
 }

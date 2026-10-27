@@ -125,3 +125,22 @@ portable LED/debounce tests passed under ASan/UBSan, and the complete QEMU gate
 passed. Production firmware was flashed to `/dev/cu.usbmodem1101` with hash
 verification and the existing companion reconnected as `synced v2`. This verifies
 installation and synchronization; the updated physical flow awaits user testing.
+
+## Desktop reconnect recovery — 2026-10-27
+
+After physical button acceptance, the user reported the disconnected-board
+instruction while the companion was still running. Desktop logs showed repeated
+device disconnects followed by setup timeouts. Restarting the companion restored
+an applied-sync report. The initial radio drop cause remains unconfirmed; serial
+monitoring did not capture a usable disconnect reason.
+
+Fixed a confirmed reconnect cleanup gap: the old outer connection timeout could
+cancel setup without explicitly disconnecting the peripheral. Discovery and
+setup now have separate deadlines, with bounded disconnect cleanup on setup
+failure or timeout. Retry status resets to connecting, then synchronizing before
+the board acknowledges its model; errors include timestamps.
+
+All 172 workspace tests, Clippy and the macOS release build passed. Regression
+tests cover stalled setup cleanup, failed authentication cleanup and successful
+setup retaining its link. This desktop-only change does not alter board firmware
+or approval policy. Physical long-duration stability still requires observation.
