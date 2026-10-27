@@ -1736,7 +1736,7 @@ impl Scene {
         if let Some(ag) = self.agents.iter().find(|ag| ag.id == id && ag.seen && self.patrons.is_creature(ag.seat)) {
             g.rect(x, y, 34, 36, c::GOLD);
             g.rect(x + 1, y + 1, 32, 34, c::WIN1);
-            self.patrons.draw(g, ag.seat, (x + 17, y + 34), Animation::Wave, (self.t + ag.phase) as u64);
+            self.patrons.portrait(g, ag.seat, (x + 17, y + 34), (self.t + ag.phase) as u64);
             return;
         }
         let (pal, style) = self.patron_look(id);
@@ -1957,6 +1957,77 @@ impl Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "std")]
+    #[test]
+    fn creature_walk_frames_follow_motion_for_every_seat() {
+        for roster in ["dragons", "pokemon"] {
+            for seat in 0..SEATS {
+                for leaving in [false, true] {
+                    let mut scene = Scene::new();
+                    scene.patrons = crate::patrons::Patrons::roster(roster).unwrap();
+                    scene.set_sessions(&[Session {
+                        id: "walk".into(),
+                        name: "walk".into(),
+                        kind: Kind::Claude,
+                        state: State::Work,
+                        why: Why::None,
+                        pose: ForcedPose::Auto,
+                        age_s: 0,
+                        branch: None,
+                        active_subagents: None,
+                    }]);
+                    let mut path = path_to(seat);
+                    if leaving {
+                        path.reverse();
+                    }
+                    scene.agents[0].seat = seat;
+                    scene.agents[0].start_walk(&path, if leaving { Mode::Leaving } else { Mode::Arriving });
+                    let mut checked = 0u32;
+                    for _ in 0..3000 {
+                        let Some(ag) = scene.agents.first() else { break };
+                        if ag.mode == Mode::Seated {
+                            break;
+                        }
+                        let (x, y, segment) = (ag.x, ag.y, ag.path_i);
+                        scene.tick(10);
+                        let Some(ag) = scene.agents.first() else { break };
+                        if ag.mode == Mode::Seated || ag.path_i != segment {
+                            continue;
+                        }
+                        let (dx, dy) = (ag.x - x, ag.y - y);
+                        if dx == 0.0 && dy == 0.0 {
+                            continue;
+                        }
+                        let expected = if dx.abs() > dy.abs() {
+                            if dx > 0.0 { Animation::WalkRight } else { Animation::WalkLeft }
+                        } else if dy > 0.0 {
+                            Animation::WalkDown
+                        } else {
+                            Animation::WalkUp
+                        };
+                        // Compare actual walker rendering against the clip for its movement.
+                        // Once per path segment keeps this a compact real-path regression.
+                        if checked & (1 << segment) == 0 {
+                            let mut actual = vec![0; a::W * a::H * 4];
+                            scene.draw_walker(&mut Gfx::new(&mut actual), ag);
+                            let mut wanted = vec![0; a::W * a::H * 4];
+                            scene.patrons.draw(
+                                &mut Gfx::new(&mut wanted),
+                                seat,
+                                (jround(ag.x), jround(ag.y)),
+                                expected,
+                                ag.dist as u64,
+                            );
+                            assert_eq!(actual, wanted, "{roster} seat {seat}, leaving={leaving}, segment={segment}");
+                            checked |= 1 << segment;
+                        }
+                    }
+                    assert!(checked.count_ones() >= 3, "path was not exercised");
+                }
+            }
+        }
+    }
+
     #[cfg(feature = "std")]
     #[test]
     fn all_creatures_animate_inside_the_actual_seated_scene() {

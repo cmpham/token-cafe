@@ -11,7 +11,7 @@ Collected/prepared 2026-10-27. Runtime assets are embedded; the app never downlo
 
 PMD credits: **CHUNSOFT** for original animation art; **Emboarger** for Gengar's additional action sequences; **JFain** for Jigglypuff's additional action sequences. Original per-character `credits.txt`, contributor names, and the upstream README are preserved in `source/pmd/`. The project documents non-commercial, credited reuse for contributed material; official sprites retain their owners' rights. Gengar's contribution records `PMDCollab_1`, Jigglypuff's records `CC_BY-NC_4`; consult those source credits and upstream policy before redistribution. No commercial clearance is claimed.
 
-Changes to PMD material: selected animation frames/directions, nearest-neighbor scaling, baseline alignment, desktop occlusion and supplemental keyboard paws/cup. Some downloaded actions and Dragonite's incomplete PMD set remain reference-only.
+Changes to PMD material: selected animation frames/directions, nearest-neighbor scaling, baseline alignment, desktop occlusion and supplemental keyboard paws/cup. Unused downloaded actions remain reference-only; Dragonite's PMD walk is used alongside generated seated art.
 
 ## Original static Pokémon collection (reference only)
 
@@ -39,3 +39,5 @@ Run `cargo run --example screenshots -- --patrons` for three café PNGs and thre
 ## Original static atlas prompt (reference only)
 
 Create one game sprite atlas on a genuinely transparent background: eight distinct cute Wings of Fire inspired dragon patrons in a strict 4 column by 2 row equal-cell grid. No text, no labels, no scenery, no shadows, no grid lines. Each full-body dragon centered completely inside its cell with generous transparent margins, same size and baseline. Tiny chunky 32x32-style pixel art, hard square pixels, limited palette, dark outlines, simple highly readable silhouettes suitable for a 320x240 JRPG cafe game. Seated upright, facing slightly right/front, visible head, wings and curled tail. In reading order: Clay the earthy brown MudWing with broad snout; Tsunami the teal SeaWing with aqua fins and glowing spots; Glory the emerald RainWing with rainbow frill; Starflight the dark purple NightWing with star-speckled wings; Sunny the golden SandWing with pointed tail; Peril the scarlet-orange SkyWing with large wings; Winter the icy pale blue IceWing with crown spikes; Moonwatcher the midnight violet NightWing with silver teardrop scales. Make each silhouette distinct, compact chibi proportions, expressive friendly eyes. All eight clearly separate, nothing between cells.
+
+Dragonite uses its bundled PMDCollab four-direction walking sheet for an unambiguous heading; seated poses retain the generated artwork. PMD horizontal rows are right=2 and left=6. Room cells are 48×48 logical / 96×96 at the desktop 2× detail layer, while portraits remain 32×32 logical.

@@ -22,8 +22,10 @@ pub const NAMES: [&str; 17] = [
     "dragonite",
 ];
 const FRAMES: usize = 28;
-const HD_PIXELS: &[u8; 16 * FRAMES * 64 * 64 * 4] = include_bytes!("../../../assets/patrons/poses-hd.rgba");
-const PIXELS: &[u8; 16 * FRAMES * 32 * 32 * 4] = include_bytes!("../../../assets/patrons/poses.rgba");
+const CELL: usize = 48;
+const CELL_BYTES: usize = CELL * CELL * 4;
+const HD_PIXELS: &[u8; 16 * FRAMES * CELL_BYTES * 4] = include_bytes!("../../../assets/patrons/poses-hd.rgba");
+const PIXELS: &[u8; 16 * FRAMES * CELL_BYTES] = include_bytes!("../../../assets/patrons/poses.rgba");
 
 /// Each seated action has actual articulated artwork. Walk clips have four
 /// gait frames and use distance rather than time, so a stopped patron stays still.
@@ -149,8 +151,8 @@ impl Patrons {
             return;
         }
         let offset = (id - 1) * 4 + (Animation::Sip.frame(clock) - 6) * 2;
-        let x = feet.0 - 16 + CUP_ANCHORS[offset] as i32 - 2;
-        let y = feet.1 - 32 + CUP_ANCHORS[offset + 1] as i32;
+        let x = feet.0 - CELL as i32 / 2 + CUP_ANCHORS[offset] as i32 - 2;
+        let y = feet.1 - CELL as i32 + CUP_ANCHORS[offset + 1] as i32;
         g.rect(x, y, 5, 5, 0x181021);
         g.rect(x + 1, y + 1, 3, 3, 0xf7f3ef);
         g.rect(x + 5, y + 1, 2, 2, 0xf7f3ef);
@@ -159,19 +161,28 @@ impl Patrons {
     /// Anchor on the chair/desk contact line when seated, on feet when walking.
     /// The caller owns the scene clip, allowing hands to overlap the desktop.
     pub fn draw(&self, g: &mut Gfx, seat: usize, feet: (i32, i32), animation: Animation, clock: u64) -> bool {
+        self.draw_sized(g, seat, feet, (animation, clock), CELL)
+    }
+
+    pub fn portrait(&self, g: &mut Gfx, seat: usize, feet: (i32, i32), clock: u64) -> bool {
+        self.draw_sized(g, seat, feet, (Animation::Wave, clock), 32)
+    }
+
+    fn draw_sized(&self, g: &mut Gfx, seat: usize, feet: (i32, i32), clip: (Animation, u64), output: usize) -> bool {
         let id = self.seats[seat];
         if id == 0 {
             return false;
         }
+        let (animation, clock) = clip;
         let frame = (id - 1) * FRAMES + animation.frame(clock);
         let k = g.scale;
-        let side = 32 * k;
+        let side = CELL * k;
         let bytes = side * side * 4;
         let atlas: &[u8] = if k == 2 { HD_PIXELS } else { PIXELS };
         let cell = &atlas[frame * bytes..(frame + 1) * bytes];
-        for y in 0..side {
-            for x in 0..side {
-                let offset = (y * side + x) * 4;
+        for y in 0..output * k {
+            for x in 0..output * k {
+                let offset = ((y * CELL / output) * side + x * CELL / output) * 4;
                 let p = &cell[offset..offset + 4];
                 if p[3] >= 128 {
                     // Soft cafe fill light reveals dark NightWing scales while
@@ -183,8 +194,8 @@ impl Patrons {
                         [p[0], p[1], p[2]]
                     };
                     g.detail_px(
-                        (feet.0 - 16) * k as i32 + x as i32,
-                        (feet.1 - 32) * k as i32 + y as i32,
+                        (feet.0 - output as i32 / 2) * k as i32 + x as i32,
+                        (feet.1 - output as i32) * k as i32 + y as i32,
                         (rgb[0] as u32) << 16 | (rgb[1] as u32) << 8 | rgb[2] as u32,
                     );
                 }
@@ -226,8 +237,9 @@ mod tests {
     #[test]
     fn every_character_has_articulated_seated_clips_and_directional_walks() {
         for character in 0..16 {
-            let cell =
-                |frame: usize| &PIXELS[(character * FRAMES + frame) * 4096..(character * FRAMES + frame + 1) * 4096];
+            let cell = |frame: usize| {
+                &PIXELS[(character * FRAMES + frame) * CELL_BYTES..(character * FRAMES + frame + 1) * CELL_BYTES]
+            };
             for pose in 0..6 {
                 let a = cell(pose * 2);
                 let b = cell(pose * 2 + 1);
@@ -252,7 +264,7 @@ mod tests {
     #[test]
     fn all_assets_have_transparency_and_distinct_visible_pixels() {
         let mut hashes = std::collections::HashSet::new();
-        for cell in PIXELS.as_chunks::<4096>().0 {
+        for cell in PIXELS.as_chunks::<CELL_BYTES>().0 {
             assert!(cell.as_chunks::<4>().0.iter().any(|p| p[3] < 128));
             assert!(cell.as_chunks::<4>().0.iter().filter(|p| p[3] >= 128).count() > 50);
             hashes.insert(cell);

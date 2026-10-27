@@ -60,3 +60,9 @@ Reproduced the reported cracks: the creature contact-strip pass overwrote laptop
 ## Fork integration
 
 Integrated the complete cmpham branch through 6b43472. Rendering now lives in crates/cafe-ui with 480×272 logical coordinates; desktop 2× output is 960×544. Rebuilt full-source patron assets remain 64×64. P changes rosters, C selects a character seat, brackets change its character; Tab retains session focus navigation. Creature portraits are used in the footer and review, and the inherited animated Codex logo is retained. Semantic firmware keeps its native human roster; desktop-only patron assets are excluded from no_std builds. Legacy mirrored frames retain their native dimensions and fingerprint buffer. The renderer digest changed, so semantic desktop/board versions must be updated together. No physical device validation was performed for this integration.
+
+## Patron size and facing repair
+
+Room patrons now have a 48×48 logical footprint (50% larger per dimension), recompiled from full sources to 96×96 cells at the unchanged 2× detail layer. Footer/review portraits remain 32×32 logical. Cup anchors are regenerated at the larger scale. PMD walking rows were reversed: left now uses row 6, right row 2. Dragonite now uses its bundled directional PMD walk, with generated seated poses retained. Reviewed all seated action boards, both gait phases in all four directions for all 16 characters, plus arrival/departure timeline samples. Larger bodies remain behind laptop lids; mugs and desk contact stay aligned.
+
+Validation: source mapping regression failed before the correction and passes afterward; two Python asset tests pass. Real-path regression compares the rendered walker with the movement direction for arrivals and departures at every seat in both rosters. 157 workspace/all-target Rust tests and strict Clippy pass; macOS bundle rebuilt. `large-*` boards, `walk-directions-*` boards and walking GIFs record this revision.
