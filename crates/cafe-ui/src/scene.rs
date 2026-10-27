@@ -19,7 +19,6 @@ use chrono::{NaiveTime, Timelike};
 
 use crate::assets::{self as a, Pal, Sprite, base, c, slot};
 use crate::gfx::{Gfx, text_width};
-#[cfg(feature = "std")]
 use crate::patrons::Animation;
 
 // Compact immutable runs live in flash. Decoding writes the frame sequentially,
@@ -273,7 +272,6 @@ impl Particle {
 }
 
 pub struct Scene {
-    #[cfg(feature = "std")]
     pub patrons: crate::patrons::Patrons,
     #[cfg(feature = "std")]
     pub selected_seat: Option<usize>,
@@ -519,7 +517,6 @@ impl Scene {
     pub fn new() -> Self {
         Scene {
             external_seats: None,
-            #[cfg(feature = "std")]
             patrons: crate::patrons::Patrons::default(),
             #[cfg(feature = "std")]
             selected_seat: None,
@@ -1558,7 +1555,6 @@ impl Scene {
         }
         let ag = self.agents.iter().find(|a| a.seat == i);
         if let Some(ag) = ag.filter(|a| a.mode == Mode::Seated) {
-            #[cfg(feature = "std")]
             if self.patrons.is_creature(i) {
                 // Desktop contact stays behind the laptop lid and its logo.
                 g.clip(geo.sx + 29, geo.sy + DESK_Y, geo.sx + 55, geo.sy + DESK_Y + 2);
@@ -1570,7 +1566,6 @@ impl Scene {
             } else {
                 self.draw_laptop(g, ag, geo.sx + LID_X, geo.sy + LID_Y);
             }
-            #[cfg(feature = "std")]
             if self.patrons.is_creature(i) {
                 if pose_of(self.t, ag) == Pose::Sip {
                     self.patrons.cup(g, i, (geo.sx + 40, geo.sy + DESK_Y + 1), (self.t + ag.phase) as u64);
@@ -1583,7 +1578,6 @@ impl Scene {
         self.draw_plate(g, ag, geo.sx + 40, y + 9);
     }
 
-    #[cfg(feature = "std")]
     fn draw_creature(&self, g: &mut Gfx, ag: &Agent) -> bool {
         let geo = seat_geom(ag.seat);
         let animation = match pose_of(self.t, ag) {
@@ -1598,7 +1592,6 @@ impl Scene {
     }
 
     fn draw_seated(&self, g: &mut Gfx, ag: &Agent) {
-        #[cfg(feature = "std")]
         if self.draw_creature(g, ag) {
             return;
         }
@@ -1617,7 +1610,6 @@ impl Scene {
     }
 
     fn draw_walker(&self, g: &mut Gfx, ag: &Agent) {
-        #[cfg(feature = "std")]
         {
             let animation = match ag.dir {
                 Dir::Up => Animation::WalkUp,
@@ -1732,7 +1724,6 @@ impl Scene {
     }
 
     fn draw_patron_portrait(&self, g: &mut Gfx, id: &str, x: i32, y: i32) {
-        #[cfg(feature = "std")]
         if let Some(ag) = self.agents.iter().find(|ag| ag.id == id && ag.seen && self.patrons.is_creature(ag.seat)) {
             g.rect(x, y, 34, 36, c::GOLD);
             g.rect(x + 1, y + 1, 32, 34, c::WIN1);

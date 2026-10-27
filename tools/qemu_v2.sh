@@ -29,6 +29,7 @@ case "${1:-build}" in
   CARGO_HOME="${CARGO_HOME:-/tmp/token-cafe-cargo}" RUSTUP_HOME="${RUSTUP_HOME:-/tmp/token-cafe-rustup}" \
    "${CARGO_HOME:-/tmp/token-cafe-cargo}/bin/cargo" build --manifest-path "$ROOT/Cargo.toml" --offline --release --example codex_bridge_qa
   python "$ROOT/tools/test_connection_hint_qemu.py"
+  python "$ROOT/tools/test_patron_sync_qemu.py"
   python "$ROOT/tools/test_attention_qemu.py"
   python "$ROOT/tools/test_protocol_v2_qemu.py" "${@:2}"
   python "$ROOT/tools/test_transition_qemu.py"

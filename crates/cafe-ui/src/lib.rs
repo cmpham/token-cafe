@@ -5,7 +5,6 @@ extern crate alloc;
 pub mod assets;
 pub mod approval;
 pub mod gfx;
-#[cfg(feature = "std")]
 pub mod patrons;
 pub mod review;
 pub mod scene;

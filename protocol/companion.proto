@@ -189,6 +189,7 @@ message View {
   bytes origin_connection_epoch = 9;
   ReviewKind review_kind = 10;
   BlobRef review_blob = 11;
+  bytes patron_ids = 12; // eight seat character IDs, 0=human, 1..16=creatures; empty=humans
 }
 message Usage { string tokens_display = 1; string cost_display = 2; }
 message BlobGet { bytes sha256 = 1; }

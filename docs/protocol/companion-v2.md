@@ -583,3 +583,7 @@ precision time synchronization. Absent samples preserve the last anchor; before
 any sample the display uses midnight, never device uptime. Board heartbeats omit
 this field. These additive fields are independent of all monotonic input,
 approval, transport, heartbeat, animation and sleep deadlines.
+
+## Patron appearance synchronization
+
+`View.patron_ids` carries exactly eight seat-based character IDs: 0 for a human, 1–8 for dragons, and 9–16 for Pokémon, in `cafe-ui::patrons::NAMES` order. An absent/empty field retains the legacy human roster. Invalid lengths or unknown IDs reject the model before publication. Desktop startup overrides and live roster/seat shortcuts update this field through snapshots and view deltas; selection and approval identity remain session-based. Board sprite rows use lossless run-length encoding, decoded one row at a time without a frame-sized allocation. Native sprites, cup anchors and renderer code participate in the shared compatibility digest.

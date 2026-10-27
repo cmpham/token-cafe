@@ -24,7 +24,8 @@ pub fn blob_valid(b: &BlobRef) -> bool {
     b.sha256.len() == 32 && b.byte_length <= 32768
 }
 pub fn validate(model: &Model) -> Result<()> {
-    if model.revision == 0
+    if cafe_ui::patrons::Patrons::from_ids(&model.view.patron_ids).is_none()
+        || model.revision == 0
         || model.sessions.len() > 64
         || model.usage.tokens_display.len() > 24
         || model.usage.cost_display.len() > 24

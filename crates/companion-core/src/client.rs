@@ -305,6 +305,7 @@ impl Client {
         }
         self.intents.reconcile(self.replica.model.revision);
         let v = self.view();
+        self.scene.patrons = cafe_ui::patrons::Patrons::from_ids(&v.patron_ids).ok_or(Error::Invalid)?;
         let m = &self.replica.model;
         let sessions: Vec<_> = m
             .sessions

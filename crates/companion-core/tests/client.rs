@@ -573,3 +573,27 @@ fn attention_next_is_selection_only_and_new_request_cancels_held_contact() {
     assert_eq!(c.scene.attention_id(), Some("codex:question"));
     assert!(c.scene.review.is_none());
 }
+
+#[test]
+fn creature_rosters_reach_board_through_snapshot_and_delta() {
+    let (mut client, mut host, _) = setup();
+    for (index, roster) in ["pokemon", "dragons", "mixed", "humans"].iter().enumerate() {
+        let previous = host.model.clone();
+        host.model.revision += 1;
+        host.model.view.patron_ids = cafe_ui::patrons::Patrons::roster(roster).unwrap().ids().to_vec();
+        let packets = if index == 0 {
+            sync::snapshot(&host.model, &[1; 16], &[2; 16]).unwrap()
+        } else {
+            sync::update(&previous, &host.model, &[1; 16], &[2; 16]).unwrap()
+        };
+        for e in packets {
+            let raw = codec::encode(&e).unwrap();
+            client.receive(e, &raw, 10_000).unwrap();
+        }
+        assert_eq!(client.scene.patrons.ids().as_slice(), host.model.view.patron_ids);
+    }
+    for ids in [vec![1; 7], vec![1; 9], vec![17; 8]] {
+        host.model.view.patron_ids = ids;
+        assert!(companion_core::model::validate(&host.model).is_err());
+    }
+}

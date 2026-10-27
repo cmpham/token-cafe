@@ -22,3 +22,5 @@ token_cafe.v2.Request.allowed_decisions max_count:4
 token_cafe.v2.BlobChunk.data max_size:512
 token_cafe.v2.Usage.tokens_display max_size:25
 token_cafe.v2.Usage.cost_display max_size:25
+
+token_cafe.v2.View.patron_ids max_size:8

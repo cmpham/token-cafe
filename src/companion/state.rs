@@ -246,6 +246,7 @@ impl Store {
             selected_session_id: scene.selected_id().map(wire_id).unwrap_or_default(),
             page: 1,
             task_anchor: scene.task_anchor() as u32,
+            patron_ids: scene.patrons.ids().to_vec(),
             ..Default::default()
         };
         if let Some(r) = &scene.review
@@ -274,6 +275,7 @@ impl Store {
         if !next.view.selected_session_id.is_empty() && !next.sessions.contains_key(&next.view.selected_session_id) {
             next.view = View { page: 1, generation: old.view.generation + 1, ..Default::default() };
         }
+        next.view.patron_ids = scene.patrons.ids().to_vec();
         if next.view.page == 2 {
             let s = next.sessions.get(&next.view.selected_session_id);
             let valid = next.view.review_blob.is_some()
@@ -350,6 +352,7 @@ impl Store {
         v.applied_action_id = 0;
         v.selected_session_id = scene.selected_id().map(wire_id).unwrap_or_default();
         v.task_anchor = scene.task_anchor() as u32;
+        v.patron_ids = scene.patrons.ids().to_vec();
         if let Some(r) = &scene.review {
             v.review_anchor = r.anchor() as u32;
         }
@@ -437,6 +440,19 @@ mod tests {
         }]);
         scene.set_details(vec![scene::SessionDetail { id: "claude:a".into(), target: None, task: "Full task".into() }]);
         scene
+    }
+    #[test]
+    fn creature_selection_publishes_initial_roster_and_live_seat_changes() {
+        let mut scene = scene();
+        let mut store = Store::new([1; 16]);
+        for roster in ["pokemon", "dragons", "mixed", "humans"] {
+            scene.patrons = crate::patrons::Patrons::roster(roster).unwrap();
+            store.ingest(&mut scene, None);
+            assert_eq!(store.authority.model.view.patron_ids, scene.patrons.ids());
+            scene.patrons.cycle(2, false);
+            store.ingest(&mut scene, None);
+            assert_eq!(store.authority.model.view.patron_ids, scene.patrons.ids());
+        }
     }
     #[test]
     fn replacing_review_without_task_returns_to_cafe() {

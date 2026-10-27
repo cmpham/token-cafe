@@ -1,6 +1,7 @@
 //! Seat-based appearance configuration, independent of session identity/status.
 use crate::gfx::Gfx;
 use crate::scene::SEATS;
+use alloc::{format, string::String};
 
 pub const NAMES: [&str; 17] = [
     "human",
@@ -23,9 +24,12 @@ pub const NAMES: [&str; 17] = [
 ];
 const FRAMES: usize = 28;
 const CELL: usize = 48;
+#[cfg(feature = "std")]
 const CELL_BYTES: usize = CELL * CELL * 4;
+#[cfg(feature = "std")]
 const HD_PIXELS: &[u8; 16 * FRAMES * CELL_BYTES * 4] = include_bytes!("../../../assets/patrons/poses-hd.rgba");
-const PIXELS: &[u8; 16 * FRAMES * CELL_BYTES] = include_bytes!("../../../assets/patrons/poses.rgba");
+const RUNS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/patron-runs.bin"));
+const ROWS: &[u32] = &include!(concat!(env!("OUT_DIR"), "/patron-rows.rs"));
 
 /// Each seated action has actual articulated artwork. Walk clips have four
 /// gait frames and use distance rather than time, so a stopped patron stays still.
@@ -75,6 +79,38 @@ impl Default for Patrons {
 }
 
 impl Patrons {
+    pub fn ids(&self) -> [u8; SEATS] {
+        self.seats.map(|id| id as u8)
+    }
+
+    pub fn from_ids(ids: &[u8]) -> Option<Self> {
+        if ids.is_empty() {
+            return Some(Self::default());
+        }
+        if ids.len() != SEATS || ids.iter().any(|&id| id as usize >= NAMES.len()) {
+            return None;
+        }
+        let mut seats = [0; SEATS];
+        for (seat, &id) in seats.iter_mut().zip(ids) {
+            *seat = id as usize;
+        }
+        Some(Self { seats })
+    }
+
+    fn row(frame: usize, y: usize) -> [[u8; 4]; CELL] {
+        let mut result = [[0; 4]; CELL];
+        let mut offset = ROWS[frame * CELL + y] as usize;
+        let mut x = 0;
+        while x < CELL {
+            let count = RUNS[offset] as usize;
+            let pixel = RUNS[offset + 1..offset + 5].try_into().unwrap();
+            result[x..x + count].fill(pixel);
+            x += count;
+            offset += 5;
+        }
+        result
+    }
+
     pub fn roster(name: &str) -> Result<Self, String> {
         let seats = match name {
             "humans" => [0; SEATS],
@@ -176,14 +212,20 @@ impl Patrons {
         let (animation, clock) = clip;
         let frame = (id - 1) * FRAMES + animation.frame(clock);
         let k = g.scale;
+        #[cfg(feature = "std")]
         let side = CELL * k;
-        let bytes = side * side * 4;
-        let atlas: &[u8] = if k == 2 { HD_PIXELS } else { PIXELS };
-        let cell = &atlas[frame * bytes..(frame + 1) * bytes];
         for y in 0..output * k {
+            let row = Self::row(frame, y * CELL / (output * k));
             for x in 0..output * k {
-                let offset = ((y * CELL / output) * side + x * CELL / output) * 4;
-                let p = &cell[offset..offset + 4];
+                let p = &row[x * CELL / (output * k)];
+                #[cfg(feature = "std")]
+                let p = if k == 2 {
+                    let offset = (frame * side * side + (y * CELL / output) * side + x * CELL / output) * 4;
+                    &HD_PIXELS[offset..offset + 4]
+                } else {
+                    p
+                };
+
                 if p[3] >= 128 {
                     // Soft cafe fill light reveals dark NightWing scales while
                     // preserving black outlines and their purple palette.
@@ -208,6 +250,25 @@ impl Patrons {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const PIXELS: &[u8] = include_bytes!("../../../assets/patrons/poses.rgba");
+    #[test]
+    fn compressed_board_frames_preserve_every_visible_pixel() {
+        for frame in 0..16 * FRAMES {
+            for y in 0..CELL {
+                let row = Patrons::row(frame, y);
+                for (x, decoded) in row.iter().enumerate() {
+                    let offset = ((frame * CELL + y) * CELL + x) * 4;
+                    let source = &PIXELS[offset..offset + 4];
+                    if source[3] >= 128 {
+                        assert_eq!(decoded, source);
+                    } else {
+                        assert_eq!(*decoded, [0; 4]);
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn rosters_have_eight_unique_creatures() {
         for name in ["dragons", "pokemon", "mixed"] {
