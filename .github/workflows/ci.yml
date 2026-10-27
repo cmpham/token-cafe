@@ -1,0 +1,45 @@
+name: Rust
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Linux window dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev libxcursor1 libxkbcommon-x11-0 xvfb
+      - name: Portable firmware sanitizer tests
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined firmware/test_double_tap.c -o /tmp/tc-test-double-tap
+          /tmp/tc-test-double-tap
+          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -Ifirmware/main firmware/test_touch_gesture.c -o /tmp/tc-test-touch
+          /tmp/tc-test-touch
+          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined firmware/test_screen_idle.c -o /tmp/tc-test-idle
+          /tmp/tc-test-idle
+          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined firmware/test_protocol.c firmware/main/protocol.c -o /tmp/tc-test-protocol
+          /tmp/tc-test-protocol
+      - name: Semantic wire decoder sanitizer corpus
+        run: |
+          cc -std=c11 -O1 -g -DPB_VALIDATE_UTF8 -fsanitize=address,undefined -Ifirmware/shared/generated -Ifirmware/shared/vendor/nanopb protocol/tests/fuzz_bounds.c firmware/shared/validate.c firmware/shared/generated/companion.pb.c firmware/shared/vendor/nanopb/pb_common.c firmware/shared/vendor/nanopb/pb_decode.c firmware/shared/vendor/nanopb/pb_encode.c -o /tmp/tc-v2-fuzz
+          /tmp/tc-v2-fuzz
+      - run: cargo fmt --all --check
+      - run: cargo test --workspace --locked --all-targets
+      - run: cargo clippy --workspace --locked --all-targets -- -D warnings
+      - name: Linux X11 startup smoke test
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --locked
+          status=0
+          xvfb-run -a timeout 5s target/debug/token-cafe --demo --always-on-top || status=$?
+          test "$status" -eq 124
+      - name: Build macOS app bundle
+        if: runner.os == 'macOS'
+        run: ./tools/build_macos.sh

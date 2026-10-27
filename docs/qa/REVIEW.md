@@ -56,3 +56,25 @@ Changed the current desktop detail layer to 2×: 64×64 patron cells and a 640×
 ## Laptop logo occlusion repair
 
 Reproduced the reported cracks: the creature contact-strip pass overwrote laptop lid pixels. Moved that pass before laptop rendering; held cups and keyboard paws retain their foreground pass. A regression compares the entire laptop lid against isolated laptop rendering for all 16 creatures, four timestamps and both render resolutions; it failed before the fix and now passes. All 22 tests and strict Clippy pass. Rebuilt the macOS app and regenerated the 2× previews; visually reviewed both rosters’ wave/sip boards for intact logos and preserved cups.
+
+## Fork integration
+
+Integrated the complete cmpham branch through 6b43472. Rendering now lives in crates/cafe-ui with 480×272 logical coordinates; desktop 2× output is 960×544. Rebuilt full-source patron assets remain 64×64. P changes rosters, C selects a character seat, brackets change its character; Tab retains session focus navigation. Creature portraits are used in the footer and review, and the inherited animated Codex logo is retained. Semantic firmware keeps its native human roster; desktop-only patron assets are excluded from no_std builds. Legacy mirrored frames retain their native dimensions and fingerprint buffer. The renderer digest changed, so semantic desktop/board versions must be updated together. No physical device validation was performed for this integration.
+
+## Patron size and facing repair
+
+Room patrons now have a 48×48 logical footprint (50% larger per dimension), recompiled from full sources to 96×96 cells at the unchanged 2× detail layer. Footer/review portraits remain 32×32 logical. Cup anchors are regenerated at the larger scale. PMD walking rows were reversed: left now uses row 6, right row 2. Dragonite now uses its bundled directional PMD walk, with generated seated poses retained. Reviewed all seated action boards, both gait phases in all four directions for all 16 characters, plus arrival/departure timeline samples. Larger bodies remain behind laptop lids; mugs and desk contact stay aligned.
+
+Validation: source mapping regression failed before the correction and passes afterward; two Python asset tests pass. Real-path regression compares the rendered walker with the movement direction for arrivals and departures at every seat in both rosters. 157 workspace/all-target Rust tests and strict Clippy pass; macOS bundle rebuilt. `large-*` boards, `walk-directions-*` boards and walking GIFs record this revision.
+
+## Pokémon 2× contour detail
+
+Added edge-aware Scale2x source sampling for classic Pokémon in HD cells. Compared before/after Pikachu and inspected both phases of all six seated actions for all Pokémon. Original palette, frame bounds and cup-anchor transforms are preserved, tested across all 196 classic Pokémon frames. Four Python asset tests, 157 Rust tests and strict Clippy pass; macOS bundle rebuilt. The improvement refines contours from the existing sprites rather than generating new facial/texture detail. See `pokemon-detail-comparison.png`, `detail-pokemon-*` boards and updated `2x-pokemon-preview.png`.
+
+## Semantic board creature patrons (2026-10-27)
+
+This supersedes the earlier desktop-only limitation. The no_std board renderer now uses the same 16 characters, poses, direction selection, contact passes and portraits. Native sprite rows are losslessly compressed (1,544,401 bytes including row offsets), with one 192-byte decoded row at a time. The production image is 0x282760 bytes, leaving 36% of the 4 MiB board app partition free. `View.patron_ids` replicates startup and live per-seat choices through snapshots and deltas. Empty IDs preserve old human-only fixtures; malformed IDs fail model validation.
+
+160 Rust tests and strict Clippy passed. Tests cover exact visible-pixel decoding of all 448 sprite frames, initial and changed desktop selections, board snapshot/delta application and invalid IDs. The actual Xtensa simulator passed Pokémon, dragon, mixed and human rosters, arrival/departure and seated animation captures, live seat swaps, touch identity and reconnects. Existing protocol tests passed at ATT capacities 182, 244 and 509, including guarded decisions, replay rejection, sleep/wake and overflow sessions. Reviewed `board-pokemon.png`, `board-dragons.png`, and both `board-*-walking.png` contact sheets visually. These are simulator framebuffer captures, not photographs of the physical LCD.
+
+Flashed only the production app partition at 0x10000, retaining existing pairing/NVS and the private full-flash backup. Esptool verified the written hash. After a USB reset, the updated desktop confirmed `TokenCafe-6336 synced v2`; switching Pokémon to mixed retained sync. Production telemetry confirmed `CONNECTED` and continuing `FRAME` output (sample draw/pack/LCD 39/16/27 ms, over 7 MiB free PSRAM). Physical LCD appearance and finger-to-patron alignment still require the user's direct inspection.

@@ -1,0 +1,14 @@
+{
+  "press_feedback_ms": {
+    "samples": 114,
+    "median": 39.0,
+    "p95": 71,
+    "max": 76
+  },
+  "release_to_lcd_ms": {
+    "samples": 114,
+    "median": 86.0,
+    "p95": 88,
+    "max": 152
+  }
+}

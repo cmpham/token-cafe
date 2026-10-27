@@ -6,8 +6,9 @@
 //!   token-cafe              the live café
 //!   token-cafe --demo       a fixed list that shows every pose
 //!   token-cafe --print      print the sessions and this month's usage, and exit
-//!   token-cafe --scale N    start at N times 320x240 (default 3)
-//! Keys: 1-6 window size, f / F11 fullscreen, Esc leave fullscreen, q quit.
+//!   token-cafe --scale N    start at N times 480x272 (default 1 on macOS, 3 elsewhere)
+//!   token-cafe --always-on-top  keep the café above other windows
+//! Keys: 1-6 window size, f / F11 fullscreen, Esc leave fullscreen/clear selection, Tab next session, Left/Right select patron, Up/Down task page, t toggle always on top, q quit.
 
 mod app;
 
@@ -16,8 +17,7 @@ use std::thread;
 use std::time::Duration;
 
 use token_cafe::collect::Collector;
-use token_cafe::patrons::{NAMES, Patrons, ROSTERS};
-use token_cafe::scene::{ForcedPose, Kind, Session, State, Usage, Why};
+use token_cafe::scene::{ForcedPose, Kind, Session, SessionDetail, State, Usage, UsageRow, Why};
 use token_cafe::usage::{Counter, human};
 
 const POLL: Duration = Duration::from_secs(1); // how often the sessions are read
@@ -26,7 +26,10 @@ const USAGE_EVERY: Duration = Duration::from_secs(60); // how often this month's
 /// What the feeder threads hand the window.
 pub enum Update {
     Sessions(Vec<Session>),
+    Details(Vec<SessionDetail>),
     Usage(Usage),
+    UsageRows(Vec<UsageRow>),
+    UsageAccounts(Vec<UsageRow>),
 }
 
 fn log(msg: &str) {
@@ -52,14 +55,14 @@ fn sessions_feed(tx: Sender<Update>) {
     let mut collector = Collector::new();
     let mut last = None;
     loop {
-        let list = collector.sessions();
+        let (list, details) = collector.sessions_with_details();
         let seen: Vec<String> = list.iter().map(|s| format!("{}:{}", s.id, describe(s))).collect();
         if last.as_ref() != Some(&seen) {
             let names: Vec<String> = list.iter().map(describe).collect();
             log(&format!("sessions: {}", if names.is_empty() { "none".into() } else { names.join(", ") }));
             last = Some(seen);
         }
-        if tx.send(Update::Sessions(list)).is_err() {
+        if tx.send(Update::Sessions(list)).is_err() || tx.send(Update::Details(details)).is_err() {
             return;
         }
         thread::sleep(POLL);
@@ -72,12 +75,16 @@ fn usage_feed(tx: Sender<Update>) {
     let mut counter = Counter::new();
     let mut first = true;
     loop {
-        let u = counter.month();
+        let report = counter.month_report();
+        let u = report.total;
         if first {
             log(&format!("this month: {} tokens, ${:.2}", human(u.tokens), u.usd));
             first = false;
         }
-        if tx.send(Update::Usage(Usage { tokens: u.tokens as f64, usd: u.usd })).is_err() {
+        if tx.send(Update::UsageAccounts(report.account_display_rows())).is_err()
+            || tx.send(Update::UsageRows(report.display_rows())).is_err()
+            || tx.send(Update::Usage(Usage { tokens: u.tokens as f64, usd: u.usd })).is_err()
+        {
             return;
         }
         thread::sleep(USAGE_EVERY);
@@ -93,6 +100,8 @@ fn demo_feed(tx: Sender<Update>) {
         why,
         pose,
         age_s: 0,
+        branch: Some("feature/moon-cafe".into()),
+        active_subagents: Some(2),
     };
     use {ForcedPose as P, Kind::*, State::*};
     let list = vec![
@@ -105,6 +114,22 @@ fn demo_feed(tx: Sender<Update>) {
         s("9a7c33d0", "billing", Codex, Idle, Why::None, P::Stretch),
         s("01a11478", "ml-pipeline-6e", Codex, Work, Why::None, P::Auto),
     ];
+    let tasks = [
+        "Implement request tracing and verify the API handles retries without duplicate operations.",
+        "Review the checkout permissions before continuing with the deployment.",
+        "Update docs.",
+        "Migrate stored settings while keeping existing preferences intact.",
+        "Choose which infrastructure region should host the preview environment.",
+        "", // Missing transcript fixture.
+        "Verify invoice rounding across supported currencies.",
+        "Train the evaluation pipeline and compare the results with the previous baseline.",
+    ];
+    let details = list
+        .iter()
+        .zip(tasks)
+        .map(|(s, task)| SessionDetail { target: None, id: s.id.clone(), task: task.into() })
+        .collect();
+    let _ = tx.send(Update::Details(details));
     let _ = tx.send(Update::Usage(Usage { tokens: 1_624_000_000.0, usd: 693.70 }));
     while tx.send(Update::Sessions(list.clone())).is_ok() {
         thread::sleep(POLL);
@@ -132,21 +157,53 @@ fn print_once() {
     println!("this month: {} tokens ({}), ${:.2}", human(u.tokens), u.tokens, u.usd);
 }
 
-fn usage_text() -> &'static str {
-    "usage: token-cafe [--demo | --print] [--scale N] [--patrons STYLE] [--seat N=NAME]\n\
-     \n  --demo     a fixed list that shows every pose\
-     \n  --print    print the sessions and this month's usage, and exit\
-     \n  --scale N  start at N times 320x240 (default 3)\
-     \n  --patrons STYLE  humans, dragons, pokemon, mixed (default mixed)\
-     \n  --seat N=NAME    assign a character to seat 1-8; repeatable\
-     \n  --list-patrons   list character names and exit\
-     \n\nkeys: P roster, Tab seat, [ / ] character, 1-6 window size, f / F11 fullscreen, Esc leave fullscreen, q quit"
+fn print_session_info(watch: bool) {
+    let mut collector = Collector::new();
+    let mut last = None;
+    loop {
+        let sessions = collector.session_info();
+        let snapshot = serde_json::json!({"sessions": sessions.iter().map(|s| s.json()).collect::<Vec<_>>()});
+        if last.as_ref() != Some(&snapshot) {
+            println!("{snapshot}");
+            last = Some(snapshot);
+        }
+        if !watch {
+            break;
+        }
+        thread::sleep(POLL);
+    }
 }
 
+fn usage_text() -> &'static str {
+    "usage: token-cafe [--demo | --print | --usage-json | --session-info [--watch]] [--scale N] [--always-on-top]\n\
+     \n  --usage-json  print monthly usage by saved app and organization as JSON\
+     \n  --session-info  print local session tasks and observed activity as JSON\
+     \n  --watch    with --session-info, emit snapshots when they change\
+     \n  --demo     a fixed list that shows every pose\
+     \n  --print    print the sessions and this month's usage, and exit\
+     \n  --scale N  start at N times 480x272 (default 1 on macOS, 3 elsewhere)\
+     \n  --bluetooth  connect registered semantic companions (TC_BLE_REGISTRY)\
+     \n  --bluetooth-key PATH  with --bluetooth: use the legacy framebuffer board instead\
+     \n  --patrons STYLE  humans, dragons, pokemon, mixed (default mixed)\
+     \n  --seat N=NAME  assign a character to a seat; --list-patrons lists names\
+     \n  --always-on-top  keep the café above other windows\
+     \n\nkeys: p roster, c character seat, [/] character, 1-6 window size, u monthly usage, f / F11 fullscreen, Esc leave fullscreen/clear selection, Tab next session, Left/Right select patron, Up/Down task page, t toggle always on top, q quit"
+}
+
+use token_cafe::patrons::{NAMES, Patrons, ROSTERS};
+
 fn main() {
-    let (mut demo, mut print, mut scale) = (false, false, 3u32);
     let mut roster = "mixed".to_string();
     let mut assignments = Vec::new();
+    let default_scale = if cfg!(target_os = "macos") { 1u32 } else { 3u32 };
+    let (mut demo, mut print, mut scale) = (false, false, default_scale);
+    let (mut session_info, mut watch) = (false, false);
+    let mut usage_json = false;
+    let mut always_on_top = false;
+    let mut bluetooth = false;
+    let mut bluetooth_key_path = None;
+    #[cfg(feature = "bluetooth")]
+    let mut bluetooth_test = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -165,15 +222,85 @@ fn main() {
                     std::process::exit(2);
                 }
             },
+            "--usage-json" => usage_json = true,
+            "--session-info" => session_info = true,
+            "--watch" => watch = true,
+            #[cfg(feature = "bluetooth")]
+            "--bluetooth-test" => bluetooth_test = Some(args.next().expect("--bluetooth-test needs an RGB565 file")),
+            "--bluetooth-key" => bluetooth_key_path = args.next(),
+            "--bluetooth" => bluetooth = true,
+            "--always-on-top" => always_on_top = true,
             "--demo" => demo = true,
             "--print" => print = true,
             "--scale" => match args.next().and_then(|v| v.parse().ok()).filter(|&k| (1..=16).contains(&k)) {
                 Some(k) => scale = k,
-                None => return eprintln!("--scale wants a whole number from 1 to 16\n\n{}", usage_text()),
+                None => {
+                    eprintln!("--scale wants a whole number from 1 to 16\n\n{}", usage_text());
+                    std::process::exit(2);
+                }
             },
             "-h" | "--help" => return println!("{}", usage_text()),
-            other => return eprintln!("unknown argument {other}\n\n{}", usage_text()),
+            other => {
+                eprintln!("unknown argument {other}\n\n{}", usage_text());
+                std::process::exit(2);
+            }
         }
+    }
+    if (watch && !session_info) || [session_info, demo, print, usage_json].iter().filter(|v| **v).count() > 1 {
+        eprintln!(
+            "--watch requires --session-info; choose only one of --demo, --print, --usage-json, or --session-info"
+        );
+        std::process::exit(2);
+    }
+    #[cfg(feature = "bluetooth")]
+    let legacy_test = bluetooth_test.is_some();
+    #[cfg(not(feature = "bluetooth"))]
+    let legacy_test = false;
+    if bluetooth_key_path.is_some() && !bluetooth && !legacy_test {
+        eprintln!("--bluetooth-key selects the legacy board only together with --bluetooth\n\n{}", usage_text());
+        std::process::exit(2);
+    }
+    #[cfg(feature = "bluetooth")]
+    let bluetooth_key = if bluetooth_test.is_some() || (bluetooth && bluetooth_key_path.is_some()) {
+        let Some(path) = bluetooth_key_path.as_deref() else {
+            eprintln!("Use --bluetooth-key PATH to authenticate your board");
+            std::process::exit(2);
+        };
+        match token_cafe::companion::read_key(path) {
+            Ok(key) => Some(key),
+            Err(e) => {
+                eprintln!("Pairing key: {e}");
+                std::process::exit(2);
+            }
+        }
+    } else {
+        None
+    };
+    #[cfg(not(feature = "bluetooth"))]
+    let bluetooth_key: Option<[u8; 32]> = {
+        let _ = bluetooth_key_path;
+        if bluetooth {
+            eprintln!("Built without Bluetooth support");
+            std::process::exit(2);
+        }
+        None
+    };
+    #[cfg(feature = "bluetooth")]
+    if let Some(path) = bluetooth_test {
+        if let Err(e) = token_cafe::companion::hardware_test(&path, &bluetooth_key.unwrap()) {
+            eprintln!("Bluetooth test failed: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if usage_json {
+        return println!("{}", Counter::new().month_report().json());
+    }
+    if session_info {
+        return print_session_info(watch);
+    }
+    if print {
+        return print_once();
     }
     let mut patrons = Patrons::roster(&roster).unwrap();
     for spec in assignments {
@@ -183,9 +310,6 @@ fn main() {
         }
     }
     let roster_index = ROSTERS.iter().position(|n| *n == roster).unwrap();
-    if print {
-        return print_once();
-    }
     let (tx, rx) = channel();
     if demo {
         thread::spawn(move || demo_feed(tx));
@@ -194,7 +318,18 @@ fn main() {
         thread::spawn(move || sessions_feed(tx));
         thread::spawn(move || usage_feed(tx2));
     }
-    if let Err(e) = app::run(rx, scale, patrons, roster_index) {
+    if let Err(e) = app::run(
+        rx,
+        scale,
+        always_on_top,
+        if bluetooth {
+            Some(bluetooth_key.map_or(app::CompanionConfig::Semantic, app::CompanionConfig::Legacy))
+        } else {
+            None
+        },
+        patrons,
+        roster_index,
+    ) {
         eprintln!("token-cafe: {e}");
         std::process::exit(1);
     }

@@ -107,6 +107,7 @@ struct Process {
 /// session it belongs to.
 #[derive(Clone)]
 struct Rollout {
+    path: PathBuf,
     offset: u64,
     state: State,
     since: f64,
@@ -114,6 +115,8 @@ struct Rollout {
     cwd: String,
     started: f64,
     child: bool,
+    parent: Option<String>,
+    own_id: String,
 }
 
 #[derive(Default)]
@@ -289,6 +292,13 @@ impl Codex {
                 };
                 let (ev, done) = scan_back(&mut f, size).ok()?;
                 let r = Rollout {
+                    path: path.to_owned(),
+                    parent: meta
+                        .pointer("/payload/source/subagent/thread_spawn/parent_thread_id")
+                        .or_else(|| meta.pointer("/payload/session_id"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    own_id: meta.pointer("/payload/id").and_then(Value::as_str).unwrap_or(&session).to_owned(),
                     offset: done,
                     state: ev.map_or(State::Idle, |e| e.0),
                     since: ev.and_then(|e| e.1).filter(|&t| t != 0.0).unwrap_or(mtime),
@@ -340,6 +350,9 @@ impl Codex {
                         .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect())
                         .unwrap_or_else(|| session_name(cwd, &r.session));
                     let found = Found {
+                        claude_identity: None,
+                        cwd: cwd.to_owned(),
+                        active_subagents: Some(active_children(&infos, &r.session)),
                         id: short_id(&r.session),
                         name,
                         kind: Kind::Codex,
@@ -347,29 +360,38 @@ impl Codex {
                         why: Why::None,
                         since: r.since,
                         started: r.started,
+                        session_id: r.session.clone(),
+                        project: cwd.to_owned(),
+                        transcript: Some(r.path.clone()),
+                        target: Some(crate::scene::SessionTarget::Codex(r.session.clone())),
                     };
                     insert_session(&mut out, &r.session, found);
                 }
                 continue;
             }
-            let (uuid, state, since) = if infos.is_empty() {
-                (format!("{:08x}", p.pid), State::Idle, if p.start != 0.0 { p.start } else { now })
-            } else {
-                let working: Vec<&Rollout> = infos.iter().filter(|i| i.state == State::Work).collect();
-                let pool: Vec<&Rollout> = if working.is_empty() { infos.iter().collect() } else { working.clone() };
-                let since = pool.iter().map(|i| i.since).fold(f64::NEG_INFINITY, f64::max);
-                let newest = infos.iter().fold(&infos[0], |m, i| if i.since > m.since { i } else { m });
-                let state = if working.is_empty() { State::Idle } else { State::Work };
-                (newest.session.clone(), state, since)
-            };
+            // Use the root for identity, status and checkout; a child may have a
+            // newer event and a different cwd, but is not the patron itself.
+            let root = infos.iter().filter(|r| !r.child).max_by(|a, b| a.since.total_cmp(&b.since));
+            let (uuid, state, since) = root.map_or_else(
+                || (format!("{:08x}", p.pid), State::Idle, if p.start != 0.0 { p.start } else { now }),
+                |r| (r.session.clone(), r.state, r.since),
+            );
+            let cwd = root.map(|r| r.cwd.as_str()).filter(|s| !s.is_empty()).unwrap_or(&p.cwd);
             let found = Found {
+                claude_identity: None,
+                cwd: cwd.to_owned(),
+                active_subagents: Some(active_children(&infos, &uuid)),
                 id: short_id(&uuid),
-                name: session_name(&p.cwd, &uuid),
+                name: session_name(cwd, &uuid),
                 kind: Kind::Codex,
                 state,
                 why: Why::None,
                 since,
                 started: p.start,
+                session_id: uuid.clone(),
+                target: None,
+                project: p.cwd.clone(),
+                transcript: infos.iter().find(|r| !r.child && r.session == uuid).map(|r| r.path.clone()),
             };
             insert_session(&mut out, &uuid, found);
         }
@@ -399,17 +421,31 @@ fn session_name(cwd: &str, uuid: &str) -> String {
     format!("{}-{suffix}", if dir.is_empty() { "codex" } else { dir })
 }
 
-fn insert_session(out: &mut HashMap<String, Found>, uuid: &str, found: Found) {
+fn insert_session(out: &mut HashMap<String, Found>, uuid: &str, mut found: Found) {
     match out.entry(uuid.to_owned()) {
         std::collections::hash_map::Entry::Vacant(entry) => {
             entry.insert(found);
         }
         std::collections::hash_map::Entry::Occupied(mut entry) => {
             if found.since > entry.get().since {
+                if found.target.is_none() {
+                    found.target = entry.get().target.clone();
+                }
                 entry.insert(found);
+            } else if entry.get().target.is_none() {
+                entry.get_mut().target = found.target;
             }
         }
     }
+}
+
+fn active_children(infos: &[Rollout], parent: &str) -> usize {
+    infos
+        .iter()
+        .filter(|r| r.child && r.state == State::Work && r.parent.as_deref() == Some(parent))
+        .map(|r| &r.own_id)
+        .collect::<HashSet<_>>()
+        .len()
 }
 
 #[cfg(test)]
@@ -420,6 +456,49 @@ mod tests {
 
     fn args(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn cli_keeps_root_identity_when_a_modern_child_has_a_newer_event() {
+        let dir = TestDir::new();
+        let root = rollout(&dir.0, "root", None, "task_started");
+        let child = dir.0.join("rollout-child.jsonl");
+        let meta = serde_json::json!({"type":"session_meta", "payload":{
+            "id":"child", "source":{"subagent":{"thread_spawn":{"parent_thread_id":"root"}}}
+        }});
+        fs::write(&child, format!("{meta}\n{}\n", event_line("task_started", "2026-10-12T01:02:00Z"))).unwrap();
+        let mut proc = server(&[root, child]);
+        proc.mode = Mode::Tui;
+        let found = Codex::default().collect(1.0, vec![proc], None);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, "root");
+        assert_eq!(found[0].cwd, "/projects/moon-cafe");
+        assert_eq!(found[0].active_subagents, Some(1));
+    }
+
+    #[test]
+    fn counts_only_observed_working_direct_children_and_deduplicates() {
+        let dir = TestDir::new();
+        let root = rollout(&dir.0, "root", None, "task_started");
+        let child = rollout(&dir.0, "child", Some("root"), "task_started");
+        let idle = rollout(&dir.0, "idle", Some("root"), "task_complete");
+        let other = rollout(&dir.0, "other", Some("another-root"), "task_started");
+        let modern = dir.0.join("rollout-modern.jsonl");
+        let meta = serde_json::json!({"type":"session_meta", "payload":{
+            "id":"modern", "source":{"subagent":{"thread_spawn":{"parent_thread_id":"root"}}}
+        }});
+        fs::write(&modern, format!("{meta}\n{}\n", event_line("task_started", "2026-10-12T01:01:00Z"))).unwrap();
+        let mut collector = Codex::default();
+        let paths = [root.clone(), child.clone(), child.clone(), idle, other, modern];
+        let found = collector.collect(1.0, vec![server(&paths)], None);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].active_subagents, Some(2));
+        let mut file = fs::OpenOptions::new().append(true).open(&child).unwrap();
+        writeln!(file, "{}", event_line("task_complete", "2026-10-12T01:02:00Z")).unwrap();
+        let found = collector.collect(1.0, vec![server(&paths)], None);
+        assert_eq!(found[0].active_subagents, Some(1));
+        let found = collector.collect(1.0, vec![server(&[root])], None);
+        assert_eq!(found[0].active_subagents, Some(0));
     }
 
     #[test]
@@ -484,6 +563,8 @@ mod tests {
         assert_eq!(a_found.state, State::Work);
         assert_eq!(b_found.state, State::Idle); // stale child does not keep parent busy
         assert!(a_found.started > 0.0);
+        assert_eq!(a_found.transcript.as_ref(), Some(&a));
+        assert_eq!(a_found.session_id, "root-00000001");
 
         let mut file = fs::OpenOptions::new().append(true).open(&a).unwrap();
         writeln!(file, "{}", event_line("task_complete", "2026-10-12T01:02:00Z")).unwrap();
@@ -531,6 +612,7 @@ mod tests {
         let mut collector = Codex::default();
         let found = collector.collect(1.0, vec![cli, server(&[path])], None);
         assert_eq!(found.len(), 1);
+        assert!(found[0].target.is_some());
         assert_eq!(found[0].name, "moon-cafe-ot");
     }
 }

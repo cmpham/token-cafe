@@ -1,0 +1,12 @@
+[package]
+name = "cafe-ui"
+version = "0.1.0"
+edition = "2024"
+[features]
+default = ["std"]
+std = ["chrono/std"]
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+libm = "0.2"
+[build-dependencies]
+sha2 = "0.10"
