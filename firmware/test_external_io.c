@@ -14,5 +14,11 @@ int main(void){
     assert(!external_button_sample(&b,false,9010));
     assert(external_button_sample(&b,false,9040));assert(!b.stable);
     assert(!external_button_sample(&b,false,9999));
+    assert(external_approval_led(true,0));
+    assert(external_approval_led(true,499));
+    assert(!external_approval_led(true,500));
+    assert(!external_approval_led(true,999));
+    assert(external_approval_led(true,1000));
+    assert(!external_approval_led(false,1000));
     return 0;
 }

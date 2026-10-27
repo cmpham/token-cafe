@@ -523,7 +523,9 @@ impl Client {
             self.scene.review = Some(review);
         } else {
             self.scene.review = None;
-            self.approval_button_contact = None;
+            if !self.review_identity.is_empty() {
+                self.approval_button_contact = None;
+            }
             self.review_identity.clear();
             self.rendered_identity.clear();
             self.displayed_at = None;
@@ -746,8 +748,53 @@ impl Client {
                 })
             })
     }
-    /// A physical press approves only the already presented, locally opened review.
-    /// The caller supplies debounced edges. A held switch cannot approve a new request.
+    fn approval_button_target(&self, now: u64, releasing: bool) -> Target {
+        if !self.connected || !self.replica.ready || self.sleeping || self.contact.is_some() {
+            return Target::None;
+        }
+        if let Some(review) = &self.scene.review {
+            let request = self.replica.model.sessions.get(&review.request().session).and_then(|s| s.approval.as_ref());
+            if request.is_none_or(|r| matches!(r.state, 3 | 5 | 6 | 7 | 8)) {
+                return Target::Back;
+            }
+            if !self.local_review {
+                return Target::Body(review.request().session.clone());
+            }
+            if (self.armed(now) || (releasing && self.local_review && self.rendered_identity == self.review_identity))
+                && self.receipts.len() < 8
+            {
+                let target = if releasing && review.actionable && review.allow_approve && review.request().choices == 0
+                {
+                    Target::Decision(1, self.review_identity.clone())
+                } else {
+                    self.target(250, 240)
+                };
+                if matches!(target, Target::Decision(1, _)) {
+                    return target;
+                }
+            }
+            return Target::None;
+        }
+        // Prefer the visible attention request; otherwise select the next pending
+        // approve-once request. Opening a review never submits a decision.
+        let eligible = |id: &str| {
+            self.replica.model.sessions.get(id).is_some_and(|s| {
+                s.approval.as_ref().is_some_and(|r| {
+                    r.state == 1
+                        && r.desktop_only_reason.is_empty()
+                        && r.allowed_decisions.contains(&1)
+                        && !self.receipts.iter().any(|x| x.request == r.id && x.digest == r.digest)
+                })
+            })
+        };
+        self.scene
+            .attention_id()
+            .filter(|id| eligible(id))
+            .or_else(|| self.replica.model.sessions.keys().find(|id| eligible(id)).map(String::as_str))
+            .map_or(Target::None, |id| Target::ViewRequest(id.into()))
+    }
+    /// Each debounced click advances one step: open, locally enable, or approve once.
+    /// Capture the step on press so one click can never both open and approve.
     pub fn approval_button(
         &mut self,
         pressed: bool,
@@ -759,33 +806,20 @@ impl Client {
         }
         self.approval_button_down = pressed;
         if pressed {
-            let target = self.target(250, 240);
-            self.approval_button_contact =
-                if self.armed(now) && matches!(target, Target::Decision(1, _)) { Some((target, now)) } else { None };
+            let target = self.approval_button_target(now, false);
+            self.approval_button_contact = if target != Target::None { Some((target, now)) } else { None };
             self.sleeping = false;
             self.last_touch = now;
             self.last_tap = None;
         } else {
             let contact = self.approval_button_contact.take();
-            self.last_touch = now;
-            if let Some((target, down)) = contact
-                && now.saturating_sub(down) <= 800
-                && self.connected
-                && self.replica.ready
-                && self.local_review
-                && !self.sleeping
-                && self.contact.is_none()
-                && self.rendered_identity == self.review_identity
-                && matches!(&target, Target::Decision(1, id) if *id == self.review_identity)
-                && self
-                    .scene
-                    .review
-                    .as_ref()
-                    .is_some_and(|r| r.actionable && r.allow_approve && r.request().choices == 0)
-                && self.receipts.len() < 8
-            {
-                self.submit_decision(1, now, persist)?;
+            if let Some((target, down)) = contact {
+                let current = self.approval_button_target(now, true);
+                if now.saturating_sub(down) <= 800 && target == current {
+                    self.activate(target, true, false, now, persist)?;
+                }
             }
+            self.last_touch = now;
         }
         Ok(())
     }
@@ -883,8 +917,18 @@ impl Client {
             *t == c.target && now.saturating_sub(*time) <= 450 && (x - px).abs() <= 20 && (y - py).abs() <= 20
         });
         self.last_tap = if double { None } else { Some((c.target.clone(), now, x, y)) };
-        let view_request = matches!(c.target, Target::ViewRequest(_));
-        match c.target {
+        self.activate(c.target, c.armed, double, now, persist)
+    }
+    fn activate(
+        &mut self,
+        target: Target,
+        armed: bool,
+        double: bool,
+        now: u64,
+        persist: &mut impl FnMut(&[Receipt]) -> bool,
+    ) -> Result<()> {
+        let view_request = matches!(target, Target::ViewRequest(_));
+        match target {
             Target::Patron(id) => {
                 self.scene.acknowledge_attention(&id);
                 if double {
@@ -1014,7 +1058,7 @@ impl Client {
                 }
             }
             Target::Decision(decision, identity) => {
-                if c.armed && identity == self.review_identity && self.receipts.len() < 8 {
+                if armed && identity == self.review_identity && self.receipts.len() < 8 {
                     self.submit_decision(decision, now, persist)?;
                 }
             }

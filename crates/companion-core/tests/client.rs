@@ -612,9 +612,18 @@ fn physical_button_requires_review_and_fresh_press_then_persists_once() {
     let (mut c, _, _) = setup();
     assert!(c.approval_waiting());
     c.approval_button(true, 10001, &mut |_| true).unwrap();
-    c.approval_button(false, 10002, &mut |_| true).unwrap();
-    assert!(actions(&mut c).is_empty());
-    arm_external_button(&mut c);
+    c.tick(10020).unwrap(); // Normal loop sync must not discard a navigation click.
+    c.approval_button(false, 10050, &mut |_| panic!("opening cannot approve")).unwrap();
+    let opened = actions(&mut c);
+    assert_eq!(opened.len(), 1);
+    assert_eq!(opened[0].kind, 2);
+    assert_eq!(opened[0].request_id, "qa-1");
+    assert_eq!(c.view().page, 2);
+    let mut frame = vec![0; 480 * 272];
+    c.render(&mut frame, 10350);
+    c.presented(10350);
+    c.tick(11000).unwrap();
+    assert!(c.armed(11000));
     c.approval_button(false, 11000, &mut |_| true).unwrap();
     assert!(actions(&mut c).is_empty(), "release alone cannot approve");
     c.approval_button(true, 11010, &mut |_| true).unwrap();
@@ -718,4 +727,109 @@ fn physical_button_does_not_bypass_lcd_presentation_or_desktop_only_review() {
         c.approval_button(false, 11060, &mut |_| panic!("not eligible")).unwrap();
         assert!(actions(&mut c).is_empty());
     }
+}
+
+#[test]
+fn physical_button_cannot_skip_loading_or_switch_steps_while_held() {
+    let (mut c, _, _) = setup();
+    c.approval_button(true, 10010, &mut |_| true).unwrap();
+    c.approval_button(false, 10050, &mut |_| true).unwrap();
+    actions(&mut c);
+    c.approval_button(true, 10060, &mut |_| true).unwrap();
+    let mut frame = vec![0; 480 * 272];
+    c.render(&mut frame, 10070);
+    c.presented(10070);
+    c.tick(10600).unwrap();
+    c.approval_button(false, 10650, &mut |_| panic!("loading click cannot approve")).unwrap();
+    assert!(actions(&mut c).is_empty());
+    assert!(c.receipts.is_empty());
+}
+
+#[test]
+fn physical_button_leaves_completed_review_without_approving_again() {
+    let (mut c, mut h, _) = setup();
+    arm_external_button(&mut c);
+    let old = h.model.clone();
+    h.model.sessions.get_mut("claude:test").unwrap().approval.as_mut().unwrap().state = 6;
+    h.model.revision += 1;
+    for e in sync::update(&old, &h.model, &[1; 16], &[2; 16]).unwrap() {
+        let raw = codec::encode(&e).unwrap();
+        c.receive(e, &raw, 11010).unwrap();
+    }
+    c.approval_button(true, 11100, &mut |_| true).unwrap();
+    c.tick(11120).unwrap();
+    c.approval_button(false, 11150, &mut |_| panic!("back cannot approve")).unwrap();
+    let aa = actions(&mut c);
+    assert_eq!(aa.len(), 1);
+    assert_eq!(aa[0].kind, 3);
+    assert_ne!(c.view().page, 2);
+}
+
+#[test]
+fn physical_button_acknowledges_desktop_open_before_separate_approval() {
+    let (mut c, mut h, _) = setup();
+    let old = h.model.clone();
+    let r = h.model.sessions["claude:test"].approval.as_ref().unwrap();
+    h.model.view = View {
+        selected_session_id: "claude:test".into(),
+        page: 2,
+        review_kind: 1,
+        review_request_id: r.id.clone(),
+        review_blob: r.body_blob.clone(),
+        ..Default::default()
+    };
+    h.model.revision += 1;
+    for e in sync::update(&old, &h.model, &[1; 16], &[2; 16]).unwrap() {
+        let raw = codec::encode(&e).unwrap();
+        c.receive(e, &raw, 10100).unwrap();
+    }
+    let mut f = vec![0; 480 * 272];
+    c.render(&mut f, 10200);
+    c.presented(10200);
+    c.tick(11000).unwrap();
+    assert!(!c.armed(11000));
+    tap(&mut c, 250, 240, 11100);
+    assert!(actions(&mut c).is_empty());
+    c.approval_button(true, 12000, &mut |_| panic!("ack is not approval")).unwrap();
+    c.approval_button(false, 12030, &mut |_| panic!("ack is not approval")).unwrap();
+    c.render(&mut f, 12100);
+    c.presented(12100);
+    c.tick(13000).unwrap();
+    assert!(c.armed(13000));
+    c.approval_button(true, 13010, &mut |_| true).unwrap();
+    c.tick(13030).unwrap();
+    c.approval_button(false, 13060, &mut |_| true).unwrap();
+    let aa = actions(&mut c);
+    assert_eq!(aa.len(), 1);
+    assert_eq!((aa[0].kind, aa[0].decision), (7, 1));
+}
+
+#[test]
+fn physical_button_open_is_cancelled_when_waiting_request_changes() {
+    let (mut c, mut h, _) = setup();
+    c.approval_button(true, 10010, &mut |_| true).unwrap();
+    let old = h.model.clone();
+    let r = h.model.sessions.get_mut("claude:test").unwrap().approval.as_mut().unwrap();
+    r.id = "replacement".into();
+    let b = r.body_blob.as_ref().unwrap();
+    r.digest = companion_core::crypto::request_digest(
+        &r.id,
+        "claude:test",
+        1,
+        &r.title,
+        &r.tool_name,
+        &b.sha256.clone().try_into().unwrap(),
+        b.byte_length,
+        &[1, 2],
+    )
+    .unwrap()
+    .to_vec();
+    h.model.revision += 1;
+    for e in sync::update(&old, &h.model, &[1; 16], &[2; 16]).unwrap() {
+        let raw = codec::encode(&e).unwrap();
+        c.receive(e, &raw, 10030).unwrap();
+    }
+    c.approval_button(false, 10060, &mut |_| panic!("replaced request")).unwrap();
+    assert!(actions(&mut c).is_empty());
+    assert_ne!(c.view().page, 2);
 }

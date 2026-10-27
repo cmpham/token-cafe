@@ -147,7 +147,7 @@ void app_main(void){
    ESP_LOGI("EXT_IO","BUTTON %s",button.stable?"PRESSED":"RELEASED");
    healthy=cafe_engine_approval_button(engine,button.stable,now)&&healthy;
   }
-  ESP_ERROR_CHECK(gpio_set_level(APPROVAL_LED,healthy&&cafe_engine_approval_waiting(engine)));
+  ESP_ERROR_CHECK(gpio_set_level(APPROVAL_LED,external_approval_led(healthy&&cafe_engine_approval_waiting(engine),now)));
   if(!healthy&&conn!=BLE_HS_CONN_HANDLE_NONE)ble_gap_terminate(conn,BLE_ERR_REM_USER_CONN_TERM);
   if(conn==BLE_HS_CONN_HANDLE_NONE){pending=0;}else if(subscribed){for(int sent=0;sent<8;sent++){if(!pending)pending=cafe_engine_next(engine,packet,sizeof(packet));if(!pending)break;struct os_mbuf *om=ble_hs_mbuf_from_flat(packet,pending);if(!om)break;int rc=ble_gatts_notify_custom(conn,tx_handle,om);if(!rc){pending=0;continue;}if(rc!=BLE_HS_ENOMEM&&rc!=BLE_HS_EBUSY){pending=0;ble_gap_terminate(conn,BLE_ERR_REM_USER_CONN_TERM);}break;}}
   xSemaphoreGive(lock);vTaskDelay(1);

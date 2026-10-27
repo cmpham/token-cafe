@@ -8,21 +8,28 @@ Check switch terminal pairs and disconnect USB/battery before changing wiring.
 
 ## Production behaviour
 
-The LED is on while an approve-once-capable pending request exists. Requests
-already submitted by this board, desktop-only requests, and disconnected or
-unsynchronized state do not light it. A lit LED is an attention signal; it does
-not imply the currently selected screen can approve.
+The LED blinks at 1 Hz (500 ms on, 500 ms off) while an approve-once-capable
+pending request exists. Submitted, desktop-only, disconnected and unsynchronized
+requests do not light it.
 
-Open the intended request on the board's touchscreen and wait until its approval
-controls appear. A short press and release of the external button approves that
-exact review once. The button never selects an arbitrary waiting request or a
-choice answer. Deny and multiple-choice answers continue to use the screen.
-Presses during loading, before the displayed frame is armed, during another
-screen gesture, or while asleep cannot approve. Waking requires another fresh
-press. Long holds over 800 ms are ignored. Input uses 30 ms debounce, requires a
-stable release after boot, and never repeats while held. Request replacement,
-resolution, resynchronization, or disconnect invalidates the captured press.
-The existing durable receipt and authenticated decision transport are reused.
+The happy path requires no touchscreen:
+
+1. Briefly press and release to open the waiting approval. Prefer the request
+   shown in the attention area; otherwise open the next pending approve-once request.
+2. Read the review and wait for approval controls (at least 500 ms after presentation).
+3. Briefly press and release again to approve that exact request once.
+4. After completion, another click returns to the cafe; the next click opens the
+   next waiting request. A review opened from the desktop requires one click to
+   enable its controls before a separate approval click.
+
+Deny and multiple-choice answers continue to use the screen. Each click captures
+one step on press and performs it on release; holding cannot skip steps. Presses
+while asleep only wake the display. Loading or unarmed presses cannot approve,
+even if controls become ready before release. Long holds over 800 ms are ignored.
+Input uses 30 ms debounce and requires a stable release after boot. Request
+replacement, resolution, resynchronization, disconnect, or simultaneous touch
+invalidates an approval press. Durable receipts and authenticated transport remain
+in use; unavailable text or delivery errors require desktop attention.
 
 ## Wiring diagnostic (no Bluetooth or approval dispatch)
 
@@ -106,3 +113,15 @@ Pokémon desktop companion reconnected and its window reported
 `BLE: TokenCafe-6336 synced v2`; its display settings and other desktop windows
 were preserved. A real provider approval using the physical button has not yet
 been exercised; no real pending request was dispatched by automated testing.
+
+## Button-only flow update — 2026-10-27
+
+The LED now blinks at 1 Hz. Short clicks open the waiting review, acknowledge a
+desktop-opened review, approve once after presentation, and leave a completed
+review. Each click performs only its captured step.
+
+Validation: 170 workspace tests passed, Clippy passed with warnings denied,
+portable LED/debounce tests passed under ASan/UBSan, and the complete QEMU gate
+passed. Production firmware was flashed to `/dev/cu.usbmodem1101` with hash
+verification and the existing companion reconnected as `synced v2`. This verifies
+installation and synchronization; the updated physical flow awaits user testing.

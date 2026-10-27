@@ -13,3 +13,8 @@ static inline bool external_button_sample(ExternalButton *b,bool pressed,uint64_
     if(!b->ready){if(!b->stable)b->ready=true;return false;}
     return edge;
 }
+
+// Waiting indicator: 500 ms on, 500 ms off; immediately off when no request waits.
+static inline bool external_approval_led(bool waiting, uint64_t now) {
+    return waiting && (now % 1000 < 500);
+}
