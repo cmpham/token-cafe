@@ -6,6 +6,28 @@ import build_patrons as build
 
 
 class PatronAssets(unittest.TestCase):
+    def test_scale2x_refines_diagonals_without_blur_or_palette_changes(self):
+        dark, light = (0, 0, 0, 255), (255, 255, 255, 255)
+        image = Image.new('RGBA', (3, 3), dark)
+        image.putpixel((1, 0), light)
+        image.putpixel((0, 1), light)
+        scaled = build.scale2x(image)
+        self.assertEqual(scaled.size, (6, 6))
+        self.assertEqual(scaled.getpixel((2, 2)), light)
+        self.assertEqual(scaled.getpixel((3, 3)), dark)
+        self.assertEqual(set(scaled.get_flattened_data()), {dark, light})
+
+    def test_pokemon_hd_cells_gain_detail_without_changing_anchors(self):
+        for name in build.NAMES[8:15]:
+            source = build.pmd(name)
+            before, anchors = build.normalize(source, 2)
+            after, hd_anchors = build.normalize(source, 2, pixel_art=True)
+            self.assertEqual(anchors, hd_anchors, name)
+            for a, b in zip(before, after):
+                self.assertEqual(a.size, b.size)
+                self.assertNotEqual(a.tobytes(), b.tobytes(), name)
+                self.assertEqual(build.bounds(a), build.bounds(b), name)
+
     def test_room_scale_and_two_times_detail(self):
         for name in build.NAMES:
             source = build.authored(name) if name in build.NAMES[:8] or name == 'dragonite' else build.pmd(name)

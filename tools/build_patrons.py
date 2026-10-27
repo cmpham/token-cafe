@@ -82,7 +82,33 @@ def pmd(name, walk_only=False):
     return result
 
 
-def normalize(images, resolution=1):
+def scale2x(image):
+    """Edge-aware 2x pixel-art sampling; preserve palette and exact pose geometry.
+
+    Each output quadrant uses the two adjacent neighbors only when their
+    shared contour disagrees with the opposite edge. No blur or new colors.
+    Transparent RGB is canonicalized before neighbor comparisons.
+    """
+    src = image.convert('RGBA')
+    pixels = [p if p[3] >= 128 else (0, 0, 0, 0) for p in src.get_flattened_data()]
+    w, h = src.size
+    out = Image.new('RGBA', (w * 2, h * 2))
+    dst = out.load()
+    def at(x, y):
+        return pixels[min(h - 1, max(0, y)) * w + min(w - 1, max(0, x))]
+    for y in range(h):
+        for x in range(w):
+            b, d, e, f, h_ = at(x, y - 1), at(x - 1, y), at(x, y), at(x + 1, y), at(x, y + 1)
+            quad = (e, e, e, e)
+            if b != h_ and d != f:
+                quad = (d if d == b else e, f if b == f else e,
+                        d if d == h_ else e, f if h_ == f else e)
+            for i, color in enumerate(quad):
+                dst[x * 2 + i % 2, y * 2 + i // 2] = color
+    return out
+
+
+def normalize(images, resolution=1, pixel_art=False):
     boxes = [bounds(im) for im in images]
     # One scale for the entire character, never inflate sleeping frames.
     scale = resolution * min(42 / max(b[3] - b[1] for b in boxes), 45 / max(b[2] - b[0] for b in boxes))
@@ -95,6 +121,8 @@ def normalize(images, resolution=1):
         center = (min(b[0] for b in group) + max(b[2] for b in group)) / 2
         cropped = im.crop(box)
         size = (max(1, round(cropped.width * scale)), max(1, round(cropped.height * scale)))
+        if pixel_art:
+            cropped = scale2x(cropped)
         cropped = cropped.resize(size, Image.Resampling.NEAREST)
         cell = Image.new('RGBA', (CELL * resolution, CELL * resolution))
         origin = (round(CELL / 2 * resolution + (box[0] - center) * scale), CELL * resolution - size[1])
@@ -113,7 +141,7 @@ def main():
     for row, name in enumerate(NAMES):
         source = authored(name) if row < 8 or name == 'dragonite' else pmd(name)
         cells, transforms = normalize(source)
-        hd_frames.extend(normalize(source, 2)[0])
+        hd_frames.extend(normalize(source, 2, pixel_art=8 <= row < 15)[0])
         if 8 <= row < 15:
             root = SOURCE / 'pmd' / name
             anim = next(a for a in ET.parse(root / 'AnimData.xml').findall('.//Anim') if a.findtext('Name') == 'Eat')
