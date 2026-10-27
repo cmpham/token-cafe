@@ -84,18 +84,31 @@ pub struct Session {
     pub active_subagents: Option<usize>,
 }
 
-/// Only sessions associated with a desktop app receive a navigation target.
+/// Navigation to an existing desktop chat or an identified terminal pane.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionTarget {
     Claude(String),
     Codex(String),
+    ITerm(String),
 }
 
 impl SessionTarget {
     pub fn url(&self) -> Option<String> {
+        if let Self::ITerm(id) = self {
+            // The reveal handler only selects an existing session. Do not allow
+            // query parameters, other handlers, or arbitrary URLs from the environment.
+            if id.is_empty()
+                || id.len() > 128
+                || !id.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b':'))
+            {
+                return None;
+            }
+            return Some(format!("iterm2:reveal?sessionid={id}"));
+        }
         let (id, prefix) = match self {
             Self::Claude(id) => (id.strip_prefix("local_")?, "claude://code/continue?session=local_"),
             Self::Codex(id) => (id.as_str(), "codex://threads/"),
+            Self::ITerm(_) => unreachable!(),
         };
         // Session IDs are data, never arbitrary URLs or shell arguments.
         if id.is_empty() || id.len() > 64 || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-') {
@@ -116,6 +129,13 @@ pub struct SessionDetail {
 /// This month's totals for the tab on the wall, Claude and Codex summed.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Usage {
+    pub tokens: f64,
+    pub usd: f64,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct UsageRow {
+    pub label: String,
     pub tokens: f64,
     pub usd: f64,
 }
@@ -251,6 +271,11 @@ pub struct Scene {
     first: bool,
     usage: Option<Usage>,
     usage_text: Option<(String, String)>,
+    usage_rows: Vec<UsageRow>,
+    usage_account_rows: Vec<UsageRow>,
+    usage_accounts: bool,
+    usage_page: usize,
+    usage_open: bool,
     sessions: Vec<Session>,
     details: Vec<SessionDetail>,
     pages: HashMap<String, Vec<String>>,
@@ -484,6 +509,11 @@ impl Scene {
             first: true,
             usage: None,
             usage_text: None,
+            usage_rows: Vec::new(),
+            usage_account_rows: Vec::new(),
+            usage_accounts: false,
+            usage_page: 0,
+            usage_open: false,
             sessions: Vec::new(),
             details: Vec::new(),
             pages: HashMap::new(),
@@ -703,6 +733,35 @@ impl Scene {
     }
     pub fn set_usage_text(&mut self, tokens: String, cost: String) {
         self.usage_text = Some((tokens, cost));
+    }
+    pub fn set_usage_rows(&mut self, rows: Vec<UsageRow>) {
+        self.usage_rows = rows;
+    }
+    pub fn set_usage_accounts(&mut self, rows: Vec<UsageRow>) {
+        self.usage_account_rows = rows;
+        self.usage_page = self.usage_page.min(self.usage_page_count() - 1);
+    }
+    pub fn toggle_usage_accounts(&mut self) {
+        if self.usage_open {
+            self.usage_accounts = !self.usage_accounts;
+            self.usage_page = 0;
+        }
+    }
+    fn usage_page_count(&self) -> usize {
+        let rows = if self.usage_accounts { &self.usage_account_rows } else { &self.usage_rows };
+        rows.len().div_ceil(4).max(1)
+    }
+    fn page_usage(&mut self, forward: bool) {
+        let pages = self.usage_page_count();
+        self.usage_page = if forward { (self.usage_page + 1) % pages } else { (self.usage_page + pages - 1) % pages };
+    }
+    pub fn toggle_usage(&mut self) {
+        if !self.usage_rows.is_empty() && self.review.is_none() {
+            self.usage_open = !self.usage_open;
+        }
+    }
+    pub fn usage_is_open(&self) -> bool {
+        self.usage_open
     }
     pub fn selected_id(&self) -> Option<&str> {
         self.selected.as_deref()
@@ -940,6 +999,7 @@ impl Scene {
     }
 
     pub fn clear_selection(&mut self) {
+        self.usage_open = false;
         self.footer_origin = None;
         self.review = None;
         self.selected = None;
@@ -951,7 +1011,7 @@ impl Scene {
     }
 
     pub fn select_patron(&mut self, forward: bool) {
-        if self.review.is_some() {
+        if self.review.is_some() || self.usage_open {
             return;
         }
         if self.sessions.is_empty() {
@@ -972,6 +1032,10 @@ impl Scene {
 
     /// Arrow navigation opens focus first and stops at document boundaries.
     pub fn page_task_key(&mut self, forward: bool) {
+        if self.usage_open {
+            self.page_usage(forward);
+            return;
+        }
         if let Some(review) = &mut self.review {
             review.page(forward);
             return;
@@ -998,7 +1062,7 @@ impl Scene {
     }
 
     pub fn scrollbar_hit(&self, x: i32, y: i32) -> bool {
-        self.attention_id().is_none() && self.selected.is_some() && x >= 436 && y >= a::WIN_Y
+        !self.usage_open && self.attention_id().is_none() && self.selected.is_some() && x >= 436 && y >= a::WIN_Y
     }
 
     pub fn scroll_task_to(&mut self, y: i32) {
@@ -1012,6 +1076,9 @@ impl Scene {
     }
 
     pub fn patron_at(&self, x: i32, y: i32) -> Option<&str> {
+        if self.usage_open {
+            return None;
+        }
         if self.external_seats.is_some() {
             return self.visible_patron_at(x, y);
         }
@@ -1039,6 +1106,20 @@ impl Scene {
         self.session_target(&id).and_then(SessionTarget::url)
     }
 
+    /// A single click on an identified CLI patron reveals its existing pane.
+    /// Desktop chats retain their separate selection/double-click behavior.
+    pub fn activate_terminal_patron(&mut self, x: i32, y: i32) -> Option<String> {
+        let id = self.patron_at(x, y)?.to_owned();
+        let target = self.session_target(&id)?;
+        if !matches!(target, SessionTarget::ITerm(_)) {
+            return None;
+        }
+        let url = target.url()?;
+        self.acknowledge_attention(&id);
+        self.focus_patron(id);
+        Some(url)
+    }
+
     pub fn focus_patron(&mut self, id: String) {
         self.footer_origin = None;
         if self.selected.as_ref() != Some(&id) {
@@ -1051,6 +1132,21 @@ impl Scene {
     pub fn click(&mut self, x: i32, y: i32) {
         if self.review.is_some() {
             self.review_input(false, x, y, false);
+            return;
+        }
+        if self.usage_open {
+            if x >= 432 && y < 44 {
+                self.usage_open = false;
+            } else if (42..60).contains(&y) {
+                self.usage_accounts = x >= 164;
+                self.usage_page = 0;
+            } else if (220..240).contains(&y) {
+                self.page_usage(x >= 360);
+            }
+            return;
+        }
+        if (TAB_X..TAB_X + TAB_W).contains(&x) && (TAB_Y..TAB_Y + 28).contains(&y) {
+            self.toggle_usage();
             return;
         }
         if y >= a::WIN_Y {
@@ -1284,6 +1380,46 @@ impl Scene {
         });
         g.text(&tok, TAB_X + TAB_W - 3 - text_width(&tok, 1), TAB_Y + 5, c::CHALK_HI, 1, None);
         g.text(&usd, TAB_X + TAB_W - 3 - text_width(&usd, 1), TAB_Y + 14, c::CHALK_GOLD, 1, None);
+        if !self.usage_rows.is_empty() {
+            g.text("+", TAB_X - 8, TAB_Y + 8, c::CHALK_HI, 1, None);
+        }
+    }
+
+    fn draw_usage(&self, fb: &mut [u32]) {
+        fb.fill(0x101423);
+        let mut g = Gfx::new(fb);
+        g.rect(8, 8, 464, 256, 0x303b5c);
+        g.rect(10, 10, 460, 252, 0x171e31);
+        g.text("THIS MONTH / USAGE", 24, 24, c::GOLD, 2, None);
+        g.text("X", 444, 24, c::TEXT, 2, None);
+        g.text("APP TOTALS", 24, 47, if self.usage_accounts { c::TEXT_DIM } else { c::GOLD }, 1, None);
+        g.text("RECORDED ORG", 164, 47, if self.usage_accounts { c::GOLD } else { c::TEXT_DIM }, 1, None);
+        g.text("APP / ACCOUNT GROUP", 24, 65, c::TEXT_DIM, 1, None);
+        g.text("TOKENS", 304, 65, c::TEXT_DIM, 1, None);
+        g.text("API EST.", 402, 65, c::TEXT_DIM, 1, None);
+        g.rect(24, 75, 432, 1, 0x52617f);
+        let rows = if self.usage_accounts { &self.usage_account_rows } else { &self.usage_rows };
+        for (index, row) in rows.iter().skip(self.usage_page * 4).take(4).enumerate() {
+            let y = 87 + index as i32 * 23;
+            g.text(&row.label, 24, y, c::TEXT, 1, None);
+            let tokens = fmt_tokens(row.tokens);
+            let usd = fmt_usd(row.usd);
+            g.text(&tokens, 340 - text_width(&tokens, 1), y, c::CHALK_HI, 1, None);
+            g.text(&usd, 450 - text_width(&usd, 1), y, c::CHALK_GOLD, 1, None);
+        }
+        g.rect(24, 174, 432, 1, 0x52617f);
+        g.text("ALL PROVIDERS", 24, 188, c::GOLD, 1, None);
+        if let Some(usage) = self.usage {
+            let tokens = fmt_tokens(usage.tokens);
+            let usd = fmt_usd(usage.usd);
+            g.text(&tokens, 340 - text_width(&tokens, 1), 188, c::GOLD, 1, None);
+            g.text(&usd, 450 - text_width(&usd, 1), 188, c::GOLD, 1, None);
+        }
+        g.text("SAVED APP / RECORDED SESSION OWNER; NOT A BILL", 24, 212, c::TEXT_DIM, 1, None);
+        g.text("A: SWITCH VIEW", 24, 230, c::TEXT, 1, None);
+        let page = format!("< {}/{} >", self.usage_page + 1, self.usage_page_count());
+        g.text(&page, 450 - text_width(&page, 1), 230, c::TEXT, 1, None);
+        g.text("U / ESC TO CLOSE", 24, 246, c::TEXT, 1, None);
     }
 
     fn draw_clock(&self, g: &mut Gfx, cx: i32, cy: i32, now: NaiveTime) {
@@ -1546,7 +1682,8 @@ impl Scene {
             let session = self.sessions.iter().find(|s| s.id == id);
             let request = self.requests.iter().position(|r| r.session == id);
             let name = session.map_or(id, |s| s.name.as_str());
-            let permission = request.is_some_and(|i| self.requests[i].choices == 0) || session.is_some_and(|s| s.why == Why::Perm);
+            let permission =
+                request.is_some_and(|i| self.requests[i].choices == 0) || session.is_some_and(|s| s.why == Why::Perm);
             let status = if permission { "! APPROVAL NEEDED" } else { "? ANSWER NEEDED" };
             let text = request
                 .map(|i| self.requests[i].text.as_str())
@@ -1570,7 +1707,14 @@ impl Scene {
             }
             let viewed = self.attention.get(id).is_some_and(Option::is_none);
             crate::review::draw_button(g, 50, y + 38, 140, 20, "VIEW REQUEST >");
-            g.text(if viewed { "SEEN - STILL PENDING" } else { "TAP MESSAGE TO ACKNOWLEDGE" }, 200, y + 45, c::GOLD, 1, None);
+            g.text(
+                if viewed { "SEEN - STILL PENDING" } else { "TAP MESSAGE TO ACKNOWLEDGE" },
+                200,
+                y + 45,
+                c::GOLD,
+                1,
+                None,
+            );
             if self.next_attention_id().is_some() {
                 g.rect(435, y + 4, 1, h - 8, c::WIN_BORDER_LO);
                 let count = format!(
@@ -1672,6 +1816,10 @@ impl Scene {
 
     /// Draw the café as of the last tick, with the clocks at local time `now`.
     pub fn render(&self, fb: &mut [u32], now: NaiveTime) {
+        if self.usage_open && self.review.is_none() {
+            self.draw_usage(fb);
+            return;
+        }
         // Review is opaque. Drawing the hidden room first wastes a full scene
         // render on the board and delays the next touch sample.
         if let Some(review) = &self.review {
@@ -1723,6 +1871,83 @@ impl Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_cli_activation_selects_exact_terminal_and_keeps_other_navigation_unchanged() {
+        let mut scene = Scene::new();
+        scene.set_sessions(&[
+            session("one", State::Wait),
+            session("two", State::Work),
+            session("desktop", State::Idle),
+            session("unmapped", State::Idle),
+        ]);
+        scene.set_details(vec![
+            SessionDetail {
+                id: "one".into(),
+                task: "same project".into(),
+                target: Some(SessionTarget::ITerm("pane-one".into())),
+            },
+            SessionDetail {
+                id: "two".into(),
+                task: "same project".into(),
+                target: Some(SessionTarget::ITerm("pane-two".into())),
+            },
+            SessionDetail {
+                id: "desktop".into(),
+                task: "task".into(),
+                target: Some(SessionTarget::Claude("local_desktop".into())),
+            },
+            SessionDetail { id: "unmapped".into(), task: "task".into(), target: None },
+        ]);
+        let point = |s: &Scene, id: &str| {
+            let seat = s.agents.iter().find(|a| a.id == id).unwrap().seat;
+            ((seat % 4) as i32 * 120 + 60, (seat / 4) as i32 * 82 + 80)
+        };
+        for (id, pane) in [("one", "pane-one"), ("two", "pane-two")] {
+            let (x, y) = point(&scene, id);
+            assert_eq!(
+                scene.activate_terminal_patron(x, y).as_deref(),
+                Some(format!("iterm2:reveal?sessionid={pane}").as_str())
+            );
+            assert_eq!(scene.selected_id(), Some(id));
+            assert!(scene.activate_terminal_patron(x, y).is_some());
+            assert_eq!(scene.selected_id(), Some(id));
+        }
+        let (x, y) = point(&scene, "desktop");
+        assert!(scene.activate_terminal_patron(x, y).is_none());
+        assert_eq!(scene.activate_patron(x, y).as_deref(), Some("claude://code/continue?session=local_desktop"));
+        let (x, y) = point(&scene, "unmapped");
+        assert!(scene.activate_terminal_patron(x, y).is_none());
+        assert!(scene.activate_patron(x, y).is_none());
+        assert!(scene.activate_terminal_patron(30, 250).is_none());
+    }
+
+    #[test]
+    fn usage_window_pages_all_accounts_and_blocks_underlying_patron_actions() {
+        let mut scene = Scene::new();
+        scene.set_sessions(&[session("live", State::Wait)]);
+        scene.set_usage(Usage { tokens: 150., usd: 0.1 });
+        let rows: Vec<_> =
+            (0..6).map(|n| UsageRow { label: format!("CLI ORG {n}"), tokens: n as f64 * 10., usd: 0. }).collect();
+        scene.set_usage_rows(rows[..4].to_vec());
+        scene.set_usage_accounts(rows.clone());
+        scene.click(TAB_X + 5, TAB_Y + 5);
+        assert!(scene.usage_is_open());
+        assert!(scene.patron_at(40, 70).is_none());
+        scene.click(40, 70);
+        assert!(scene.selected_id().is_none());
+        scene.toggle_usage_accounts();
+        scene.page_task_key(true);
+        assert_eq!(scene.usage_page, 1);
+        let mut frame = vec![0; a::W * a::H];
+        scene.render(&mut frame, NaiveTime::from_hms_opt(12, 0, 0).unwrap());
+        assert!(frame.contains(&c::CHALK_HI));
+        scene.set_usage_accounts(rows[..1].to_vec());
+        assert_eq!(scene.usage_page, 0);
+        scene.clear_selection();
+        assert!(!scene.usage_is_open());
+        assert_eq!(scene.usage_account_rows.len(), 1);
+    }
     #[test]
     fn review_and_footer_keep_the_authoritative_patron_portrait() {
         let now = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
@@ -1800,18 +2025,18 @@ mod tests {
     fn attention_pulses_once_and_acknowledgement_survives_refresh() {
         let mut scene = Scene::new();
         let waiting = session("a", State::Wait);
-        scene.set_sessions(&[waiting.clone()]);
+        scene.set_sessions(core::slice::from_ref(&waiting));
         assert!(scene.attention_bright());
         scene.tick(600);
         assert!(!scene.attention_bright());
-        scene.set_sessions(&[waiting.clone()]);
+        scene.set_sessions(core::slice::from_ref(&waiting));
         assert!(!scene.attention_bright(), "refresh cannot restart a pulse");
         scene.tick(600);
         assert!(scene.attention_bright());
         scene.click(100, a::WIN_Y + 25);
         assert!(!scene.attention_bright());
         assert!(scene.review.is_none());
-        scene.set_sessions(&[waiting.clone()]);
+        scene.set_sessions(core::slice::from_ref(&waiting));
         assert_eq!(scene.attention.get("a"), Some(&None));
         scene.set_sessions(&[session("a", State::Work)]);
         assert!(scene.attention.is_empty());

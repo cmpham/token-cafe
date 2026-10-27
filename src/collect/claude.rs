@@ -10,8 +10,8 @@ use std::time::{Duration, Instant, SystemTime};
 use serde_json::Value;
 
 use super::{Found, basename, process, truthy};
+use crate::claude_config;
 use crate::scene::{Kind, State, Why};
-use crate::usage::claude_dir;
 
 fn millis(d: &Value, keys: &[&str]) -> Option<f64> {
     keys.iter().find_map(|k| d.get(*k).filter(|v| truthy(v)).and_then(Value::as_f64))
@@ -20,6 +20,8 @@ fn millis(d: &Value, keys: &[&str]) -> Option<f64> {
 #[derive(Default)]
 pub struct Claude {
     desktop: DesktopMetadata,
+    roots: Vec<PathBuf>,
+    refreshed: Option<Instant>,
 }
 
 impl Claude {
@@ -29,8 +31,75 @@ impl Claude {
         } else {
             HashMap::new()
         };
-        sessions(now, &desktop)
+        if self.refreshed.is_none_or(|t| t.elapsed() >= Duration::from_secs(5)) {
+            self.roots = claude_config::roots();
+            self.refreshed = Some(Instant::now());
+        }
+        let mut all = Vec::new();
+        for root in &self.roots {
+            let current = claude_config::current_account(root);
+            let mut found = sessions_at(now, &root.join("sessions"), &desktop, process::matches_session);
+            for f in &mut found {
+                let identity = f.claude_identity.as_mut().unwrap();
+                let start = process::start_epoch(identity.pid);
+                let env = process::environment(identity.pid, claude_config::IDENTITY_KEYS);
+                let get = |key: &str| env.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+                // Recheck after reading the environment in case the PID exited/reused.
+                if start <= 0.0 || process::start_epoch(identity.pid) != start {
+                    continue;
+                }
+                if identity.surface == "cli" {
+                    f.target = terminal_target(&env);
+                }
+                if let Some(account) = get("CLAUDE_CODE_ACCOUNT_UUID").filter(|s| !s.is_empty()) {
+                    identity.account = Some(serde_json::json!({
+                        "account_id": account,
+                        "organization_id": get("CLAUDE_CODE_ORGANIZATION_UUID"),
+                        "source": "process_environment",
+                    }));
+                } else if identity.account.is_none() && identity.surface == "cli" {
+                    identity.account = current.clone();
+                }
+            }
+            all.extend(found);
+        }
+        deduplicate(all)
     }
+}
+
+fn terminal_target(env: &[(String, String)]) -> Option<crate::scene::SessionTarget> {
+    let get = |key: &str| env.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+    let id = get("ITERM_SESSION_ID")
+        .or_else(|| (get("TERM_PROGRAM") == Some("iTerm.app")).then(|| get("TERM_SESSION_ID")).flatten())?;
+    let target = crate::scene::SessionTarget::ITerm(id.to_owned());
+    target.url()?;
+    Some(target)
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct Identity {
+    pub config_dir: PathBuf,
+    pub surface: &'static str,
+    pub account: Option<Value>,
+    pid: u32,
+}
+
+impl Identity {
+    pub fn json(&self) -> Value {
+        serde_json::json!({"config_dir": self.config_dir, "surface": self.surface,
+            "account": self.account, "pid": self.pid})
+    }
+}
+
+fn deduplicate(found: Vec<Found>) -> Vec<Found> {
+    let mut sessions: HashMap<String, Found> = HashMap::new();
+    for f in found {
+        let key = if f.session_id.is_empty() { f.id.clone() } else { f.session_id.clone() };
+        if sessions.get(&key).is_none_or(|old| old.since < f.since) {
+            sessions.insert(key, f);
+        }
+    }
+    sessions.into_values().collect()
 }
 
 #[derive(Clone)]
@@ -39,6 +108,7 @@ struct DesktopSession {
     id: String,
     title: String,
     archived: bool,
+    account: Option<Value>,
 }
 
 fn desktop_session(raw: &[u8]) -> Option<DesktopSession> {
@@ -52,6 +122,7 @@ fn desktop_session(raw: &[u8]) -> Option<DesktopSession> {
         id,
         title: d.get("title").and_then(Value::as_str).unwrap_or("").to_owned(),
         archived: d.get("isArchived").and_then(Value::as_bool).unwrap_or(false),
+        account: None,
     })
 }
 
@@ -73,14 +144,38 @@ impl DesktopMetadata {
                 let len = meta.len();
                 let entry = match self.files.remove(&path) {
                     Some(entry) if entry.0 == modified && entry.1 == len => entry,
-                    _ => (modified, len, fs::read(&path).ok().and_then(|raw| desktop_session(&raw))),
+                    _ => (
+                        modified,
+                        len,
+                        fs::read(&path).ok().and_then(|raw| {
+                            let mut session = desktop_session(&raw)?;
+                            let parts: Vec<_> = path.strip_prefix(root).ok()?.components().collect();
+                            if parts.len() == 3 {
+                                session.account = Some(serde_json::json!({
+                                    "account_id": parts[0].as_os_str().to_str()?,
+                                    "organization_id": parts[1].as_os_str().to_str()?,
+                                    "source": "desktop_index",
+                                }));
+                            }
+                            Some(session)
+                        }),
+                    ),
                 };
                 fresh.insert(path, entry);
             }
             self.files = fresh;
             self.last = Some(Instant::now());
         }
-        self.files.values().filter_map(|(_, _, session)| session.clone()).map(|s| (s.id.clone(), s)).collect()
+        // A copied/imported session may appear under several accounts. Do not
+        // randomly attach a title, archive bit or account from those copies.
+        let mut grouped: HashMap<String, Vec<DesktopSession>> = HashMap::new();
+        for session in self.files.values().filter_map(|(_, _, session)| session.clone()) {
+            grouped.entry(session.id.clone()).or_default().push(session);
+        }
+        grouped
+            .into_iter()
+            .filter_map(|(id, mut sessions)| (sessions.len() == 1).then(|| (id, sessions.remove(0))))
+            .collect()
     }
 }
 
@@ -98,10 +193,6 @@ fn metadata_files(root: &Path, depth: usize, out: &mut Vec<PathBuf>) {
 
 // Desktop records are saved history, not proof that a session is running.
 // Only enrich sessions whose process identity passed the normal live check.
-fn sessions(now: f64, desktop: &HashMap<String, DesktopSession>) -> Vec<Found> {
-    sessions_at(now, &claude_dir().join("sessions"), desktop, process::matches_session)
-}
-
 fn sessions_at(
     now: f64,
     directory: &Path,
@@ -129,7 +220,11 @@ fn sessions_at(
         if !alive(pid, &d) {
             continue; // dead process or a reused pid
         }
-        let metadata = d.get("sessionId").and_then(Value::as_str).and_then(|id| desktop.get(id));
+        let metadata = d
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .and_then(|id| desktop.get(id))
+            .filter(|_| d.get("entrypoint").and_then(Value::as_str) != Some("cli"));
         if metadata.is_some_and(|s| s.archived) {
             continue;
         }
@@ -169,6 +264,17 @@ fn sessions_at(
         out.insert(
             sid,
             Found {
+                claude_identity: Some(Identity {
+                    config_dir: directory.parent().unwrap_or(directory).to_owned(),
+                    surface: match d.get("entrypoint").and_then(Value::as_str) {
+                        Some("claude-desktop") => "desktop",
+                        Some("cli") => "cli",
+                        _ if metadata.is_some() => "desktop",
+                        _ => "unknown",
+                    },
+                    account: metadata.and_then(|s| s.account.clone()),
+                    pid,
+                }),
                 cwd: cwd.to_owned(),
                 active_subagents: None,
                 id: sid8,
@@ -192,6 +298,21 @@ fn sessions_at(
 mod tests {
     use super::super::TestDir;
     use super::*;
+
+    #[test]
+    fn terminal_targets_use_exact_iterm_identity_and_validate_environment_data() {
+        let env =
+            |fields: &[(&str, &str)]| fields.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>();
+        let id = "w0t0p0:11111111-2222-4333-8444-555555555555";
+        let target = terminal_target(&env(&[("ITERM_SESSION_ID", id)])).unwrap();
+        assert_eq!(target.url().as_deref(), Some(format!("iterm2:reveal?sessionid={id}").as_str()));
+        assert_eq!(terminal_target(&env(&[("TERM_PROGRAM", "iTerm.app"), ("TERM_SESSION_ID", id)])), Some(target));
+        assert!(terminal_target(&env(&[("TERM_PROGRAM", "Apple_Terminal"), ("TERM_SESSION_ID", id)])).is_none());
+        assert!(terminal_target(&[]).is_none());
+        for id in ["", "session&c=whoami", "../session", "iterm2:/command?c=whoami", "session\ncommand"] {
+            assert!(terminal_target(&env(&[("ITERM_SESSION_ID", id)])).is_none());
+        }
+    }
 
     #[test]
     fn desktop_history_only_enriches_live_sessions_and_keeps_waiting_state() {
@@ -233,5 +354,71 @@ mod tests {
         metadata.last = None;
         assert!(metadata.refresh(&dir.0).is_empty());
         assert!(desktop_session(br#"{"sessionId":"desktop-only"}"#).is_none());
+    }
+
+    #[test]
+    fn multiple_roots_and_organizations_keep_separate_live_sessions() {
+        let dir = TestDir::new();
+        let index = dir.0.join("desktop");
+        let root_a = dir.0.join("personal");
+        let root_b = dir.0.join("work");
+        for (id, org, root, pid) in [("personal", "org-a", &root_a, 41), ("work", "org-b", &root_b, 42)] {
+            let scope = index.join("same-user").join(org);
+            fs::create_dir_all(&scope).unwrap();
+            fs::write(
+                scope.join(format!("{id}.json")),
+                serde_json::json!({"cliSessionId":id,"sessionId":format!("local_{id}"),"title":org}).to_string(),
+            )
+            .unwrap();
+            fs::create_dir_all(root.join("sessions")).unwrap();
+            fs::write(
+                root.join("sessions").join(format!("{pid}.json")),
+                serde_json::json!({"pid":pid,"sessionId":id,"entrypoint":"claude-desktop","status":"busy"}).to_string(),
+            )
+            .unwrap();
+        }
+        let mut metadata = DesktopMetadata::default();
+        let desktop = metadata.refresh(&index);
+        let a = sessions_at(1., &root_a.join("sessions"), &desktop, |_, _| true);
+        let b = sessions_at(1., &root_b.join("sessions"), &desktop, |_, _| true);
+        assert_eq!(a[0].claude_identity.as_ref().unwrap().account.as_ref().unwrap()["organization_id"], "org-a");
+        assert_eq!(b[0].claude_identity.as_ref().unwrap().account.as_ref().unwrap()["organization_id"], "org-b");
+        let mut all = a;
+        all.extend(b);
+        all.extend(sessions_at(1., &root_a.join("sessions"), &desktop, |_, _| true));
+        assert_eq!(deduplicate(all).len(), 2);
+        assert!(sessions_at(1., &root_b.join("sessions"), &desktop, |_, _| false).is_empty());
+    }
+
+    #[test]
+    fn cli_resume_does_not_inherit_desktop_archive_or_account() {
+        let dir = TestDir::new();
+        let metadata =
+            desktop_session(br#"{"cliSessionId":"shared","title":"Desktop title","isArchived":true}"#).unwrap();
+        let desktop = HashMap::from([("shared".into(), metadata)]);
+        fs::write(
+            dir.0.join("42.json"),
+            r#"{"pid":42,"sessionId":"shared","entrypoint":"cli","name":"CLI title","status":"waiting"}"#,
+        )
+        .unwrap();
+        let found = sessions_at(1., &dir.0, &desktop, |_, _| true);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "CLI title");
+        assert!(found[0].target.is_none());
+        let identity = found[0].claude_identity.as_ref().unwrap();
+        assert_eq!(identity.surface, "cli");
+        assert!(identity.account.is_none());
+        assert_eq!(found[0].state, State::Wait);
+    }
+
+    #[test]
+    fn copied_desktop_history_does_not_choose_an_arbitrary_account() {
+        let dir = TestDir::new();
+        for org in ["a", "b"] {
+            let scope = dir.0.join("user").join(org);
+            fs::create_dir_all(&scope).unwrap();
+            fs::write(scope.join("session.json"), r#"{"cliSessionId":"shared"}"#).unwrap();
+        }
+        assert!(DesktopMetadata::default().refresh(&dir.0).is_empty());
     }
 }

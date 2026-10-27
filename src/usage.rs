@@ -24,7 +24,10 @@ use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, TimeZone};
 use serde_json::{Value, json};
 
 const M: f64 = 1_000_000.0;
-const CACHE_VERSION: u64 = 1;
+const CACHE_VERSION: u64 = 2;
+
+mod claude;
+pub use claude::{Group, Surface};
 
 /* ---- price list, US dollars per million tokens ---------------------------
  * Claude: cache writes are 1.25x input for the 5 minute TTL and 2x for the
@@ -110,74 +113,6 @@ fn lines(path: &Path) -> std::io::Result<impl Iterator<Item = Vec<u8>>> {
 
 fn contains(hay: &[u8], needle: &[u8]) -> bool {
     memchr::memmem::find(hay, needle).is_some()
-}
-
-/// One API response is written as several lines, one per content block, and
-/// each line repeats that response's usage, partially filled in on the early
-/// lines while the response is still streaming. So collapse by (message id,
-/// request id) and keep the line with the most output tokens, which is the
-/// final one. De-duplication is per file.
-fn parse_claude(path: &Path) -> std::io::Result<Days> {
-    type Key = (Option<String>, Option<String>); // (message id, request id)
-    let mut best: HashMap<Key, (Value, String, Value)> = HashMap::new();
-    let mut order = Vec::new();
-    for line in lines(path)? {
-        if !contains(&line, b"\"usage\"") || !contains(&line, b"\"assistant\"") {
-            continue;
-        }
-        let Ok(d) = serde_json::from_slice::<Value>(&line) else { continue };
-        if d.get("type").and_then(Value::as_str) != Some("assistant") {
-            continue;
-        }
-        let msg = d.get("message");
-        let usage = msg.and_then(|m| m.get("usage"));
-        let Some(usage) = usage.filter(|u| u.as_object().is_some_and(|o| !o.is_empty())) else { continue };
-        let ts = d.get("timestamp");
-        if ts.is_none_or(|t| t.is_null() || t.as_str() == Some("")) {
-            continue;
-        }
-        let model = msg.and_then(|m| m.get("model")).and_then(Value::as_str).unwrap_or("");
-        if model.is_empty() || model.starts_with('<') {
-            continue; // <synthetic>: no API call happened
-        }
-        let id = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_owned);
-        let key = (id(msg.and_then(|m| m.get("id"))), id(d.get("requestId")));
-        let out = num(usage.get("output_tokens"));
-        match best.get(&key) {
-            Some(prev) if out <= num(prev.0.get("output_tokens")) => {}
-            prev => {
-                if prev.is_none() {
-                    order.push(key.clone());
-                }
-                best.insert(key, (usage.clone(), model.to_owned(), ts.unwrap().clone()));
-            }
-        }
-    }
-    let mut days = Days::new();
-    for key in order {
-        let (usage, model, ts) = &best[&key];
-        let inp = num(usage.get("input_tokens"));
-        let read = num(usage.get("cache_read_input_tokens"));
-        let out = num(usage.get("output_tokens"));
-        let creation = usage.get("cache_creation");
-        let mut w5 = num(creation.and_then(|c| c.get("ephemeral_5m_input_tokens")));
-        let w1h = num(creation.and_then(|c| c.get("ephemeral_1h_input_tokens")));
-        if w5 == 0 && w1h == 0 {
-            w5 = num(usage.get("cache_creation_input_tokens"));
-        }
-        let mut t = Tally { tokens: inp + w5 + w1h + read + out, cost: 0.0 };
-        if let Some([pin, pout, pread]) = price(CLAUDE_PRICES, model) {
-            t.cost = (inp as f64 * pin
-                + w5 as f64 * pin * 1.25
-                + w1h as f64 * pin * 2.0
-                + read as f64 * pread
-                + out as f64 * pout)
-                / M;
-        }
-        let Some(day) = local_day(Some(ts)) else { continue };
-        days.entry(day).or_default().add(t);
-    }
-    Ok(days)
 }
 
 fn charge(sink: &mut Days, day: Option<String>, model: &str, inp: i64, cached: i64, written: i64, out: i64) {
@@ -297,12 +232,14 @@ fn jsonl_under(dir: &Path, out: &mut Vec<PathBuf>) {
 struct Entry {
     stamp: String,
     days: Days,
+    claude: Option<Vec<claude::Response>>,
 }
 
 /// Re-counts the month on demand, re-reading only transcripts that changed.
 pub struct Counter {
     cache: HashMap<PathBuf, Entry>,
     cache_path: PathBuf,
+    groups: BTreeMap<Group, Days>,
 }
 
 /// This calendar month (local time), Claude and Codex summed.
@@ -310,6 +247,87 @@ pub struct Counter {
 pub struct MonthUsage {
     pub tokens: i64,
     pub usd: f64,
+}
+
+fn month_usage(tally: Tally) -> MonthUsage {
+    MonthUsage { tokens: tally.tokens, usd: (tally.cost * 100.0).round() / 100.0 }
+}
+
+#[derive(Clone, Debug)]
+pub struct GroupUsage {
+    pub group: Group,
+    pub usage: MonthUsage,
+}
+
+#[derive(Clone, Debug)]
+pub struct UsageReport {
+    pub period: String,
+    pub total: MonthUsage,
+    pub groups: Vec<GroupUsage>,
+}
+
+impl UsageReport {
+    pub fn for_surface(&self, surface: Surface) -> MonthUsage {
+        let mut tally = Tally::default();
+        for group in &self.groups {
+            if group.group.surface == surface {
+                tally.add(Tally { tokens: group.usage.tokens, cost: group.usage.usd });
+            }
+        }
+        month_usage(tally)
+    }
+
+    pub fn json(&self) -> Value {
+        let usage = |u: MonthUsage| json!({"tokens": u.tokens, "usd": (u.usd * 100.0).round() / 100.0});
+        json!({"period": self.period, "total": usage(self.total),
+            "attribution": "saved entrypoint and recorded session owner; not billing identity",
+            "surfaces": ([Surface::Desktop, Surface::Cli, Surface::Unassigned, Surface::Codex]
+                .map(|s| json!({"surface": s.name(), "usage": usage(self.for_surface(s))}))),
+            "groups": self.groups.iter().map(|g| json!({
+                "surface":g.group.surface.name(), "account_id":g.group.account_id,
+                "organization_id":g.group.organization_id, "usage":usage(g.usage),
+            })).collect::<Vec<_>>()})
+    }
+
+    pub fn display_rows(&self) -> Vec<crate::scene::UsageRow> {
+        let mut rows = Vec::new();
+        for (surface, label) in [
+            (Surface::Desktop, "CLAUDE DESKTOP"),
+            (Surface::Cli, "CLAUDE CLI"),
+            (Surface::Unassigned, "CLAUDE UNASSIGNED"),
+            (Surface::Codex, "CODEX"),
+        ] {
+            let usage = self.for_surface(surface);
+            rows.push(crate::scene::UsageRow { label: label.into(), tokens: usage.tokens as f64, usd: usage.usd });
+        }
+        rows
+    }
+
+    pub fn account_display_rows(&self) -> Vec<crate::scene::UsageRow> {
+        self.groups
+            .iter()
+            .map(|g| {
+                let app = match g.group.surface {
+                    Surface::Desktop => "DESKTOP",
+                    Surface::Cli => "CLI",
+                    Surface::Unassigned => "CLAUDE?",
+                    Surface::Codex => "CODEX",
+                };
+                let identity = g.group.organization_id.as_ref().or(g.group.account_id.as_ref());
+                let label = if g.group.surface == Surface::Codex {
+                    app.to_owned()
+                } else {
+                    format!(
+                        "{app} {}",
+                        identity
+                            .map(|s| s.chars().take(8).collect::<String>().to_uppercase())
+                            .unwrap_or_else(|| "UNKNOWN".into())
+                    )
+                };
+                crate::scene::UsageRow { label, tokens: g.usage.tokens as f64, usd: g.usage.usd }
+            })
+            .collect()
+    }
 }
 
 impl Default for Counter {
@@ -325,7 +343,7 @@ impl Counter {
         });
         let cache_path = dir.join("token-cafe").join("usage.json");
         let cache = Self::load(&cache_path).unwrap_or_default();
-        Counter { cache, cache_path }
+        Counter { cache, cache_path, groups: BTreeMap::new() }
     }
 
     fn load(path: &Path) -> Option<HashMap<PathBuf, Entry>> {
@@ -339,7 +357,19 @@ impl Counter {
             for (day, t) in e.get("days")?.as_object()? {
                 days.insert(day.clone(), Tally { tokens: t.get(0)?.as_i64()?, cost: t.get(1)?.as_f64()? });
             }
-            out.insert(PathBuf::from(path), Entry { stamp: e.get("stamp")?.as_str()?.to_string(), days });
+            out.insert(
+                PathBuf::from(path),
+                Entry {
+                    stamp: e.get("stamp")?.as_str()?.to_string(),
+                    days,
+                    claude: match e.get("claude") {
+                        Some(Value::Array(rows)) => {
+                            Some(rows.iter().map(claude::Response::from_json).collect::<Option<Vec<_>>>()?)
+                        }
+                        _ => None,
+                    },
+                },
+            );
         }
         Some(out)
     }
@@ -351,7 +381,7 @@ impl Counter {
             .map(|(p, e)| {
                 let days: serde_json::Map<String, Value> =
                     e.days.iter().map(|(d, t)| (d.clone(), json!([t.tokens, t.cost]))).collect();
-                (p.to_string_lossy().into_owned(), json!({ "stamp": e.stamp, "days": days }))
+                (p.to_string_lossy().into_owned(), json!({ "stamp": e.stamp, "days": days, "claude": e.claude.as_ref().map(|rows| rows.iter().map(claude::Response::json).collect::<Vec<_>>()) }))
             })
             .collect();
         let doc = json!({ "version": CACHE_VERSION, "files": files });
@@ -367,14 +397,24 @@ impl Counter {
     /// (epoch seconds): an older file holds nothing newer than its mtime.
     /// Returns the days and how many files were re-read.
     pub fn collect(&mut self, since: f64) -> (Days, usize) {
+        self.collect_at(since, &crate::claude_config::roots(), &codex_dir())
+    }
+
+    fn collect_at(&mut self, since: f64, roots: &[PathBuf], codex_root: &Path) -> (Days, usize) {
         let (mut claude, mut codex) = (Vec::new(), Vec::new());
-        jsonl_under(&claude_dir().join("projects"), &mut claude);
-        jsonl_under(&codex_dir().join("sessions"), &mut codex);
+        for root in roots {
+            jsonl_under(&root.join("projects"), &mut claude);
+        }
+        // Overlapping roots and aliases must not charge the same file twice.
+        let mut seen = std::collections::HashSet::new();
+        claude.retain(|path| seen.insert(crate::claude_config::normalize(path.clone())));
+        jsonl_under(&codex_root.join("sessions"), &mut codex);
         let mut fresh = HashMap::new();
         let mut totals = Days::new();
         let mut reparsed = 0;
-        type Parse = fn(&Path) -> std::io::Result<Days>;
-        for (files, parse) in [(claude, parse_claude as Parse), (codex, parse_codex as Parse)] {
+        let mut responses = HashMap::new();
+        self.groups.clear();
+        for (files, is_claude) in [(claude, true), (codex, false)] {
             for path in files {
                 let Ok(st) = fs::metadata(&path) else { continue };
                 let mtime = st.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok());
@@ -388,15 +428,32 @@ impl Counter {
                     _ => {
                         reparsed += 1;
                         // Retry transient read failures on the next poll instead of caching zero.
-                        let Ok(days) = parse(&path) else { continue };
-                        Entry { stamp, days }
+                        if is_claude {
+                            let Ok(rows) = claude::parse(&path) else { continue };
+                            Entry { stamp, days: Days::new(), claude: Some(rows) }
+                        } else {
+                            let Ok(days) = parse_codex(&path) else { continue };
+                            Entry { stamp, days, claude: None }
+                        }
                     }
                 };
-                for (d, t) in &entry.days {
-                    totals.entry(d.clone()).or_default().add(*t);
+                if let Some(rows) = &entry.claude {
+                    for row in rows {
+                        claude::merge(&mut responses, row.clone());
+                    }
+                } else {
+                    let group = self.groups.entry(Group::unknown(Surface::Codex)).or_default();
+                    for (d, t) in &entry.days {
+                        totals.entry(d.clone()).or_default().add(*t);
+                        group.entry(d.clone()).or_default().add(*t);
+                    }
                 }
                 fresh.insert(path, entry);
             }
+        }
+        for row in responses.into_values() {
+            totals.entry(row.day.clone()).or_default().add(row.tally);
+            self.groups.entry(row.group).or_default().entry(row.day).or_default().add(row.tally);
         }
         let dropped = !self.cache.is_empty();
         self.cache = fresh;
@@ -408,6 +465,10 @@ impl Counter {
 
     /// This calendar month (local time), Claude and Codex summed.
     pub fn month(&mut self) -> MonthUsage {
+        self.month_report().total
+    }
+
+    pub fn month_report(&mut self) -> UsageReport {
         let today = Local::now().date_naive();
         let first = NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap();
         let since = Local
@@ -417,10 +478,23 @@ impl Counter {
         let (days, _) = self.collect(since);
         let (lo, hi) = (first.format("%Y-%m-%d").to_string(), today.format("%Y-%m-%d").to_string());
         let mut sum = Tally::default();
-        for (_, t) in days.range(lo..=hi) {
+        for (_, t) in days.range(lo.clone()..=hi.clone()) {
             sum.add(*t);
         }
-        MonthUsage { tokens: sum.tokens, usd: (sum.cost * 100.0).round() / 100.0 }
+        let mut groups = Vec::new();
+        for (group, days) in &self.groups {
+            let mut tally = Tally::default();
+            for (_, value) in days.range(lo.clone()..=hi.clone()) {
+                tally.add(*value);
+            }
+            if tally.tokens != 0 || tally.cost != 0.0 {
+                groups.push(GroupUsage {
+                    group: group.clone(),
+                    usage: MonthUsage { tokens: tally.tokens, usd: tally.cost },
+                });
+            }
+        }
+        UsageReport { period: today.format("%Y-%m").to_string(), total: month_usage(sum), groups }
     }
 }
 
@@ -437,6 +511,78 @@ pub fn human(n: i64) -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usage_counts_all_claude_roots_without_charging_aliases_twice() {
+        let dir = crate::collect::TestDir::new();
+        let a = dir.0.join("personal");
+        let b = dir.0.join("work");
+        for (root, count) in [(&a, 10), (&b, 20)] {
+            fs::create_dir_all(root.join("projects/moon")).unwrap();
+            let record = json!({"type":"assistant","timestamp":"2026-10-10T12:00:00", "requestId":"r",
+                "message":{"id":format!("m-{count}"),"model":"claude-sonnet-5","usage":{"input_tokens":count,"output_tokens":1}}});
+            fs::write(root.join("projects/moon/session.jsonl"), record.to_string()).unwrap();
+        }
+        let alias = dir.0.join("alias");
+        std::os::unix::fs::symlink(&a, &alias).unwrap();
+        let mut counter =
+            Counter { cache: HashMap::new(), cache_path: dir.0.join("usage.json"), groups: BTreeMap::new() };
+        let roots = vec![a.clone(), b.clone(), a, alias];
+        let (days, parsed) = counter.collect_at(0., &roots, &dir.0.join("no-codex"));
+        assert_eq!(parsed, 2);
+        assert_eq!(days["2026-10-10"].tokens, 32);
+        let (again, parsed) = counter.collect_at(0., &roots, &dir.0.join("no-codex"));
+        assert_eq!(parsed, 0);
+        assert_eq!(again["2026-10-10"].tokens, 32);
+    }
+
+    #[test]
+    fn breakdown_reconciles_and_survives_cache_reload_and_fork_copies() {
+        let dir = crate::collect::TestDir::new();
+        let root = dir.0.join("claude");
+        let project = root.join("projects/moon");
+        fs::create_dir_all(&project).unwrap();
+        let response = |id, surface, count| {
+            json!({"type":"assistant", "entrypoint":surface,
+            "timestamp":"2026-10-10T12:00:00", "sessionId":"s",
+            "message":{"id":id,"model":"claude-sonnet-5","usage":{"input_tokens":count,"output_tokens":1}}})
+        };
+        let data = [
+            response("one", Some("claude-desktop"), 10),
+            response("two", Some("cli"), 20),
+            response("three", None, 30),
+        ]
+        .iter()
+        .map(|v| format!("{v}\n"))
+        .collect::<String>();
+        fs::write(project.join("s.jsonl"), &data).unwrap();
+        fs::write(project.join("fork.jsonl"), data).unwrap();
+        let cache_path = dir.0.join("cache.json");
+        let mut counter = Counter { cache: HashMap::new(), cache_path: cache_path.clone(), groups: BTreeMap::new() };
+        let roots = [root];
+        let (days, parsed) = counter.collect_at(0., &roots, &dir.0.join("no-codex"));
+        assert_eq!(parsed, 2);
+        assert_eq!(days["2026-10-10"].tokens, 63);
+        assert_eq!(counter.groups.values().flat_map(|days| days.values()).map(|t| t.tokens).sum::<i64>(), 63);
+        let surface_tokens = |surface| {
+            counter
+                .groups
+                .iter()
+                .filter(|(g, _)| g.surface == surface)
+                .flat_map(|(_, days)| days.values())
+                .map(|t| t.tokens)
+                .sum::<i64>()
+        };
+        assert_eq!(surface_tokens(Surface::Desktop), 11);
+        assert_eq!(surface_tokens(Surface::Cli), 21);
+        assert_eq!(surface_tokens(Surface::Unassigned), 31);
+        let mut warm = Counter { cache: Counter::load(&cache_path).unwrap(), cache_path, groups: BTreeMap::new() };
+        let (days, parsed) = warm.collect_at(0., &roots, &dir.0.join("no-codex"));
+        assert_eq!(parsed, 0);
+        assert_eq!(days["2026-10-10"].tokens, 63);
+        assert_eq!(warm.groups, counter.groups);
+    }
+
     #[test]
     fn history_scan_does_not_follow_cycles_or_duplicate_symlinks() {
         let root = crate::collect::TestDir::new();

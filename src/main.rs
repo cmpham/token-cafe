@@ -17,7 +17,7 @@ use std::thread;
 use std::time::Duration;
 
 use token_cafe::collect::Collector;
-use token_cafe::scene::{ForcedPose, Kind, Session, SessionDetail, State, Usage, Why};
+use token_cafe::scene::{ForcedPose, Kind, Session, SessionDetail, State, Usage, UsageRow, Why};
 use token_cafe::usage::{Counter, human};
 
 const POLL: Duration = Duration::from_secs(1); // how often the sessions are read
@@ -28,6 +28,8 @@ pub enum Update {
     Sessions(Vec<Session>),
     Details(Vec<SessionDetail>),
     Usage(Usage),
+    UsageRows(Vec<UsageRow>),
+    UsageAccounts(Vec<UsageRow>),
 }
 
 fn log(msg: &str) {
@@ -73,12 +75,16 @@ fn usage_feed(tx: Sender<Update>) {
     let mut counter = Counter::new();
     let mut first = true;
     loop {
-        let u = counter.month();
+        let report = counter.month_report();
+        let u = report.total;
         if first {
             log(&format!("this month: {} tokens, ${:.2}", human(u.tokens), u.usd));
             first = false;
         }
-        if tx.send(Update::Usage(Usage { tokens: u.tokens as f64, usd: u.usd })).is_err() {
+        if tx.send(Update::UsageAccounts(report.account_display_rows())).is_err()
+            || tx.send(Update::UsageRows(report.display_rows())).is_err()
+            || tx.send(Update::Usage(Usage { tokens: u.tokens as f64, usd: u.usd })).is_err()
+        {
             return;
         }
         thread::sleep(USAGE_EVERY);
@@ -169,7 +175,8 @@ fn print_session_info(watch: bool) {
 }
 
 fn usage_text() -> &'static str {
-    "usage: token-cafe [--demo | --print | --session-info [--watch]] [--scale N] [--always-on-top]\n\
+    "usage: token-cafe [--demo | --print | --usage-json | --session-info [--watch]] [--scale N] [--always-on-top]\n\
+     \n  --usage-json  print monthly usage by saved app and organization as JSON\
      \n  --session-info  print local session tasks and observed activity as JSON\
      \n  --watch    with --session-info, emit snapshots when they change\
      \n  --demo     a fixed list that shows every pose\
@@ -178,13 +185,14 @@ fn usage_text() -> &'static str {
      \n  --bluetooth  connect registered semantic companions (TC_BLE_REGISTRY)\
      \n  --bluetooth-key PATH  with --bluetooth: use the legacy framebuffer board instead\
      \n  --always-on-top  keep the café above other windows\
-     \n\nkeys: 1-6 window size, f / F11 fullscreen, Esc leave fullscreen/clear selection, Tab next session, Left/Right select patron, Up/Down task page, t toggle always on top, q quit"
+     \n\nkeys: 1-6 window size, u monthly usage, f / F11 fullscreen, Esc leave fullscreen/clear selection, Tab next session, Left/Right select patron, Up/Down task page, t toggle always on top, q quit"
 }
 
 fn main() {
     let default_scale = if cfg!(target_os = "macos") { 1u32 } else { 3u32 };
     let (mut demo, mut print, mut scale) = (false, false, default_scale);
     let (mut session_info, mut watch) = (false, false);
+    let mut usage_json = false;
     let mut always_on_top = false;
     let mut bluetooth = false;
     let mut bluetooth_key_path = None;
@@ -193,6 +201,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--usage-json" => usage_json = true,
             "--session-info" => session_info = true,
             "--watch" => watch = true,
             #[cfg(feature = "bluetooth")]
@@ -216,8 +225,10 @@ fn main() {
             }
         }
     }
-    if (watch && !session_info) || (session_info && (demo || print)) || (demo && print) {
-        eprintln!("--watch requires --session-info; choose only one of --demo, --print, or --session-info");
+    if (watch && !session_info) || [session_info, demo, print, usage_json].iter().filter(|v| **v).count() > 1 {
+        eprintln!(
+            "--watch requires --session-info; choose only one of --demo, --print, --usage-json, or --session-info"
+        );
         std::process::exit(2);
     }
     #[cfg(feature = "bluetooth")]
@@ -260,6 +271,9 @@ fn main() {
             std::process::exit(1);
         }
         return;
+    }
+    if usage_json {
+        return println!("{}", Counter::new().month_report().json());
     }
     if session_info {
         return print_session_info(watch);

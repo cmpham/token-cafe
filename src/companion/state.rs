@@ -94,7 +94,8 @@ impl Store {
         let input = scene.sessions().to_vec();
         let details = scene.details().to_vec();
         let requests = scene.requests().to_vec();
-        self.terminal.retain(|_, (r, t)| t.elapsed() < Duration::from_secs(if matches!(r.state, 2 | 6) { 30 } else { 5 }));
+        self.terminal
+            .retain(|_, (r, t)| t.elapsed() < Duration::from_secs(if matches!(r.state, 2 | 6) { 30 } else { 5 }));
         // Desktop decisions bypass the authority; the broker's record finishes them.
         for (r, at) in self.terminal.values_mut() {
             let outcome = self.broker.as_ref().and_then(|b| b.outcome(&r.id));

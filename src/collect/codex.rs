@@ -350,6 +350,7 @@ impl Codex {
                         .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect())
                         .unwrap_or_else(|| session_name(cwd, &r.session));
                     let found = Found {
+                        claude_identity: None,
                         cwd: cwd.to_owned(),
                         active_subagents: Some(active_children(&infos, &r.session)),
                         id: short_id(&r.session),
@@ -377,6 +378,7 @@ impl Codex {
             );
             let cwd = root.map(|r| r.cwd.as_str()).filter(|s| !s.is_empty()).unwrap_or(&p.cwd);
             let found = Found {
+                claude_identity: None,
                 cwd: cwd.to_owned(),
                 active_subagents: Some(active_children(&infos, &uuid)),
                 id: short_id(&uuid),

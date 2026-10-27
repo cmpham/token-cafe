@@ -75,6 +75,11 @@ fn matches_ticks(ticks: &str, session: &serde_json::Value) -> bool {
     }
 }
 
+/// Only retain explicitly requested non-secret environment fields.
+pub fn environment(pid: u32, keys: &[&str]) -> Vec<(String, String)> {
+    fs::read(format!("/proc/{pid}/environ")).map(|raw| super::selected_environment(&raw, keys)).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

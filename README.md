@@ -67,6 +67,7 @@ The bundle is for local use; it is not signed for distribution or notarized. Fin
 | `token-cafe --session-info` | local task/activity diagnostic as one JSON snapshot |
 | `token-cafe --session-info --watch` | emit a snapshot when live session information changes |
 | `token-cafe --print` | list the live sessions and this month's usage in the terminal, then exit |
+| `token-cafe --usage-json` | monthly token totals by app and recorded account/organization |
 | `token-cafe --always-on-top` | keep the café above other windows |
 | `token-cafe --scale N` | open at N × 480×272 (default 1 on macOS, 3 elsewhere) |
 
@@ -80,6 +81,8 @@ The bundle is for local use; it is not signed for distribution or notarized. Fin
 | `Up` / `Down` / drag the scrollbar | page through the selected request |
 | `Esc` | leave fullscreen, or clear session selection |
 | `t` | toggle always on top (the title shows whether it is pinned) |
+| `u` / click the token chalkboard | open monthly usage, with separate Claude Desktop, CLI, unassigned and Codex totals |
+| `a` / click Recorded Org in usage | switch between app totals and recorded organization groups; Up/Down or the page arrows show every group |
 | `q` | quit |
 
 On macOS, press `1` then `t` for a small floating café, or launch with `token-cafe --scale 1 --always-on-top`. It stays above ordinary windows when you switch apps in the same desktop Space. Press `t` again to unpin. The mode lasts until you quit; use the launch flag to start pinned.
@@ -102,7 +105,21 @@ Everything is read locally; nothing leaves your machine. Token Café only reads 
 | **The tab** | every transcript under `~/.claude/projects/` and `~/.codex/sessions/` written this month; each API response carries its token counts |
 | **Cache** | `~/Library/Caches/token-cafe/usage.json` on macOS; `~/.cache/token-cafe/usage.json` on Linux. `XDG_CACHE_HOME` overrides either default |
 
-`CLAUDE_CONFIG_DIR` and `CODEX_HOME` are honoured. Codex doesn't log its approval prompts, so Codex patrons never raise a hand.
+`CODEX_HOME` is honoured. Claude discovery includes the default `~/.claude`, Token Café's `CLAUDE_CONFIG_DIR`, and overrides found on running Claude processes. For additional profiles, launch with `TOKEN_CAFE_CLAUDE_CONFIG_DIRS="/absolute/personal:/absolute/work"`. This also keeps those profiles' monthly usage included after their Claude processes exit. Paths are deduplicated, including symlink aliases. Discovery refreshes every five seconds.
+
+### Claude Desktop and CLI accounts
+
+Both surfaces can run together, including when they share `~/.claude`. Token Café uses each live record's `entrypoint` to distinguish Desktop from CLI. Account identity includes **both user UUID and organization UUID**: one user can have separate personal and work organizations. The focus panel shows the launch surface and organization prefix; `--session-info` includes a `claude` object with the full config path, surface, PID and account attribution source.
+
+Desktop identity comes from an allowlist of non-secret process environment fields (`CLAUDE_CODE_ACCOUNT_UUID`, `CLAUDE_CODE_ORGANIZATION_UUID`), falling back to the account/organization folders in the Desktop session index. Desktop history only enriches a validated live process. Ambiguous index copies supply no account or archive status, and a CLI resume does not inherit Desktop's archive status.
+
+For CLI processes without identity environment fields, the profile's `.claude.json` `oauthAccount` supplies a **current login hint** (`source: current_config`), shown as `CURRENT ORG`. It cannot prove which account an already-running CLI process authenticated with before a login switch. A missing identity remains unknown. Token Café never reads Keychain credentials or retains OAuth tokens from process environments.
+
+Transcripts are looked up within the live session's own config directory. The monthly chalkboard combines local usage across discovered/configured profiles. Press **U** to see Desktop and CLI totals separately, then **A** for recorded organization groups. The breakdown uses each assistant response's saved `entrypoint`; older responses without this evidence stay unassigned. Account groups use consistent `bridge-session` owner metadata for that response's session, including copied parent session IDs. Conflicting or absent ownership remains unknown. A recorded owner is evidence of session ownership, not proof of the account billed for every request; today's CLI login is never used to relabel historical usage.
+
+Claude API responses are deduplicated across forked/copied transcripts by their message/request IDs, keeping the final streamed usage. Responses without IDs remain separate. The top-level total and every breakdown use the same responses. Input, output, cache reads and cache writes are included. Dollars are an API list-price estimate, not subscription utilization or an account billing report. The versioned usage cache is rebuilt once for the new attribution format. `token-cafe --usage-json` prints exact token totals, app totals and full recorded account/organization IDs. Separate `CLAUDE_CONFIG_DIR` profiles are also supported; see [Claude's environment variable documentation](https://code.claude.com/docs/en/env-vars#variables). No login changes are needed for the existing Desktop/CLI setup.
+
+After building, run `python3 tools/test_claude_accounts.py` to check live identities and a temporary second-profile fixture. It checks automatic config discovery, overrides, alias deduplication, transcript isolation and closed-process removal without changing Claude settings or logins. A C compiler is required for the fixture.
 
 On macOS, native `libproc` and `sysctl` calls discover processes, working directories, arguments and open rollout files. Claude session identity is checked against its macOS process-start date, with `startedAt` as a fallback for older files. Processes macOS does not allow us to inspect are skipped.
 
@@ -177,11 +194,13 @@ Click a patron to show its latest request in the bottom panel. Requests wrap int
 
 Tool status is conservative: `observed` means a call was logged, `returned` means its tool result arrived (not necessarily that a subprocess finished or tests passed), and `failed` requires an explicit Claude tool-error flag. A turn ending without a result is `ended_without_result`. Opaque wrapper tools show `USING TOOL` with their name. Raw tool arguments, output, and reasoning are not displayed. Request excerpts are limited to 160 characters, not AI-generated summaries; context-only and synthetic messages are skipped conservatively.
 
-Codex details come from the matched root rollout. Claude transcript filenames must match the full live session ID under a top-level project directory; missing or ambiguous matches remain unavailable. Transcript discovery is refreshed every five seconds. On first read, at most the last 8 MiB is scanned, then only appended complete records; records over 1 MiB are skipped. `history_partial` flags truncated history or skipped oversized records, so an older task may be unavailable. File replacement/truncation clears cached evidence, and closed sessions evict it.
+Codex details come from the matched root rollout. Claude transcript filenames must match the full live session ID under a top-level project directory in that session's config root; missing or ambiguous matches remain unavailable. Transcript discovery is refreshed every five seconds. On first read, at most the last 8 MiB is scanned, then only appended complete records; records over 1 MiB are skipped. `history_partial` flags truncated history or skipped oversized records, so an older task may be unavailable. File replacement/truncation clears cached evidence, and closed sessions evict it.
 
 The macOS app icon reuses the café patron head. To regenerate it on macOS, run `swift tools/generate_icon.swift`, then `iconutil -c icns assets/TokenCafe.iconset -o assets/TokenCafe.icns`, and rebuild the bundle.
 
-On macOS, double-click a patron in the app, or double-tap a patron on the Bluetooth companion screen, to open its existing Codex or Claude Desktop session. On the board, make two short taps at the same spot within 450 ms; slower taps select and clear focus. Single clicks still select or clear focus. CLI-only sessions without a desktop mapping cannot be opened this way. Claude navigation uses the installed Desktop app's `code/continue` route, which may change between versions.
+On macOS, **single-click an iTerm-hosted Claude CLI patron to reveal its exact existing terminal pane**. The collector reads only the process's `ITERM_SESSION_ID` (or iTerm's `TERM_SESSION_ID` fallback), and uses iTerm's `iterm2:reveal` URL. This selects the existing pane across tabs/windows without starting Claude, creating a terminal, or sending terminal input. The session identifier is validated before building the URL. `--session-info` exposes the resulting `navigation` URL for diagnostics. Embedded terminals or other terminal apps without a supported session mapping retain ordinary selection; Token Café does not guess by project path or activate an arbitrary terminal window.
+
+Double-click other patrons in the app, or double-tap a patron on the Bluetooth companion screen, to open an identified iTerm pane, Codex chat or Claude Desktop session. On the board, make two short taps at the same spot within 450 ms; slower taps select and clear focus. Desktop-chat single clicks select or clear focus. Claude Desktop navigation uses the installed app's `code/continue` route, which may change between versions. iTerm navigation uses its documented [reveal URL](https://iterm2.com/documentation-url-scheme.html#reveal).
 
 On macOS, a pinned café becomes 60% opaque while unfocused, so the window behind it remains visible. Focusing the café or turning off pinning restores full opacity.
 
@@ -195,6 +214,7 @@ The macOS title bar hides while the café is unfocused and returns when you clic
 | Always on top (`T` / `--always-on-top`) | Yes | Window-manager dependent | Configure a compositor window rule |
 | Unfocused translucency and hidden title bar | Yes | Normal opaque window and decorations | Normal opaque window and decorations |
 | Double-click to open a desktop session | Yes, with a known desktop session | Regular selection only | Regular selection only |
+| Single-click Claude CLI to reveal its iTerm pane | Yes, with a known iTerm session ID | Regular selection only | Regular selection only |
 | Patron app-bundle icon | Yes | macOS bundle asset only | macOS bundle asset only |
 
 Wayland does not expose the window-level API used for pinning. The title shows “Pin via compositor” and `T` does not claim to enable pinning there. Use the `token-cafe` app ID for compositor rules. macOS AppKit dependencies and native navigation code are compiled only on macOS.
