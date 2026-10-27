@@ -182,7 +182,7 @@ void tc_feed(tc_protocol *p, const uint8_t *data, size_t size) {
         p->packet[p->used++] = b;
         if (p->used == TC_HEADER && (p->packet[5] != 1 || u16(p->packet + 6) > TC_MAX_PAYLOAD)) {
             reply(p, 1, NULL, 0); tc_reset(p);
-        } else if (p->used >= TC_HEADER && p->used == TC_HEADER + u16(p->packet + 6)) {
+        } else if (p->used >= TC_HEADER && p->used == (size_t)TC_HEADER + u16(p->packet + 6)) {
             dispatch(p); tc_reset(p);
         }
     }
