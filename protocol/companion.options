@@ -1,0 +1,24 @@
+* type:FT_STATIC max_size:193 max_count:8
+*.authority_epoch max_size:16
+*.connection_epoch max_size:16
+*.origin_connection_epoch max_size:16
+*.sha256 max_size:32
+*.digest max_size:32
+*.asset_digest max_size:32
+*.request_digest max_size:32
+*.displayed_body_sha256 max_size:32
+*.blob_id max_size:32
+*.id max_size:129
+*.session_id max_size:129
+*.request_id max_size:129
+*.selected_session_id max_size:129
+*.review_request_id max_size:129
+*.device_id max_size:65
+*.origin_device_id max_size:65
+token_cafe.v2.SnapshotPart.sessions max_count:2
+token_cafe.v2.Delta.upsert_sessions max_count:2
+token_cafe.v2.Delta.remove_session_ids max_count:8 max_size:129
+token_cafe.v2.Request.allowed_decisions max_count:4
+token_cafe.v2.BlobChunk.data max_size:512
+token_cafe.v2.Usage.tokens_display max_size:25
+token_cafe.v2.Usage.cost_display max_size:25

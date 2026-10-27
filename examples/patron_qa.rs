@@ -43,6 +43,8 @@ fn sessions(roster: usize, state: State, pose: ForcedPose) -> Vec<Session> {
                 why: Why::Perm,
                 pose,
                 age_s: 0,
+                branch: None,
+                active_subagents: None,
             }
         })
         .collect()

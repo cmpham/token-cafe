@@ -1,0 +1,61 @@
+{
+  "notice": "Synthetic public test key/nonces only; never use for production provisioning.",
+  "auth": {
+    "device_id": "qa-board-01",
+    "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "host_nonce_hex": "000102030405060708090a0b0c0d0e0f",
+    "board_nonce_hex": "101112131415161718191a1b1c1d1e1f",
+    "transcript_hex": "74632d617574682d76320b0071612d626f6172642d3031000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "board_tag_hex": "242f052076f139a067b9344a6ad6f9f5",
+    "host_tag_hex": "a69c511955df9659a99276f78b9f4869",
+    "derived": {
+      "host-key": "6751a25e425278aba85045979408acc41cb30d1abac99f352a7e62f4bb209fe4",
+      "board-key": "4a0e91faa085d1e3bf6fca0fe4f57e3f1d71417562513ee59fe1aee6b6dfb112",
+      "host-nonce": "61358a12",
+      "board-nonce": "9ea97099",
+      "epoch": "464149ce29022ea601ff5276e55ae052"
+    }
+  },
+  "fragment": {
+    "direction": 1,
+    "counter": 1,
+    "message_id": 2147483649,
+    "total_length": 3,
+    "offset": 0,
+    "payload_hex": "616263",
+    "aad_hex": "74632d7632010100000000000000",
+    "plaintext_hex": "010000800300000000000000616263",
+    "wire_hex": "0100000000000000a5cd5aaf78aace7caa5c95d7e33b481b12f3a3df579b960fe684cfd6c5644c"
+  },
+  "requests": [
+    {
+      "request_id": "request-01",
+      "session_id": "claude:synthetic",
+      "provider": 1,
+      "title": "ALLOW Bash?",
+      "body": "Tool: Bash\nCommand: printf hello\n",
+      "decisions": [
+        1,
+        2
+      ],
+      "body_sha256": "17b633ffd81803cd5be90f44a3cb2f54fbe2a91b9fe6ecd3074a18efb8de761c",
+      "body_length": 33,
+      "identity_preimage_hex": "74632d7265712d76320a00726571756573742d30311000636c617564653a73796e746865746963010b00414c4c4f5720426173683f04004261736817b633ffd81803cd5be90f44a3cb2f54fbe2a91b9fe6ecd3074a18efb8de761c21000000020102",
+      "request_digest": "249b1d7f39e9ff5bb6819c6447a6da918cf542e8d1c72a4ed938aa67e1513679",
+      "tool_name": "Bash"
+    },
+    {
+      "request_id": "request-02",
+      "session_id": "codex:synthetic",
+      "provider": 2,
+      "title": "Desktop only",
+      "body": "Unicode: café\r\nBackslash: \\ end",
+      "decisions": [],
+      "body_sha256": "e60ada37ad2e3ca5a769f47002d59dc0305a939d11ae5a04177caa11ddb0e109",
+      "body_length": 32,
+      "identity_preimage_hex": "74632d7265712d76320a00726571756573742d30320f00636f6465783a73796e746865746963020c004465736b746f70206f6e6c7910006465736b746f705f7175657374696f6ee60ada37ad2e3ca5a769f47002d59dc0305a939d11ae5a04177caa11ddb0e1092000000000",
+      "request_digest": "ae8d5795c2ca4c101ef2b1c7a70284cc867505ba98db763469b2faa84b7483f1",
+      "tool_name": "desktop_question"
+    }
+  ]
+}

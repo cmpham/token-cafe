@@ -1,5 +1,5 @@
 /*
- * Token Cafe: a 320x240 pixel scene of the coding-agent sessions on this
+ * Token Cafe: a 480x272 pixel scene of the coding-agent sessions on this
  * machine, drawn as patrons of a JRPG-style net cafe.
  *
  * Pure JS with no DOM: it renders into an RGBA buffer, so the same file runs
@@ -12,7 +12,7 @@
 (function (root) {
 'use strict';
 
-const W = 320, H = 240;
+const W = 480, H = 272;
 
 /* ---------------------------------------------------------------- colour */
 
@@ -78,7 +78,7 @@ const C = {
 /* Per-agent laptops. */
 const LAPTOP = {
     claude: { L: q('#ece2d2'), l: q('#c4b6a2'), A: q('#d97757'), a: q('#f4b090') },
-    codex:  { L: q('#3e4250'), l: q('#2a2d38'), A: q('#e8f0f4'), a: q('#6ae0d0') },
+    codex:  { L: q('#74a699'), l: q('#456f65'), A: q('#f7f3ef'), a: q('#afd3c6') },
 };
 
 /* Avatar looks, picked from a hash of the session id. */
@@ -412,48 +412,33 @@ const ARM = {
         'KSSK',
         '.KK.',
     ]),
+    // A compact wave: palm beside the head, elbow bent back to the shoulder.
     upA: S('arm.upA', [
-        '.KK.',
-        'KSSK',
-        'KSSK',
-        'KSSK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KCCK',
-        'KcCK',
-        'KcCK',
-        'KcCK',
-        '.KK.',
+        '...KK..',
+        '..KSSK.',
+        '..KSSK.',
+        '..KsSK.',
+        '..KCCK.',
+        '..KcCK.',
+        '..KcCK.',
+        '.KcCCK.',
+        'KCCCK..',
+        'KCCK...',
+        '.KK....',
     ]),
     upB: S('arm.upB', [
-        '...KK',
-        '..KSSK',
-        '..KSSK',
-        '.KSSK.',
-        '.KCCK.',
-        '.KCCK.',
-        'KCCK..',
-        'KCCK..',
-        'KCCK..',
-        'KCCK..',
-        'KCCK..',
-        'KCCK..',
-        'KCCK..',
-        'KCCK..',
-        'KCCK..',
-        'KcCK..',
-        'KcCK..',
-        'KcCK..',
-        '.KK...',
-    ].map(r => r.padEnd(6, '.'))),
+        '....KK.',
+        '...KSSK',
+        '...KSSK',
+        '..KSsK.',
+        '..KCCK.',
+        '..KcCK.',
+        '..KcCK.',
+        '.KcCCK.',
+        'KCCCK..',
+        'KCCK...',
+        '.KK....',
+    ]),
     chin: S('arm.chin', [
         '.KKKK.',
         'KSSSSK',
@@ -565,8 +550,8 @@ function buildPoses(st) {
     ];
     P.think = compose('think', [[T, 0, 13], [ARM.left, 0, 15], ...head(HEAD.up, 1, 0, st), [ARM.chin, 8, 10]]);
     P.raise = [
-        compose('raiseA', [[T, 0, 13], [ARM.left, 0, 15], ...head(HEAD.shout, 1, 0, st), [ARM.upA, 14, -5]]),
-        compose('raiseB', [[T, 0, 13], [ARM.left, 0, 15], ...head(HEAD.shout, 1, 0, st), [ARM.upB, 13, -5]]),
+        compose('raiseA', [[T, 0, 13], [ARM.left, 0, 15], ...head(HEAD.shout, 1, 0, st), [ARM.upA, 12, 5]]),
+        compose('raiseB', [[T, 0, 13], [ARM.left, 0, 15], ...head(HEAD.shout, 1, 0, st), [ARM.upB, 12, 5]]),
     ];
     P.stretch = compose('stretch', [[T, 0, 13], ...head(HEAD.yawn, 1, 0, st), [ARM.behindL, -3, 6], [ARM.behindR, 12, 6]]);
     P.sip = [
@@ -621,17 +606,34 @@ const LID = S('lid', [
     'KKKKKKKKKKKKK',
 ]);
 
-/* Claude's lid shows the CLI's asterisk spinner; Codex's a blinking prompt. */
+/* Claude's lid shows the CLI's asterisk spinner; Codex's the ChatGPT knot. */
 const SPARK = [
     S('spark0', ['.......', '.......', '.......', '...A...', '.......', '.......', '.......']),
     S('spark1', ['.......', '.......', '..A.A..', '...A...', '..A.A..', '.......', '.......']),
     S('spark2', ['.......', '.A.A.A.', '..AAA..', '.AAaAA.', '..AAA..', '.A.A.A.', '.......']),
     S('spark3', ['A..A..A', '.A.A.A.', '..AAA..', 'AAAaAAA', '..AAA..', '.A.A.A.', 'A..A..A']),
 ];
-const PROMPT = [
-    S('prompt0', ['.......', '.A.....', '..A....', '...A...', '..A....', '.A.....', '.......']),
-    S('prompt1', ['.......', '.A.....', '..A....', '...A...', '..A....', '.A..aaa', '.......']),
-];
+// Compact knot: an open center avoids a checkerboard at native board scale.
+const CHATGPT = S('chatgpt', [
+    '...AAAA....',
+    '..A....AAA.',
+    '.AA.AAA..A.',
+    'A.AA...A..A',
+    'A.A.....A.A',
+    'A..A...AA.A',
+    '.A..AAA.AA.',
+    '.AAA....A..',
+    '....AAAA...',
+]);
+// A two-lobe highlight travels clockwise; the whole knot stays visible.
+const CHATGPT_WORK = Array.from({ length: 6 }, (_, frame) => S(`chatgptWork${frame}`,
+    CHATGPT.rows.map((row, y) => [...row].map((ch, x) => {
+        if (ch === '.') return ch;
+        const angle = (Math.atan2(y - 4, x - 5) + Math.PI / 2 + Math.PI * 2) % (Math.PI * 2);
+        const sector = Math.floor(angle / (Math.PI / 3));
+        return (sector - frame + 6) % 6 < 2 ? 'A' : 'a';
+    }).join(''))));
+
 
 const PROPS = {
     duck: S('duck', [
@@ -813,6 +815,23 @@ const GLYPH_SRC = {
     '(': '...#.|..#..|.#...|.#...|.#...|..#..|...#.', ')': '.#...|..#..|...#.|...#.|...#.|..#..|.#...',
     '+': '.....|..#..|..#..|#####|..#..|..#..|.....', '#': '.#.#.|.#.#.|#####|.#.#.|#####|.#.#.|.#.#.',
     '$': '..#..|.####|#.#..|.###.|..#.#|####.|..#..',
+    "<": "....#|...#.|..#..|.#...|..#..|...#.|....#",
+    "^": "..#..|.#.#.|#...#|.....|.....|.....|.....",
+    "\"": ".#.#.|.#.#.|.....|.....|.....|.....|.....",
+    "\\": "#....|.#...|..#..|...#.|....#|.....|.....",
+    "{": "...##|..#..|..#..|.#...|..#..|..#..|...##",
+    "}": "##...|..#..|..#..|...#.|..#..|..#..|##...",
+    "[": ".###.|.#...|.#...|.#...|.#...|.#...|.###.",
+    "]": ".###.|...#.|...#.|...#.|...#.|...#.|.###.",
+    "=": ".....|.....|#####|.....|#####|.....|.....",
+    ";": ".....|..#..|.....|.....|..#..|..#..|.#...",
+    "|": "..#..|..#..|..#..|..#..|..#..|..#..|..#..",
+    "&": ".##..|#..#.|#.#..|.##..|#.#.#|#..#.|.##.#",
+    "%": "##..#|##.#.|...#.|..#..|.#...|#..##|...##",
+    "@": ".###.|#...#|#.###|#.#.#|#.###|#....|.####",
+    "`": ".#...|..#..|.....|.....|.....|.....|.....",
+    "~": ".....|.....|.#..#|#.##.|.....|.....|.....",
+
 };
 const GLYPH = {};
 for (const [ch, rows] of Object.entries(GLYPH_SRC)) {
@@ -841,25 +860,25 @@ function text(s, x, y, c, k = 1, shadow = C.textShadow) {
 /* --------------------------------------------------------------- layout */
 
 const COLS = 4, ROWS = 2, SEATS = COLS * ROWS;
-const STATION_W = 80, STATION_H = 72, FLOOR_Y = 48, WIN_Y = 192;
+const STATION_W = 120, STATION_H = 82, FLOOR_Y = 48, WIN_Y = 212;
 
 function seatGeom(i) {
     const col = i % COLS, row = (i / COLS) | 0;
-    return { col, row, sx: col * STATION_W, sy: FLOOR_Y + row * STATION_H };
+    return { col, row, sx: col * STATION_W + 20, sy: FLOOR_Y + row * STATION_H };
 }
 
 /* Feet positions from the door (under the message window) to a chair. */
 function pathTo(i) {
     const { sx, sy, col } = seatGeom(i);
-    const gap = col < COLS / 2 ? sx + STATION_W : sx;
+    const gap = (col + (col < COLS / 2 ? 1 : 0)) * STATION_W;
     const aisle = sy + 66;
-    return [[160, 262], [160, aisle], [gap, aisle], [gap, sy + 28], [sx + 40, sy + 28]];
+    return [[W/2, H+22], [W/2, aisle], [gap, aisle], [gap, sy + 28], [sx + 40, sy + 28]];
 }
 
 /* Where things sit inside an 80x72 station (offsets from its top-left). */
 const SIT_X = 32, SIT_Y = 6;            // seated base box
 const CHAIR_X = 30, CHAIR_Y = 2;
-const DESK_X = 12, DESK_Y = 30, DESK_W = 56;
+const DESK_X = -4, DESK_Y = 30, DESK_W = 88;
 const LID_X = 34, LID_Y = 24;
 
 const SEAT_PROPS = [
@@ -903,7 +922,7 @@ function drawWindow(x, y, w, h) {
  * summed. The board and its labels are background; drawTab() chalks up the
  * two values each frame. Its frame mirrors the window's across the wall, and
  * it is as narrow as "TOKENS" plus a 5-character count allows. */
-const TAB_X = 237, TAB_Y = 5, TAB_W = 74, TAB_H = 26;
+const TAB_X = 397, TAB_Y = 5, TAB_W = 74, TAB_H = 26;
 
 function drawChalkboard(x, y, w, h) {
     rect(x - 2, y - 2, w + 4, h + 4, C.frame);
@@ -957,11 +976,11 @@ function renderBackground() {
         px(x, y, c);
     }
     // a runner from the door up the centre aisle
-    rect(150, FLOOR_Y + 8, 20, H - FLOOR_Y - 8, C.runner);
-    for (let y = FLOOR_Y + 10; y < H; y += 6) rect(153, y, 14, 1, C.runnerHi);
-    rect(150, FLOOR_Y + 8, 1, H - FLOOR_Y - 8, C.runnerEdge);
-    rect(169, FLOOR_Y + 8, 1, H - FLOOR_Y - 8, C.runnerEdge);
-    rect(150, FLOOR_Y + 8, 20, 1, C.runnerEdge);
+    rect(230, FLOOR_Y + 8, 20, H - FLOOR_Y - 8, C.runner);
+    for (let y = FLOOR_Y + 10; y < H; y += 6) rect(233, y, 14, 1, C.runnerHi);
+    rect(230, FLOOR_Y + 8, 1, H - FLOOR_Y - 8, C.runnerEdge);
+    rect(249, FLOOR_Y + 8, 1, H - FLOOR_Y - 8, C.runnerEdge);
+    rect(230, FLOOR_Y + 8, 20, 1, C.runnerEdge);
     // wall shadow on the floor
     darken(0, FLOOR_Y, W, 2, 0.6);
     BG = new Uint8ClampedArray(FB);
@@ -971,7 +990,7 @@ function renderBackground() {
 
 const SIGN = 'TOKEN CAFE';
 function drawSign(t) {
-    const k = 2, w = textWidth(SIGN, k), x0 = (W - w) >> 1, y0 = 8;
+    const k = 3, w = textWidth(SIGN, k), x0 = (W - w) >> 1, y0 = 3;
     // a tube that dies for a moment now and then
     const cycle = t % 9000, dead = cycle > 7200 && cycle < 7700 && ((cycle / 90) | 0) % 2 === 0 ? 7 : -1;
     for (let pass = 0; pass < 2; pass++) {
@@ -986,9 +1005,14 @@ function drawSign(t) {
             }
         }
     }
-    const sub = 'OPEN 24H', sw = textWidth(sub);
-    const sx = (W - sw) >> 1;
-    text(sub, sx, y0 + 18, C.cyan, 1, C.cyanGlow);
+    // A tiny enamel sign, with a steady light and crisp lettering.
+    const sx = (W - 68) >> 1;
+    rect(sx, 25, 68, 10, C.cyanGlow);
+    rect(sx + 1, 26, 66, 8, BASE.K);
+    rect(sx + 4, 29, 2, 2, C.cyan);
+    text('OPEN', sx + 9, 26, C.cyan);
+    rect(sx + 36, 28, 1, 4, C.cyanGlow);
+    text('24H', sx + 42, 26, C.chalkHi);
 }
 
 function drawStars(t) {
@@ -1162,12 +1186,12 @@ function drawLaptop(sc, a, x, y) {
     rect(x - 1, y + 11, 15, 2, BASE.K);
     rect(x, y + 11, 13, 1, pal.l);
     let logo;
-    if (a.kind === 'codex') logo = PROMPT[a.state === 'work' ? ((sc.t / 450) | 0) % 2 : 1];
+    if (a.kind === 'codex') logo = a.state === 'work' ? CHATGPT_WORK[((sc.t / 260) | 0) % 6] : CHATGPT;
     else if (a.state === 'work') { const seq = [0, 1, 2, 3, 2, 1]; logo = SPARK[seq[((sc.t / 130) | 0) % seq.length]]; }
     else logo = SPARK[3];
     let lp = pal;
     if (a.state === 'wait' && ((sc.t / 300) | 0) % 2) lp = Object.assign({}, pal, { A: BASE.Y, a: BASE.W });
-    blit(logo, x + 3, y + 2, lp);
+    blit(logo, x + (a.kind === 'codex' ? 1 : 3), y + (a.kind === 'codex' ? 1 : 2), lp);
 }
 
 function drawPlate(sc, a, cx, y) {
@@ -1375,7 +1399,7 @@ function inventory() {
     Object.values(HEAD).forEach(add);
     Object.values(POSE).forEach(v => (Array.isArray(v) ? v.forEach(add) : add(v)));
     [CHAIR, LID, ZSMALL, ZBIG, CURSOR].forEach(add);
-    SPARK.forEach(add); PROMPT.forEach(add);
+    SPARK.forEach(add); add(CHATGPT); CHATGPT_WORK.forEach(add);
     Object.values(PROPS).forEach(add); Object.values(BUBBLE).forEach(add); Object.values(ICON).forEach(add);
     return all.map(s => ({ name: s.name, w: s.w, h: s.h, bytes4bpp: Math.ceil((s.w * s.h) / 2) }));
 }
@@ -1395,7 +1419,7 @@ function exportAssets() {
         PANTS: PANTS.map(q), CHAIRS: CHAIRS.map(p => p.map(q)),
         LOOK_V: q('#f4f2ec'), LOOK_F: q('#3a2420'), IDLE_TEXT: q('#7a7068'),
         ICON_LAPTOP_A: q('#9ad0ff'), ICON_LAPTOP_a: q('#3a70c0'),
-        HEAD, POSES, CHAIR, LID, SPARK, PROMPT, PROPS, BUBBLE, ZSMALL, ZBIG, KEYS, CURSOR, ICON, GLYPH, bg,
+        HEAD, POSES, CHAIR, LID, SPARK, CHATGPT, CHATGPT_WORK, PROPS, BUBBLE, ZSMALL, ZBIG, KEYS, CURSOR, ICON, GLYPH, bg,
     };
 }
 

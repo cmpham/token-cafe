@@ -1,0 +1,129 @@
+{
+  "result": "PASS",
+  "checks": [
+    "idle sleep",
+    "automatic wake",
+    "30-second pulse window",
+    "steady text",
+    "acknowledgement",
+    "next waiting patron",
+    "view without approval",
+    "resolved markers",
+    "60-second wake hold",
+    "duplicate suppression",
+    "replacement request wake",
+    "acknowledge during active pulse",
+    "active patron highlight",
+    "matching review portrait",
+    "single-waiter Next disabled"
+  ],
+  "captures": [
+    {
+      "state": "01-working",
+      "time_ms": 10000,
+      "sleeping": false,
+      "file": "attention-01-working.ppm"
+    },
+    {
+      "state": "02-sleeping",
+      "time_ms": 600000,
+      "sleeping": true,
+      "file": "attention-02-sleeping.ppm"
+    },
+    {
+      "state": "03-new-request-bright",
+      "time_ms": 600000,
+      "sleeping": false,
+      "file": "attention-03-new-request-bright.ppm"
+    },
+    {
+      "state": "04-new-request-dim",
+      "time_ms": 600600,
+      "sleeping": false,
+      "file": "attention-04-new-request-dim.ppm"
+    },
+    {
+      "state": "05-steady-reminder",
+      "time_ms": 630000,
+      "sleeping": false,
+      "file": "attention-05-steady-reminder.ppm"
+    },
+    {
+      "state": "06-acknowledged",
+      "time_ms": 630030,
+      "sleeping": false,
+      "file": "attention-06-acknowledged.ppm"
+    },
+    {
+      "state": "07-next-question",
+      "time_ms": 630060,
+      "sleeping": false,
+      "file": "attention-07-next-question.ppm"
+    },
+    {
+      "state": "08-review",
+      "time_ms": 630620,
+      "sleeping": false,
+      "file": "attention-08-review.ppm"
+    },
+    {
+      "state": "08b-review-ready",
+      "time_ms": 631220,
+      "sleeping": false,
+      "file": "attention-08b-review-ready.ppm"
+    },
+    {
+      "state": "09-resolved",
+      "time_ms": 631250,
+      "sleeping": false,
+      "file": "attention-09-resolved.ppm"
+    },
+    {
+      "state": "09b-last-request",
+      "time_ms": 635350,
+      "sleeping": false,
+      "file": "attention-09b-last-request.ppm"
+    },
+    {
+      "state": "09c-current-task",
+      "time_ms": 635350,
+      "sleeping": false,
+      "file": "attention-09c-current-task.ppm"
+    },
+    {
+      "state": "10-replacement-wakes",
+      "time_ms": 1296350,
+      "sleeping": false,
+      "file": "attention-10-replacement-wakes.ppm"
+    },
+    {
+      "state": "11-early-acknowledgement",
+      "time_ms": 1296410,
+      "sleeping": false,
+      "file": "attention-11-early-acknowledgement.ppm"
+    }
+  ],
+  "actions": [
+    {
+      "kind": 1,
+      "session": "claude:qa"
+    },
+    {
+      "kind": 1,
+      "session": "codex:qa-4"
+    },
+    {
+      "kind": 1,
+      "session": "claude:qa"
+    },
+    {
+      "kind": 2,
+      "session": "claude:qa"
+    },
+    {
+      "kind": 3,
+      "session": ""
+    }
+  ],
+  "sleep_display": "QEMU-only adapter blacks out the emulated panel from the shared engine sleep flag"
+}

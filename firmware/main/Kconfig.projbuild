@@ -1,0 +1,5 @@
+menu "Token Cafe"
+config TC_HEADLESS
+    bool "Physical board bring-up without a display"
+    default n
+endmenu

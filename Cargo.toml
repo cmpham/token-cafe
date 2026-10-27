@@ -4,7 +4,12 @@ version = "0.1.0"
 edition = "2024"
 description = "The Claude Code and Codex sessions on this machine as patrons of a JRPG-style night net café, in a desktop window"
 
+[workspace]
+members = ["crates/cafe-ui", "crates/companion-core"]
+
 [dependencies]
+cafe-ui = { path = "crates/cafe-ui" }
+companion-core = { path = "crates/companion-core" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 libc = "0.2"
 memchr = "2"
@@ -13,9 +18,53 @@ serde_json = "1"
 softbuffer = "0.4"
 winit = "0.30"
 
+[features]
+default = ["bluetooth"]
+bluetooth = ["dep:btleplug", "dep:tokio", "dep:futures", "dep:uuid", "dep:crc32fast", "dep:hmac", "dep:sha2"]
+
+[dependencies.btleplug]
+version = "0.11.8"
+optional = true
+
+[dependencies.tokio]
+version = "1"
+features = ["rt-multi-thread", "time", "sync", "macros"]
+optional = true
+
+[dependencies.futures]
+version = "0.3"
+optional = true
+
+[dependencies.uuid]
+version = "=1.18.1"
+optional = true
+
+[dependencies.crc32fast]
+version = "1"
+optional = true
+
+[dependencies.hmac]
+version = "0.12"
+optional = true
+
+[dependencies.sha2]
+version = "0.10"
+optional = true
+
 [profile.dev]
 opt-level = 1       # the renderer is per-pixel; unoptimized frames are slow
 
 [dev-dependencies]
 gif = "0.14.2"
 png = "0.18.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.2.2", default-features = false, features = ["NSEvent", "NSView", "NSWindow"] }
+
+[[example]]
+name = "protocol_board_qa"
+required-features = ["bluetooth"]
+
+[[example]]
+name = "codex_bridge_qa"
+required-features = ["bluetooth"]

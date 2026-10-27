@@ -1,0 +1,9 @@
+menu "Token Cafe companion"
+config TC_BOARD_JC4827W543
+    bool "JC4827W543 NV3041A display and GT911 touch"
+    default n
+config TC_QA_USB
+    bool "Local USB injection and framebuffer capture for QA"
+    depends on TC_BOARD_JC4827W543
+    default n
+endmenu

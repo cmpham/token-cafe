@@ -56,3 +56,7 @@ Changed the current desktop detail layer to 2×: 64×64 patron cells and a 640×
 ## Laptop logo occlusion repair
 
 Reproduced the reported cracks: the creature contact-strip pass overwrote laptop lid pixels. Moved that pass before laptop rendering; held cups and keyboard paws retain their foreground pass. A regression compares the entire laptop lid against isolated laptop rendering for all 16 creatures, four timestamps and both render resolutions; it failed before the fix and now passes. All 22 tests and strict Clippy pass. Rebuilt the macOS app and regenerated the 2× previews; visually reviewed both rosters’ wave/sip boards for intact logos and preserved cups.
+
+## Fork integration
+
+Integrated the complete cmpham branch through 6b43472. Rendering now lives in crates/cafe-ui with 480×272 logical coordinates; desktop 2× output is 960×544. Rebuilt full-source patron assets remain 64×64. P changes rosters, C selects a character seat, brackets change its character; Tab retains session focus navigation. Creature portraits are used in the footer and review, and the inherited animated Codex logo is retained. Semantic firmware keeps its native human roster; desktop-only patron assets are excluded from no_std builds. Legacy mirrored frames retain their native dimensions and fingerprint buffer. The renderer digest changed, so semantic desktop/board versions must be updated together. No physical device validation was performed for this integration.

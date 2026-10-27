@@ -1,9 +1,9 @@
-// Generate src/assets.rs and src/bg.rgb from design/cafe.js, the single
+// Generate crates/cafe-ui/src/assets.rs and bg.rgb from design/cafe.js, the single
 // source of the art.
 //   node tools/gen_assets.mjs
 // Sprites become slot-indexed bytes (one slot per palette character, 0 =
 // transparent); colours become 0xRRGGBB as the design defines them; the
-// static room (background + empty message window) becomes a 320x240 RGB
+// static room (background + empty message window) becomes a 480x272 RGB
 // image next to the module.
 import { createRequire } from 'module';
 import fs from 'fs';
@@ -24,7 +24,8 @@ const add = (name, s) => { sprites.push([name, s]); return name; };
 for (const [k, s] of Object.entries(A.HEAD)) add(`HEAD_${scream(k)}`, s);
 add('CHAIR', A.CHAIR); add('LID', A.LID);
 A.SPARK.forEach((s, i) => add(`SPARK_${i}`, s));
-A.PROMPT.forEach((s, i) => add(`PROMPT_${i}`, s));
+add('CHATGPT', A.CHATGPT);
+A.CHATGPT_WORK.forEach((s, i) => add(`CHATGPT_WORK_${i}`, s));
 for (const [k, s] of Object.entries(A.PROPS)) add(`PROP_${scream(k)}`, s);
 for (const [k, s] of Object.entries(A.BUBBLE)) add(`BUBBLE_${scream(k)}`, s);
 add('ZSMALL', A.ZSMALL); add('ZBIG', A.ZBIG);
@@ -90,7 +91,8 @@ for (const [name] of sprites) {
 R.push('');
 const group = (name, prefix, n) => R.push(`pub static ${name}: [Sprite; ${n}] = [${Array.from({ length: n }, (_, i) => `${prefix}_${i}`).join(', ')}];`);
 group('SPARK', 'SPARK', A.SPARK.length);
-group('PROMPT', 'PROMPT', A.PROMPT.length);
+group('CHATGPT_WORK', 'CHATGPT_WORK', A.CHATGPT_WORK.length);
+
 group('KEYS', 'KEY', A.KEYS.length);
 R.push('');
 
@@ -138,7 +140,7 @@ R.push('pub static BG: &[u8; W * H * 3] = include_bytes!("bg.rgb");', '');
 const bg = Buffer.alloc(A.W * A.H * 3);
 for (let p = 0; p < A.W * A.H; p++) for (let c = 0; c < 3; c++) bg[p * 3 + c] = A.bg[p * 4 + c];
 
-const out = path.join(here, '../src');
+const out = path.join(here, '../crates/cafe-ui/src');
 fs.writeFileSync(path.join(out, 'assets.rs'), R.join('\n'));
 fs.writeFileSync(path.join(out, 'bg.rgb'), bg);
 console.log(`assets: ${sprites.length} sprites, ${slots.length} slots, font ${has.filter(Boolean).length} glyphs, bg ${A.W}x${A.H}`);

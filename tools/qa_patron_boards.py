@@ -10,9 +10,9 @@ for roster in ['dragons','pokemon']:
    d.text((col*240+5,8),f'{roster} {action} {phase}',fill='white')
    im=Image.open(root/f'{roster}-{action}-{phase}.png')
    for seat in range(8):
-    x=(seat%4)*80;y=48+(seat//4)*72
-    k=im.width//320
-    crop=im.crop((x*k,(y-5)*k,(x+80)*k,(y+50)*k)).resize((240,165),Image.Resampling.NEAREST)
+    x=(seat%4)*120+20;y=48+(seat//4)*82
+    k=im.width//480
+    crop=im.crop((x*k,(y+7)*k,(x+80)*k,(y+62)*k)).resize((240,165),Image.Resampling.NEAREST)
     board.paste(crop,(col*240,seat*165+30))
   board.save(root/f'{roster}-{pair[0]}-{pair[1]}-board.png')
  for kind in ['arrival','departure']:

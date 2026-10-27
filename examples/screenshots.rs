@@ -14,7 +14,17 @@ use token_cafe::scene::{ForcedPose, Kind, Scene, Session, State, Usage, Why};
 const STEP: u32 = 20; // ms per scene tick
 
 fn s(id: &str, name: &str, kind: Kind, state: State, why: Why, pose: ForcedPose, age_s: u32) -> Session {
-    Session { id: id.into(), name: name.into(), kind, state, why, pose, age_s }
+    Session {
+        id: id.into(),
+        name: name.into(),
+        kind,
+        state,
+        why,
+        pose,
+        age_s,
+        branch: Some("feature/moon-cafe".into()),
+        active_subagents: Some(2),
+    }
 }
 
 fn run(scene: &mut Scene, ms: u32) {
@@ -113,6 +123,77 @@ fn gif(path: &str, frames: &[Vec<u8>], k: usize, delay_cs: u16) {
 
 fn main() {
     use {ForcedPose as P, Kind::*, State::*};
+    if std::env::args().any(|arg| arg == "--logo") {
+        let now = NaiveTime::from_hms_opt(21, 47, 0).unwrap();
+        let mut scene = Scene::new();
+        scene.set_sessions(&[
+            s("logo-claude", "Claude", Claude, Work, Why::None, P::Auto, 0),
+            s("logo-codex", "Codex", Codex, Work, Why::None, P::Auto, 0),
+        ]);
+        run(&mut scene, 2000);
+        let mut frames = Vec::new();
+        for _ in 0..24 {
+            frames.push(rgb(&scene, now, 3));
+            scene.tick(130);
+        }
+        gif("docs/logo-animation.gif", &frames, 3, 13);
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--attention") {
+        let now = NaiveTime::from_hms_opt(21, 47, 0).unwrap();
+        let mut scene = Scene::new();
+        let mut sessions = vec![
+            s("checkout", "checkout-flow", Claude, Work, Why::None, P::Auto, 0),
+            s("infra", "infra", Codex, Work, Why::None, P::Auto, 0),
+            s("docs", "docs", Claude, Work, Why::None, P::Auto, 0),
+            s("web", "web-app", Codex, Idle, Why::None, P::Sip, 0),
+        ];
+        scene.set_sessions(&sessions);
+        scene.set_usage(Usage { tokens: 14_900_000.0, usd: 6.5 });
+        run(&mut scene, 2000);
+        sessions[0].state = Wait;
+        sessions[0].why = Why::Perm;
+        sessions[1].state = Wait;
+        sessions[1].why = Why::Ask;
+        scene.set_sessions(&sessions);
+        scene.set_requests(vec![token_cafe::approval::Request {
+            choices: 0,
+            id: "preview-approval".into(),
+            session: "checkout".into(),
+            title: "Run tests".into(),
+            tool_name: "Bash".into(),
+            text: "May I run the test suite?".into(),
+        }]);
+        png("docs/attention.png", &rgb(&scene, now, 3), 3);
+        let mut frames = Vec::new();
+        // Sample each blink phase through the full 30-second window and its steady tail.
+        for _ in 0..55 {
+            frames.push(rgb(&scene, now, 2));
+            run(&mut scene, 600);
+        }
+        gif("docs/attention.gif", &frames, 2, 60);
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--monologues") {
+        let now = NaiveTime::from_hms_opt(21, 47, 0).unwrap();
+        let mut scene = Scene::new();
+        let mut moon = s("moon", "moon-cafe", Codex, Work, Why::None, P::Auto, 0);
+        moon.branch = Some("feature/a-long-branch-name-that-wraps-onto-the-second-line".into());
+        scene.set_sessions(&[moon, s("stars", "star-charts", Claude, Work, Why::None, P::Auto, 0)]);
+        let mut frames = Vec::new();
+        for i in 0..300 {
+            run(&mut scene, 100);
+            frames.push(rgb(&scene, now, 3));
+            if i == 110 {
+                png("target/monologue-branch.png", frames.last().unwrap(), 3);
+            }
+            if i == 210 {
+                png("target/monologue-agents.png", frames.last().unwrap(), 3);
+            }
+        }
+        gif("target/monologues.gif", &frames, 3, 10);
+        return;
+    }
     std::fs::create_dir_all("docs").unwrap();
     let late = NaiveTime::from_hms_opt(21, 47, 0).unwrap();
     let usage = Usage { tokens: 1_624_000_000.0, usd: 693.70 };
