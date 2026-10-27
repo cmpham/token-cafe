@@ -7,10 +7,10 @@ mod info;
 pub use info::SessionInfo;
 #[cfg(target_os = "macos")]
 #[path = "macos.rs"]
-mod process;
+pub(crate) mod process;
 #[cfg(not(target_os = "macos"))]
 #[path = "procfs.rs"]
-mod process;
+pub(crate) mod process;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -34,6 +34,7 @@ struct Found {
     target: Option<crate::scene::SessionTarget>,
     cwd: String,
     active_subagents: Option<usize>,
+    claude_identity: Option<claude::Identity>,
 }
 
 #[derive(Default)]
@@ -136,6 +137,21 @@ fn session_identity_uses_full_id_and_provider() {
 /// The last path component ('' after a trailing '/').
 fn basename(p: &str) -> &str {
     p.rsplit('/').next().unwrap_or(p)
+}
+
+/// Filter before decoding or retaining values; never return the full environment.
+fn selected_environment(raw: &[u8], keys: &[&str]) -> Vec<(String, String)> {
+    raw.split(|&b| b == 0)
+        .filter_map(|field| {
+            let split = field.iter().position(|&b| b == b'=')?;
+            let key = std::str::from_utf8(&field[..split]).ok()?;
+            if !keys.contains(&key) {
+                return None;
+            }
+            let value = std::str::from_utf8(&field[split + 1..]).ok()?;
+            Some((key.to_owned(), value.to_owned()))
+        })
+        .collect()
 }
 
 #[cfg(test)]

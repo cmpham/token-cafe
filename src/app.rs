@@ -353,7 +353,6 @@ pub fn run(
 }
 
 /// Launch only on macOS; other platforms keep selection without attempting Mac URLs.
-#[cfg(any(target_os = "macos", feature = "bluetooth"))]
 fn open_session(url: String) {
     #[cfg(target_os = "macos")]
     std::thread::spawn(move || match std::process::Command::new("/usr/bin/open").arg(&url).status() {
@@ -373,6 +372,15 @@ impl App {
             self.update_window_appearance(true);
         }
         {
+            if self.scene.usage_is_open() {
+                self.scene.click(x, y);
+                return;
+            }
+            if let Some(url) = self.scene.activate_terminal_patron(x, y) {
+                self.double_click = DoubleClick::default();
+                open_session(url);
+                return;
+            }
             let id = self.scene.interaction_id(x, y);
             if self.double_click.click(id.as_deref(), x, y, Instant::now(), self.double_click_interval) {
                 let url = if self.scene.review.is_some() || y >= token_cafe::assets::WIN_Y {
@@ -445,6 +453,8 @@ impl App {
                 Update::Sessions(list) => self.provider_sessions = list,
                 Update::Details(details) => self.scene.set_details(details),
                 Update::Usage(u) => self.scene.set_usage(u),
+                Update::UsageRows(rows) => self.scene.set_usage_rows(rows),
+                Update::UsageAccounts(rows) => self.scene.set_usage_accounts(rows),
             }
         }
         let requests = self.approvals.as_ref().map_or_else(Vec::new, |b| b.requests());
@@ -601,6 +611,8 @@ impl App {
         let Some(s) = &self.shown else { return };
         match key.as_ref() {
             Key::Character("q") => el.exit(),
+            Key::Character("u" | "U") => self.scene.toggle_usage(),
+            Key::Character("a" | "A") => self.scene.toggle_usage_accounts(),
             Key::Character("t" | "T") if self.pinning_supported => {
                 self.always_on_top = !self.always_on_top;
                 s.window.set_window_level(self.window_level());

@@ -4,6 +4,7 @@
 
 pub use cafe_ui::{assets, gfx, review, scene};
 pub mod approval;
+mod claude_config;
 pub mod collect;
 pub mod usage;
 

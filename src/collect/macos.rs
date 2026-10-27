@@ -96,7 +96,7 @@ pub fn cwd(pid: u32) -> Option<PathBuf> {
     path(info.pvi_cdir.vip_path.into_iter().flatten())
 }
 
-pub fn args(pid: u32) -> Option<Vec<String>> {
+fn proc_args(pid: u32) -> Option<Vec<u8>> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, i32::try_from(pid).ok()?];
     let mut size = 0;
     // SAFETY: mib and size are valid; a null output requests the required size.
@@ -110,7 +110,37 @@ pub fn args(pid: u32) -> Option<Vec<String>> {
         return None;
     }
     buffer.truncate(size);
-    parse_args(&buffer)
+    Some(buffer)
+}
+
+pub fn args(pid: u32) -> Option<Vec<String>> {
+    parse_args(&proc_args(pid)?)
+}
+
+/// Only retain explicitly requested non-secret environment fields.
+pub fn environment(pid: u32, keys: &[&str]) -> Vec<(String, String)> {
+    proc_args(pid).map(|raw| parse_environment(&raw, keys)).unwrap_or_default()
+}
+
+fn environment_offset(buffer: &[u8]) -> Option<&[u8]> {
+    let argc = i32::from_ne_bytes(buffer.get(..4)?.try_into().ok()?);
+    if argc <= 0 {
+        return None;
+    }
+    let rest = buffer.get(4..)?;
+    let end = rest.iter().position(|&b| b == 0)?;
+    let rest = &rest[end..];
+    let first = rest.iter().position(|&b| b != 0)?;
+    let mut rest = &rest[first..];
+    for _ in 0..argc {
+        let end = rest.iter().position(|&b| b == 0)?;
+        rest = &rest[end + 1..];
+    }
+    Some(rest)
+}
+
+fn parse_environment(buffer: &[u8], keys: &[&str]) -> Vec<(String, String)> {
+    environment_offset(buffer).map(|raw| super::selected_environment(raw, keys)).unwrap_or_default()
 }
 
 fn parse_args(buffer: &[u8]) -> Option<Vec<String>> {
@@ -192,6 +222,19 @@ pub fn open_files(pid: u32) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environment_allowlist_starts_after_all_arguments() {
+        let mut raw = 3i32.to_ne_bytes().to_vec();
+        raw.extend_from_slice(b"/bin/claude\0\0claude\0CLAUDE_CONFIG_DIR=/wrong\0\0CLAUDE_CONFIG_DIR=/work account\0CLAUDE_CODE_ACCOUNT_UUID=user\0CLAUDE_CODE_OAUTH_TOKEN=secret\0");
+        let env = parse_environment(&raw, crate::claude_config::IDENTITY_KEYS);
+        assert_eq!(
+            env,
+            [("CLAUDE_CONFIG_DIR".into(), "/work account".into()), ("CLAUDE_CODE_ACCOUNT_UUID".into(), "user".into())]
+        );
+        assert!(parse_environment(&raw[..20], crate::claude_config::IDENTITY_KEYS).is_empty());
+        assert!(parse_environment(&[], crate::claude_config::IDENTITY_KEYS).is_empty());
+    }
 
     #[test]
     fn argument_boundaries_exclude_environment() {

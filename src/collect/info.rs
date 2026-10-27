@@ -41,6 +41,24 @@ impl SessionInfo {
         let v = &self.0;
         let task =
             v["question"].as_str().or_else(|| v["task"]["text"].as_str()).unwrap_or("TASK UNAVAILABLE").to_owned();
+        let task = if let Some(surface) = v["claude"]["surface"].as_str() {
+            let label = match surface {
+                "desktop" => "CLAUDE DESKTOP",
+                "cli" => "CLAUDE CLI",
+                _ => "CLAUDE",
+            };
+            let account = &v["claude"]["account"];
+            let org = account["organization_id"].as_str().filter(|s| !s.is_empty());
+            let scope = org
+                .map(|org| {
+                    let hint = if account["source"] == "current_config" { "CURRENT ORG" } else { "ORG" };
+                    format!(" / {hint} {}", org.chars().take(8).collect::<String>().to_uppercase())
+                })
+                .unwrap_or_default();
+            format!("{label}{scope}: {task}")
+        } else {
+            task
+        };
         crate::scene::SessionDetail { target: None, id: id.to_owned(), task }
     }
 
@@ -404,18 +422,18 @@ impl Transcript {
 #[derive(Default)]
 pub(super) struct InfoCache {
     files: HashMap<(PathBuf, String), Transcript>,
-    claude_paths: HashMap<String, Vec<PathBuf>>,
-    indexed: Option<Instant>,
+    claude_paths: HashMap<(PathBuf, String), Vec<PathBuf>>,
+    indexed: HashMap<PathBuf, Instant>,
 }
 impl InfoCache {
-    fn claude_path(&mut self, id: &str) -> Option<PathBuf> {
+    fn claude_path(&mut self, root: &Path, id: &str) -> Option<PathBuf> {
         if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
             return None;
         }
-        if self.indexed.is_none_or(|t| t.elapsed() >= Duration::from_secs(5)) {
-            self.claude_paths.clear();
+        if self.indexed.get(root).is_none_or(|t| t.elapsed() >= Duration::from_secs(5)) {
+            self.claude_paths.retain(|(dir, _), _| dir != root);
             // Only top-level project transcripts; never traverse subagents or parse saved history.
-            if let Ok(projects) = fs::read_dir(claude_dir().join("projects")) {
+            if let Ok(projects) = fs::read_dir(root.join("projects")) {
                 for p in projects.flatten() {
                     if !p.file_type().is_ok_and(|t| t.is_dir()) {
                         continue;
@@ -426,15 +444,15 @@ impl InfoCache {
                             if path.extension().is_some_and(|x| x == "jsonl")
                                 && let Some(id) = path.file_stem().and_then(|s| s.to_str())
                             {
-                                self.claude_paths.entry(id.to_owned()).or_default().push(path);
+                                self.claude_paths.entry((root.to_owned(), id.to_owned())).or_default().push(path);
                             }
                         }
                     }
                 }
             }
-            self.indexed = Some(Instant::now());
+            self.indexed.insert(root.to_owned(), Instant::now());
         }
-        let paths = self.claude_paths.get(id)?;
+        let paths = self.claude_paths.get(&(root.to_owned(), id.to_owned()))?;
         // Ambiguous copies are safer to report as unavailable than attribute to the wrong project.
         (paths.len() == 1).then(|| paths[0].clone())
     }
@@ -442,7 +460,12 @@ impl InfoCache {
         let mut used = HashSet::new();
         let mut result = Vec::new();
         for f in found {
-            let path = if f.kind == Kind::Claude { self.claude_path(&f.session_id) } else { f.transcript.clone() };
+            let path = if f.kind == Kind::Claude {
+                let root = f.claude_identity.as_ref().map(|i| i.config_dir.clone()).unwrap_or_else(claude_dir);
+                self.claude_path(&root, &f.session_id)
+            } else {
+                f.transcript.clone()
+            };
             let key = path.as_ref().map(|p| (p.clone(), f.session_id.clone()));
             let transcript = key.as_ref().and_then(|key| {
                 used.insert(key.clone());
@@ -479,6 +502,8 @@ impl InfoCache {
                 (None, None, None, None)
             };
             result.push(SessionInfo(json!({
+                "claude": f.claude_identity.as_ref().map(|i| i.json()),
+                "navigation": f.target.as_ref().and_then(crate::scene::SessionTarget::url),
                 "id":f.session_id, "kind": if f.kind==Kind::Codex {"codex"} else {"claude"},
                 "title":excerpt(&f.name), "project":f.project,
                 "state":match f.state {State::Work=>"work",State::Idle=>"idle",State::Wait=>"wait"},
@@ -526,6 +551,7 @@ mod tests {
     }
     fn found(path: &Path) -> Found {
         Found {
+            claude_identity: None,
             cwd: String::new(),
             active_subagents: None,
             target: None,
@@ -589,8 +615,8 @@ mod tests {
                 json!({"type":"assistant","message":{"content":[{"type":"text","text":"Say the word and I will proceed."}]}}),
             ],
         );
-        let mut cache = InfoCache { indexed: Some(Instant::now()), ..Default::default() };
-        cache.claude_paths.insert("root".into(), vec![path.clone()]);
+        let mut cache = InfoCache { indexed: HashMap::from([(claude_dir(), Instant::now())]), ..Default::default() };
+        cache.claude_paths.insert((claude_dir(), "root".into()), vec![path.clone()]);
         for (state, expected) in [(State::Idle, State::Wait), (State::Work, State::Work), (State::Wait, State::Wait)] {
             let mut f = found(&path);
             f.kind = Kind::Claude;
@@ -787,13 +813,58 @@ mod tests {
 
     #[test]
     fn claude_path_mapping_requires_unique_exact_session_identity() {
-        let mut cache = InfoCache { indexed: Some(Instant::now()), ..Default::default() };
-        cache.claude_paths.insert("root".into(), vec![PathBuf::from("/projects/moon/root.jsonl")]);
-        assert!(cache.claude_path("missing").is_none());
-        assert!(cache.claude_path("../root").is_none());
-        assert_eq!(cache.claude_path("root").unwrap(), Path::new("/projects/moon/root.jsonl"));
-        cache.claude_paths.get_mut("root").unwrap().push(PathBuf::from("/projects/copy/root.jsonl"));
-        assert!(cache.claude_path("root").is_none());
+        let mut cache = InfoCache { indexed: HashMap::from([(claude_dir(), Instant::now())]), ..Default::default() };
+        cache.claude_paths.insert((claude_dir(), "root".into()), vec![PathBuf::from("/projects/moon/root.jsonl")]);
+        assert!(cache.claude_path(&claude_dir(), "missing").is_none());
+        assert!(cache.claude_path(&claude_dir(), "../root").is_none());
+        assert_eq!(cache.claude_path(&claude_dir(), "root").unwrap(), Path::new("/projects/moon/root.jsonl"));
+        cache
+            .claude_paths
+            .get_mut(&(claude_dir(), "root".into()))
+            .unwrap()
+            .push(PathBuf::from("/projects/copy/root.jsonl"));
+        assert!(cache.claude_path(&claude_dir(), "root").is_none());
+    }
+
+    #[test]
+    fn claude_transcripts_are_scoped_to_the_live_config_root() {
+        let dir = TestDir::new();
+        let a = dir.0.join("personal");
+        let b = dir.0.join("work");
+        for (root, text) in [(&a, "Personal task"), (&b, "Work task")] {
+            let project = root.join("projects/moon");
+            fs::create_dir_all(&project).unwrap();
+            write(
+                &project.join("shared.jsonl"),
+                &[json!({"type":"user", "sessionId":"shared", "message":{"content":text}})],
+            );
+        }
+        let mut cache = InfoCache::default();
+        let path_a = cache.claude_path(&a, "shared").unwrap();
+        let path_b = cache.claude_path(&b, "shared").unwrap();
+        assert_ne!(path_a, path_b);
+        let mut ta = Transcript::default();
+        let mut tb = Transcript::default();
+        ta.read(&path_a, Kind::Claude, "shared").unwrap();
+        tb.read(&path_b, Kind::Claude, "shared").unwrap();
+        assert_eq!(ta.task.unwrap().text, "Personal task");
+        assert_eq!(tb.task.unwrap().text, "Work task");
+        fs::create_dir_all(a.join("projects/copy")).unwrap();
+        fs::copy(&path_a, a.join("projects/copy/shared.jsonl")).unwrap();
+        cache.indexed.remove(&a);
+        assert!(cache.claude_path(&a, "shared").is_none());
+        assert_eq!(cache.claude_path(&b, "shared").unwrap(), path_b);
+    }
+
+    #[test]
+    fn focus_panel_distinguishes_live_identity_from_current_cli_hint() {
+        let row = |source| {
+            SessionInfo(
+                json!({"claude":{"surface":"cli", "account":{"organization_id":"12345678-abcd", "source":source}},"task":{"text":"Fix moon"}}),
+            )
+        };
+        assert_eq!(row("current_config").display("id").task, "CLAUDE CLI / CURRENT ORG 12345678: Fix moon");
+        assert_eq!(row("process_environment").display("id").task, "CLAUDE CLI / ORG 12345678: Fix moon");
     }
 
     #[test]
