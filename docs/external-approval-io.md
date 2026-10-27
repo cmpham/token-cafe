@@ -37,7 +37,7 @@ bash tools/qemu_v2.sh board-io-flash /dev/cu.YOUR_PORT
 ```
 
 The LCD must say `LED / BUTTON WIRING TEST` and `APPROVALS DISABLED`.
-The external LED blinks while released and stays on while held. The LCD changes
+The external LED is off while released and on while held. The LCD changes
 between `BUTTON: RELEASED` and `BUTTON: PRESSED`. Serial at 115200 baud logs
 `EXT_IO: BUTTON PRESSED` and `EXT_IO: BUTTON RELEASED` after debouncing.
 A switch held at startup is visible in the diagnostic, but cannot generate a

@@ -375,7 +375,7 @@ pub unsafe extern "C" fn cafe_engine_io_diagnostic(e: *mut Engine, out: *mut u16
         ("LED / BUTTON WIRING TEST", 40),
         ("APPROVALS DISABLED", 85),
         (if pressed { "BUTTON: PRESSED" } else { "BUTTON: RELEASED" }, 135),
-        ("LED BLINKS; HOLD BUTTON = SOLID", 185),
+        ("PRESS = LED ON; RELEASE = LED OFF", 185),
     ] {
         g.text(text, 24, y, 0xffd352, 1, None);
     }

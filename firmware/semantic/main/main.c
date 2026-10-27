@@ -115,8 +115,8 @@ static void external_io_diagnostic(void) {
  for(;;){uint64_t now=now_ms();
   if(external_button_sample(&button,gpio_get_level(APPROVAL_BUTTON)==0,now))
    ESP_LOGI("EXT_IO","BUTTON %s",button.stable?"PRESSED":"RELEASED");
-  // Blink when released, solid while held. Input still requires release after boot.
-  ESP_ERROR_CHECK(gpio_set_level(APPROVAL_LED,button.stable||((now/500)%2)));
+  // Direct wiring test: off when released, on while held.
+  ESP_ERROR_CHECK(gpio_set_level(APPROVAL_LED,button.stable));
   if(!drawn||last!=button.stable){last=button.stable;drawn=true;
    cafe_engine_io_diagnostic(engine,frame,last);board_present((uint8_t *)frame);}
   vTaskDelay(pdMS_TO_TICKS(5));
