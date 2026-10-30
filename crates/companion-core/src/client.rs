@@ -94,6 +94,7 @@ pub struct Client {
     last_touch: u64,
     attention_identities: BTreeMap<String, Vec<u8>>,
     attention_awake_until: u64,
+    attention_acknowledged: bool,
     rendered_identity: Vec<u8>,
     review_identity: Vec<u8>,
     displayed_at: Option<u64>,
@@ -133,6 +134,7 @@ impl Client {
             last_touch: now,
             attention_identities: BTreeMap::new(),
             attention_awake_until: 0,
+            attention_acknowledged: false,
             rendered_identity: Vec::new(),
             review_identity: Vec::new(),
             displayed_at: None,
@@ -408,6 +410,7 @@ impl Client {
         }
         self.attention_identities = identities;
         if new_attention {
+            self.attention_acknowledged = false;
             self.attention_awake_until = now.saturating_add(60_000);
             self.sleeping = false;
             self.approval_button_contact = None;
@@ -751,7 +754,10 @@ impl Client {
     }
     /// Attention indicator includes questions and requests that require desktop input.
     pub fn approval_waiting(&self) -> bool {
-        self.connected && self.replica.ready && self.replica.model.sessions.values().any(|s| self.needs_attention(s))
+        self.connected
+            && self.replica.ready
+            && !self.attention_acknowledged
+            && self.replica.model.sessions.values().any(|s| self.needs_attention(s))
     }
     fn approval_button_target(&self, now: u64, releasing: bool) -> Target {
         if !self.connected || !self.replica.ready || self.sleeping || self.contact.is_some() {
@@ -939,6 +945,13 @@ impl Client {
         now: u64,
         persist: &mut impl FnMut(&[Receipt]) -> bool,
     ) -> Result<()> {
+        // The external LED asks for the user's attention, rather than indicating
+        // unresolved work. A completed click acknowledges the current alert batch.
+        // A newly observed waiting identity rearms it in sync(); model refreshes
+        // and repeated clicks on the same unresolved item do not.
+        if target != Target::None {
+            self.attention_acknowledged = true;
+        }
         let view_request = matches!(target, Target::ViewRequest(_));
         match target {
             Target::Patron(id) => {

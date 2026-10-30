@@ -9,14 +9,16 @@ Check switch terminal pairs and disconnect USB/battery before changing wiring.
 ## Production behaviour
 
 The LED blinks at 1 Hz (500 ms on, 500 ms off) whenever a session needs
-attention: approvals, questions, and desktop-only waiting items. Opening the
-app does not clear the alert; it clears when the item resolves. Submitted
-board decisions, disconnected and unsynchronized states do not light it.
+attention: approvals, questions, and desktop-only waiting items. A completed
+physical click or on-screen selection acknowledges the current alert and stops
+the LED, even while an item remains unresolved. A newly observed waiting request
+rearms it; a refresh of the same item does not. Submitted board decisions,
+disconnected and unsynchronized states do not light it.
 
 For questions and desktop-only requests, briefly press and release the button
 to open the associated desktop app and complete the action there. This works
 from the cafe or the item's review screen. If no desktop link is available,
-the button opens details on the board; the LED continues to signal attention.
+the button opens details on the board and acknowledges the alert.
 
 The happy path requires no touchscreen:
 
@@ -172,3 +174,20 @@ to `/dev/cu.usbmodem101` with esptool hash verification; QA injection and wiring
 diagnostic modes are disabled. The existing companion reconnected and reported
 `TokenCafe-6336 synced v2`. The actual question's LED and physical desktop
 handoff remain for the user to confirm.
+
+## Attention acknowledgement — 2026-10-30
+
+A completed physical click or on-screen selection now silences the external
+LED for the current alert batch, including when opening the desktop app. This
+acknowledges attention only: waiting items remain unresolved and no decision is
+implied. Refreshing the same item does not rearm the LED. A new waiting identity
+(including a new request in the same session) rearms it. Cancelled or long
+presses do not acknowledge the alert.
+
+All 178 workspace tests, Clippy, the production build, and the full QEMU gate
+passed. Regression tests cover screen and physical acknowledgement, refreshes,
+new requests, multiple waiting items, and cancelled inputs.
+
+The acknowledgement firmware was installed on `/dev/cu.usbmodem101` with
+esptool hash verification, retaining the pairing and NVS partitions. The private
+backup from the preceding attention deployment remains available.

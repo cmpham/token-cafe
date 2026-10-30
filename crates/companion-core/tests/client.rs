@@ -866,7 +866,9 @@ fn attention_button_opens_desktop_for_unlinked_questions_and_permissions() {
             assert_eq!(aa.len(), 1);
             assert_eq!((aa[0].kind, aa[0].session_id.as_str()), (6, "claude:test"));
             assert!(c.receipts.is_empty());
-            assert!(c.approval_waiting(), "opening the app does not resolve the waiting item");
+            assert!(!c.approval_waiting(), "opening the app acknowledges the current alert");
+            c.tick(12180).unwrap();
+            assert!(!c.approval_waiting(), "refresh must not rearm an acknowledged item");
             let old = h.model.clone();
             h.model.sessions.get_mut("claude:test").unwrap().status = 2;
             h.model.revision += 1;
@@ -947,5 +949,70 @@ fn attention_desktop_click_cancels_if_item_resolves_during_press() {
     }
     c.approval_button(false, 12160, &mut |_| true).unwrap();
     assert!(actions(&mut c).is_empty());
+    assert!(!c.approval_waiting());
+}
+
+#[test]
+fn attention_led_acknowledges_screen_selection_and_rearms_for_new_request() {
+    let (mut c, mut h, _) = setup();
+    assert!(c.approval_waiting());
+    tap(&mut c, 60, 90, 10010);
+    assert!(!c.approval_waiting(), "screen selection acknowledges attention");
+    actions(&mut c);
+    publish_attention_snapshot(&mut c, &mut h, 11000);
+    assert!(!c.approval_waiting(), "same snapshot cannot renew the alert");
+    let r = h.model.sessions.get_mut("claude:test").unwrap().approval.as_mut().unwrap();
+    r.id = "new-question".into();
+    let b = r.body_blob.as_ref().unwrap();
+    r.digest = companion_core::crypto::request_digest(
+        &r.id,
+        "claude:test",
+        1,
+        &r.title,
+        &r.tool_name,
+        &b.sha256.clone().try_into().unwrap(),
+        b.byte_length,
+        &[1, 2],
+    )
+    .unwrap()
+    .to_vec();
+    publish_attention_snapshot(&mut c, &mut h, 12000);
+    assert!(c.approval_waiting(), "new request on the same session needs a fresh acknowledgement");
+    c.approval_button(true, 12100, &mut |_| panic!("open only")).unwrap();
+    c.approval_button(false, 12160, &mut |_| panic!("open only")).unwrap();
+    assert!(!c.approval_waiting(), "a completed physical click acknowledges attention");
+    assert!(c.receipts.is_empty(), "acknowledgement never implies approval");
+}
+
+#[test]
+fn attention_led_ignores_cancelled_and_long_button_presses() {
+    for cancelled in [false, true] {
+        let (mut c, _, _) = setup();
+        c.approval_button(true, 10010, &mut |_| true).unwrap();
+        if cancelled {
+            c.touch(2, 0, 0, 10030, &mut |_| true).unwrap();
+        }
+        c.approval_button(false, 11000, &mut |_| true).unwrap();
+        assert!(c.approval_waiting(), "only completed interactions acknowledge attention");
+        assert!(actions(&mut c).is_empty());
+    }
+}
+
+#[test]
+fn attention_led_acknowledges_current_batch_without_marking_requests_resolved() {
+    let (mut c, mut h, _) = setup();
+    let mut other = h.model.sessions["claude:test"].clone();
+    other.id = "claude:other".into();
+    other.seat = 1;
+    other.approval = None;
+    h.model.sessions.insert(other.id.clone(), other);
+    publish_attention_snapshot(&mut c, &mut h, 12000);
+    assert!(c.approval_waiting());
+    c.approval_button(true, 12100, &mut |_| panic!("attention is not approval")).unwrap();
+    c.approval_button(false, 12160, &mut |_| panic!("attention is not approval")).unwrap();
+    assert!(!c.approval_waiting(), "one interaction silences the current alert batch");
+    assert!(c.replica.model.sessions.values().all(|s| s.status == 3));
+    assert!(c.receipts.is_empty());
+    publish_attention_snapshot(&mut c, &mut h, 12200);
     assert!(!c.approval_waiting());
 }
