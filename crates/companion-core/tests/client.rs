@@ -665,7 +665,7 @@ fn physical_button_rejects_withdrawal_resolution_and_disconnect_during_press() {
         }
         c.approval_button(false, 11060, &mut |_| panic!("stale press must not persist")).unwrap();
         assert!(actions(&mut c).iter().all(|a| a.kind != 7));
-        assert!(!c.approval_waiting());
+        assert_eq!(c.approval_waiting(), mode == 1, "unlinked waiting still needs attention");
     }
 }
 #[test]
@@ -832,4 +832,120 @@ fn physical_button_open_is_cancelled_when_waiting_request_changes() {
     c.approval_button(false, 10060, &mut |_| panic!("replaced request")).unwrap();
     assert!(actions(&mut c).is_empty());
     assert_ne!(c.view().page, 2);
+}
+
+#[test]
+fn attention_button_opens_desktop_for_unlinked_questions_and_permissions() {
+    for why in [1, 2] {
+        for review_open in [false, true] {
+            let (mut c, mut h, _) = setup();
+            if review_open {
+                arm_external_button(&mut c);
+            }
+            let old = h.model.clone();
+            let s = h.model.sessions.get_mut("claude:test").unwrap();
+            s.approval = None;
+            s.waiting_reason = why;
+            s.unlinked_review_blob = s.task_blob.clone();
+            if review_open {
+                h.model.view = c.view();
+                h.model.view.review_kind = 3;
+                h.model.view.review_request_id.clear();
+            }
+            h.model.revision += 1;
+            for e in sync::update(&old, &h.model, &[1; 16], &[2; 16]).unwrap() {
+                let raw = codec::encode(&e).unwrap();
+                c.receive(e, &raw, 12000).unwrap();
+            }
+            actions(&mut c);
+            assert!(c.approval_waiting());
+            c.approval_button(true, 12100, &mut |_| panic!("desktop handoff cannot decide")).unwrap();
+            c.tick(12120).unwrap();
+            c.approval_button(false, 12160, &mut |_| panic!("desktop handoff cannot decide")).unwrap();
+            let aa = actions(&mut c);
+            assert_eq!(aa.len(), 1);
+            assert_eq!((aa[0].kind, aa[0].session_id.as_str()), (6, "claude:test"));
+            assert!(c.receipts.is_empty());
+            assert!(c.approval_waiting(), "opening the app does not resolve the waiting item");
+            let old = h.model.clone();
+            h.model.sessions.get_mut("claude:test").unwrap().status = 2;
+            h.model.revision += 1;
+            for e in sync::update(&old, &h.model, &[1; 16], &[2; 16]).unwrap() {
+                let raw = codec::encode(&e).unwrap();
+                c.receive(e, &raw, 12200).unwrap();
+            }
+            assert!(!c.approval_waiting());
+        }
+    }
+}
+
+#[test]
+fn attention_button_routes_desktop_only_and_choice_requests_to_desktop() {
+    for choices in [false, true] {
+        let (mut c, mut h, _) = setup();
+        let old = h.model.clone();
+        let session = h.model.sessions.get_mut("claude:test").unwrap();
+        if choices {
+            session.provider = 2;
+            session.seat = 2;
+        }
+        let r = session.approval.as_mut().unwrap();
+        if choices {
+            r.allowed_decisions = vec![3, 4];
+        } else {
+            r.desktop_only_reason = "CONTINUE ON DESKTOP".into();
+            r.allowed_decisions.clear();
+        }
+        let b = r.body_blob.as_ref().unwrap();
+        r.digest = companion_core::crypto::request_digest(
+            &r.id,
+            "claude:test",
+            if choices { 2 } else { 1 },
+            &r.title,
+            &r.tool_name,
+            &b.sha256.clone().try_into().unwrap(),
+            b.byte_length,
+            &r.allowed_decisions.iter().map(|d| *d as u8).collect::<Vec<_>>(),
+        )
+        .unwrap()
+        .to_vec();
+        h.model.revision += 1;
+        for e in sync::update(&old, &h.model, &[1; 16], &[2; 16]).unwrap() {
+            let raw = codec::encode(&e).unwrap();
+            c.receive(e, &raw, 12000).unwrap();
+        }
+        actions(&mut c);
+        assert!(c.approval_waiting());
+        c.approval_button(true, 12100, &mut |_| panic!("no approval")).unwrap();
+        c.approval_button(false, 12160, &mut |_| panic!("no approval")).unwrap();
+        let aa = actions(&mut c);
+        assert_eq!(aa.len(), 1);
+        assert_eq!(aa[0].kind, 6);
+        assert!(c.receipts.is_empty());
+    }
+}
+
+#[test]
+fn attention_desktop_click_cancels_if_item_resolves_during_press() {
+    let (mut c, mut h, _) = setup();
+    let old = h.model.clone();
+    let s = h.model.sessions.get_mut("claude:test").unwrap();
+    s.approval = None;
+    h.model.revision += 1;
+    for e in sync::update(&old, &h.model, &[1; 16], &[2; 16]).unwrap() {
+        let raw = codec::encode(&e).unwrap();
+        c.receive(e, &raw, 12000).unwrap();
+    }
+    actions(&mut c);
+    c.approval_button(true, 12100, &mut |_| true).unwrap();
+    let old = h.model.clone();
+    h.model.sessions.get_mut("claude:test").unwrap().status = 2;
+    h.model.revision += 1;
+    for e in sync::update(&old, &h.model, &[1; 16], &[2; 16]).unwrap() {
+        let raw = codec::encode(&e).unwrap();
+        c.receive(e, &raw, 12130).unwrap();
+    }
+    c.approval_button(false, 12160, &mut |_| true).unwrap();
+    assert!(actions(&mut c).is_empty());
+    assert!(!c.approval_waiting());
 }

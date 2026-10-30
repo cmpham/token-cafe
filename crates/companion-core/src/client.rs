@@ -734,26 +734,38 @@ impl Client {
         }
         self.scene.visible_patron_at(x, y).map_or(Target::None, |s| Target::Patron(s.into()))
     }
-    /// LED means an actionable approve-once request is pending, even outside review.
-    pub fn approval_waiting(&self) -> bool {
-        self.connected
-            && self.replica.ready
-            && self.can_decide
-            && self.replica.model.sessions.values().any(|s| {
-                s.approval.as_ref().is_some_and(|r| {
-                    r.state == 1
-                        && r.desktop_only_reason.is_empty()
-                        && r.allowed_decisions.contains(&1)
-                        && !self.receipts.iter().any(|x| x.request == r.id && x.digest == r.digest)
-                })
+    fn needs_attention(&self, s: &Session) -> bool {
+        match &s.approval {
+            Some(r) => r.state == 1 && !self.receipts.iter().any(|x| x.request == r.id && x.digest == r.digest),
+            None => s.status == 3,
+        }
+    }
+    fn button_can_approve(&self, s: &Session) -> bool {
+        self.can_decide
+            && s.approval.as_ref().is_some_and(|r| {
+                r.state == 1
+                    && r.desktop_only_reason.is_empty()
+                    && r.allowed_decisions.contains(&1)
+                    && !r.allowed_decisions.iter().any(|d| *d >= 3)
             })
+    }
+    /// Attention indicator includes questions and requests that require desktop input.
+    pub fn approval_waiting(&self) -> bool {
+        self.connected && self.replica.ready && self.replica.model.sessions.values().any(|s| self.needs_attention(s))
     }
     fn approval_button_target(&self, now: u64, releasing: bool) -> Target {
         if !self.connected || !self.replica.ready || self.sleeping || self.contact.is_some() {
             return Target::None;
         }
         if let Some(review) = &self.scene.review {
-            let request = self.replica.model.sessions.get(&review.request().session).and_then(|s| s.approval.as_ref());
+            let session = self.replica.model.sessions.get(&review.request().session);
+            if let Some(s) = session
+                && self.needs_attention(s)
+                && !self.button_can_approve(s)
+            {
+                return if s.navigation_available { Target::Desktop(s.id.clone()) } else { Target::None };
+            }
+            let request = session.and_then(|s| s.approval.as_ref());
             if request.is_none_or(|r| matches!(r.state, 3 | 5 | 6 | 7 | 8)) {
                 return Target::Back;
             }
@@ -775,24 +787,24 @@ impl Client {
             }
             return Target::None;
         }
-        // Prefer the visible attention request; otherwise select the next pending
-        // approve-once request. Opening a review never submits a decision.
-        let eligible = |id: &str| {
-            self.replica.model.sessions.get(id).is_some_and(|s| {
-                s.approval.as_ref().is_some_and(|r| {
-                    r.state == 1
-                        && r.desktop_only_reason.is_empty()
-                        && r.allowed_decisions.contains(&1)
-                        && !self.receipts.iter().any(|x| x.request == r.id && x.digest == r.digest)
-                })
-            })
-        };
-        self.scene
+        // Prefer the visible waiting session. Questions and desktop-only actions
+        // go straight to the app; board approvals retain the separate review step.
+        let eligible = |id: &str| self.replica.model.sessions.get(id).is_some_and(|s| self.needs_attention(s));
+        let id = self
+            .scene
             .attention_id()
             .filter(|id| eligible(id))
-            .or_else(|| self.replica.model.sessions.keys().find(|id| eligible(id)).map(String::as_str))
-            .map_or(Target::None, |id| Target::ViewRequest(id.into()))
+            .or_else(|| self.replica.model.sessions.keys().find(|id| eligible(id)).map(String::as_str));
+        id.map_or(Target::None, |id| {
+            let s = &self.replica.model.sessions[id];
+            if !self.button_can_approve(s) && s.navigation_available {
+                Target::Desktop(id.into())
+            } else {
+                Target::ViewRequest(id.into())
+            }
+        })
     }
+
     /// Each debounced click advances one step: open, locally enable, or approve once.
     /// Capture the step on press so one click can never both open and approve.
     pub fn approval_button(

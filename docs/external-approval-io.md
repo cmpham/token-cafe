@@ -8,9 +8,15 @@ Check switch terminal pairs and disconnect USB/battery before changing wiring.
 
 ## Production behaviour
 
-The LED blinks at 1 Hz (500 ms on, 500 ms off) while an approve-once-capable
-pending request exists. Submitted, desktop-only, disconnected and unsynchronized
-requests do not light it.
+The LED blinks at 1 Hz (500 ms on, 500 ms off) whenever a session needs
+attention: approvals, questions, and desktop-only waiting items. Opening the
+app does not clear the alert; it clears when the item resolves. Submitted
+board decisions, disconnected and unsynchronized states do not light it.
+
+For questions and desktop-only requests, briefly press and release the button
+to open the associated desktop app and complete the action there. This works
+from the cafe or the item's review screen. If no desktop link is available,
+the button opens details on the board; the LED continues to signal attention.
 
 The happy path requires no touchscreen:
 
@@ -22,7 +28,8 @@ The happy path requires no touchscreen:
    next waiting request. A review opened from the desktop requires one click to
    enable its controls before a separate approval click.
 
-Deny and multiple-choice answers continue to use the screen. Each click captures
+Deny continues to use the screen. The physical button routes multiple-choice
+requests to the desktop rather than choosing an answer. Each click captures
 one step on press and performs it on release; holding cannot skip steps. Presses
 while asleep only wake the display. Loading or unarmed presses cannot approve,
 even if controls become ready before release. Long holds over 800 ms are ignored.
@@ -144,3 +151,24 @@ All 172 workspace tests, Clippy and the macOS release build passed. Regression
 tests cover stalled setup cleanup, failed authentication cleanup and successful
 setup retaining its link. This desktop-only change does not alter board firmware
 or approval policy. Physical long-duration stability still requires observation.
+
+## General attention and desktop handoff — 2026-10-30
+
+The LED now covers unlinked waiting questions and permissions, desktop-only
+requests, and multiple-choice requests. A short physical click opens the linked
+desktop app for items the button cannot approve. It works from both the cafe
+and an unlinked review. Opening the app keeps the attention LED blinking until
+the waiting item resolves. Approve-once requests retain their separate review
+and approval clicks. A waiting item resolved during a press cancels that click.
+
+All 175 workspace tests and Clippy passed. The production firmware and the
+complete QEMU gate passed, including protocol capacities, reconnect, navigation,
+provider results, and large-text rendering. Physical LED and button handoff
+confirmation is still needed after deployment.
+
+Before deployment, a fresh private 4 MiB flash/NVS backup was saved under
+`target/esp/backups/attention-desktop-2026-10-30/`. Production firmware was flashed
+to `/dev/cu.usbmodem101` with esptool hash verification; QA injection and wiring
+diagnostic modes are disabled. The existing companion reconnected and reported
+`TokenCafe-6336 synced v2`. The actual question's LED and physical desktop
+handoff remain for the user to confirm.
