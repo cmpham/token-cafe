@@ -17,9 +17,8 @@ this documentation's commit to retain the guide and matching source together.
 | 1 | Small indicator LED | Tested discrete LED; polarity matters. |
 | 1 | 330 Ω resistor, ¼ W | Orange–orange–brown, commonly gold tolerance band. |
 | 1 | Normally open momentary pushbutton | Tested four-leg tactile switch; check terminal pairs. |
-| 1 | Solderless breadboard | At least 30 numbered columns, centre gap and ground rail. |
 | 1 | P4-compatible four-position cable | Confirm mechanical fit and each PCB signal; don't rely on wire colours. |
-| As needed | Jumper wires | Adapt the board cable to the breadboard. |
+| As needed | Insulated hookup wires and heat-shrink | Connect the cable to the resistor, LED and button; insulate joints. |
 | 1 | USB data cable and computer | Used for programming; USB supplies power in normal operation. |
 | 1 | Multimeter | Verify continuity, resistor value and button contacts. |
 
@@ -55,34 +54,19 @@ cathode. If the leads have been trimmed, use the multimeter's diode mode to
 identify polarity. The resistor can face either way. The tested LED initially
 failed to light because it was reversed; reversing it fixed the circuit.
 
-## Breadboard placement
+## Assembly and continuity checks
 
-![Example breadboard layout](external-approval-breadboard.png)
+Wire the components directly according to the schematic and net list. Put the
+330 Ω resistor in series between IO17 and the LED anode, and connect the LED
+cathode to common GND. Connect the normally open button between IO18 and GND.
+Insulate solder joints and the unused 3V3 lead, and secure the cable so it cannot
+pull on component legs.
 
-[Editable SVG breadboard layout](external-approval-breadboard.svg)
-
-This is a repeatable example layout, not a claim that every breadboard has the
-same labels. Orient yours so each numbered group A–E is connected, each F–J is
-connected, and the centre gap separates E from F. Verify the rail is continuous;
-bridge any split in the rail with a jumper.
-
-| Component / lead | Hole or connection |
-| --- | --- |
-| P4 GND | Blue-marked ground rail |
-| P4 IO17 | E10 |
-| R1 resistor | A10 to A15 |
-| LED anode (+) | C15 |
-| LED cathode (−) | C18 |
-| Ground jumper for LED | D18 to ground rail |
-| Switch legs | E23, F23, E25, F25, spanning centre gap |
-| P4 IO18 | A23 |
-| Ground jumper for switch | A25 to ground rail |
-
-For this switch orientation, **E23–F23 must be permanently connected**, and
-**E25–F25 must be permanently connected**. The two pairs must be disconnected
-when released and connected only when pressed. Rotate the switch if necessary;
-four-leg switches can have different physical layouts. Connecting IO18 and GND
-to the same permanent pair makes the input read pressed all the time.
+For a four-leg tactile switch, use one terminal from each of its two permanent
+pairs. With a multimeter, identify the two terminals joined on each side: the
+chosen IO18 and GND terminals must be disconnected when released and connected
+only when pressed. Connecting both wires to the same permanent pair makes the
+input read pressed all the time.
 
 With USB and battery disconnected, verify the resistor is approximately 330 Ω,
 the button's released/pressed behavior above, and the common GND connections.

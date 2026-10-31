@@ -1,7 +1,7 @@
 # External approval LED and button
 
-For the bill of materials, editable electrical schematic, exact breadboard
-placement and rebuild instructions, see the
+For the bill of materials, editable electrical schematic, assembly checks
+and rebuild instructions, see the
 [recreation guide](hardware/recreate-approval-controller.md).
 
 Target: JC4827W543, semantic v2 firmware. P4 UART1 is used as GPIO rather
