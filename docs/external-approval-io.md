@@ -1,5 +1,9 @@
 # External approval LED and button
 
+For the bill of materials, editable electrical schematic, exact breadboard
+placement and rebuild instructions, see the
+[recreation guide](hardware/recreate-approval-controller.md).
+
 Target: JC4827W543, semantic v2 firmware. P4 UART1 is used as GPIO rather
 than UART. GPIO17 drives a small LED through a 330 ohm series resistor to GND.
 GPIO18 connects to a normally open momentary button to GND, with the internal

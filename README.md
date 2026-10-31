@@ -267,6 +267,9 @@ See [protocol and payloads](docs/protocol/companion-v2.md),
 remains available for explicit rollback using `--bluetooth --bluetooth-key PATH`.
 Never run the legacy and semantic connection paths against the same board.
 
+For the external attention LED and physical button, see the
+[hardware recreation guide and schematics](docs/hardware/recreate-approval-controller.md).
+
 ### Patron seating
 
 Claude patrons sit on the left; Codex patrons sit on the right. Each side is

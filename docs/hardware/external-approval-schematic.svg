@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="890" viewBox="0 0 1200 890" role="img" aria-labelledby="title"><title id="title">JC4827W543 P4 external LED and approval button schematic</title><style>text{font-family:Arial,Helvetica,sans-serif;fill:#172b40}.wire{fill:none;stroke:#172b40;stroke-width:4;stroke-linecap:round;stroke-linejoin:round}</style><rect width="100%" height="100%" fill="#f7fafc"/>
+<text x="35" y="48" font-size="32">Token Café — JC4827W543 external circuit</text>
+<text x="35" y="82" font-size="22">P4 UART1 used as GPIO • 3.3 V logic • common GND</text>
+<rect x="35" y="105" width="1130" height="160" rx="8" fill="#ffffff" stroke="#8ea5bb" stroke-width="2"/>
+<text x="55" y="136" font-size="19">CONNECTOR ORIENTATION</text>
+<text x="55" y="165" font-size="20">Rear/components facing you; USB at right; P2–P5 connectors along the bottom.</text>
+<text x="55" y="195" font-size="20">P4 UART1 pins, left → right:</text>
+<rect x="420" y="182" width="125" height="48" rx="8" fill="#ffffff" stroke="#8ea5bb" stroke-width="2"/>
+<text x="439" y="213" font-size="21">GND</text>
+<rect x="565" y="182" width="125" height="48" rx="8" fill="#ffffff" stroke="#8ea5bb" stroke-width="2"/>
+<text x="584" y="213" font-size="21">3V3</text>
+<rect x="710" y="182" width="125" height="48" rx="8" fill="#ffffff" stroke="#8ea5bb" stroke-width="2"/>
+<text x="729" y="213" font-size="21">IO17</text>
+<rect x="855" y="182" width="125" height="48" rx="8" fill="#ffffff" stroke="#8ea5bb" stroke-width="2"/>
+<text x="874" y="213" font-size="21">IO18</text>
+<text x="55" y="250" font-size="17">Read PCB labels. Cable colours and the mating plug view may be reversed.</text>
+<rect x="35" y="285" width="265" height="350" rx="8" fill="#e9f2fb" stroke="#8ea5bb" stroke-width="2"/>
+<text x="55" y="320" font-size="27">JC4827W543</text>
+<text x="55" y="350" font-size="22">P4 / UART1</text>
+<text x="52" y="385" font-size="18">IO17 / LED output</text>
+<circle cx="300" cy="395" r="5" fill="#172b40"/>
+<text x="52" y="495" font-size="18">IO18 / button input</text>
+<circle cx="300" cy="505" r="5" fill="#172b40"/>
+<text x="52" y="560" font-size="18">3V3 — unused</text>
+<circle cx="300" cy="570" r="5" fill="#172b40"/>
+<text x="52" y="610" font-size="18">GND</text>
+<circle cx="300" cy="620" r="5" fill="#172b40"/>
+<polyline points="300,395 420,395" fill="none" stroke="#bb6200" stroke-width="4" stroke-linejoin="round"/>
+<rect x="420" y="380" width="135" height="30" rx="8" fill="#ffe6ba" stroke="#bb6200" stroke-width="2"/>
+<polyline points="555,395 650,395" fill="none" stroke="#bb6200" stroke-width="4" stroke-linejoin="round"/>
+<text x="420" y="362" font-size="23">R1 330 Ω</text>
+<text x="415" y="443" font-size="18">¼ W; either direction</text>
+<path d="M650 372 L650 418 L700 395 Z" fill="#e7b600" stroke="#172b40" stroke-width="3"/>
+<polyline points="705,367 705,423" fill="none" stroke="#172b40" stroke-width="4" stroke-linejoin="round"/>
+<polyline points="705,395 875,395 875,680" fill="none" stroke="#172b40" stroke-width="4" stroke-linejoin="round"/>
+<polyline points="671,357 695,333" fill="none" stroke="#9c7200" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="683,333 695,333 695,345" fill="none" stroke="#9c7200" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="702,344 726,320" fill="none" stroke="#9c7200" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="714,320 726,320 726,332" fill="none" stroke="#9c7200" stroke-width="3" stroke-linejoin="round"/>
+<text x="623" y="310" font-size="24">D1 LED</text>
+<text x="380" y="722" font-size="20">A (+): long leg</text>
+<text x="650" y="722" font-size="20">K (−): short leg</text>
+<text x="650" y="750" font-size="18">Flat body edge = K</text>
+<polyline points="300,505 620,505" fill="none" stroke="#148052" stroke-width="4" stroke-linejoin="round"/>
+<circle cx="620" cy="505" r="5" fill="#172b40"/>
+<circle cx="800" cy="505" r="5" fill="#172b40"/>
+<polyline points="620,505 770,458" fill="none" stroke="#172b40" stroke-width="4" stroke-linejoin="round"/>
+<polyline points="800,505 980,505 980,680" fill="none" stroke="#172b40" stroke-width="4" stroke-linejoin="round"/>
+<text x="600" y="560" font-size="23">SW1: normally open</text>
+<text x="600" y="591" font-size="20">Press = connect IO18 to GND</text>
+<text x="339" y="540" font-size="18">Internal pull-up enabled</text>
+<text x="339" y="652" font-size="18">Released HIGH; pressed LOW</text>
+<polyline points="300,570 340,570" fill="none" stroke="#172b40" stroke-width="4" stroke-linejoin="round"/>
+<polyline points="340,562 356,578" fill="none" stroke="#bc3030" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="340,578 356,562" fill="none" stroke="#bc3030" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="300,620 325,620 325,680 1060,680" fill="none" stroke="#172b40" stroke-width="4" stroke-linejoin="round"/>
+<circle cx="875" cy="680" r="5" fill="#172b40"/>
+<circle cx="980" cy="680" r="5" fill="#172b40"/>
+<polyline points="1060,680 1060,705" fill="none" stroke="#172b40" stroke-width="4" stroke-linejoin="round"/>
+<polyline points="1035,705 1085,705" fill="none" stroke="#172b40" stroke-width="4" stroke-linejoin="round"/>
+<polyline points="1043,717 1077,717" fill="none" stroke="#172b40" stroke-width="4" stroke-linejoin="round"/>
+<polyline points="1051,729 1069,729" fill="none" stroke="#172b40" stroke-width="4" stroke-linejoin="round"/>
+<text x="1008" y="762" font-size="23">GND</text>
+<rect x="35" y="775" width="1130" height="85" rx="8" fill="#ffffff" stroke="#8ea5bb" stroke-width="2"/>
+<text x="55" y="806" font-size="21">USB powers the board; Bluetooth carries session state and actions.</text>
+<text x="55" y="839" font-size="20">Disconnect USB/battery before wiring. Keep P4 3V3 disconnected. Never omit R1.</text>
+</svg>
