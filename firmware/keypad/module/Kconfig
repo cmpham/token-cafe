@@ -1,0 +1,4 @@
+config TOKEN_CAFE_KEYPAD
+    bool "Token Cafe keypad status display"
+    default y
+    depends on ZMK_DISPLAY && ZMK_BLE

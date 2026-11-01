@@ -9,6 +9,9 @@ use prost::Message;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Dispatch {
     Desktop(String),
+    App { codex: bool },
+    ToggleApp,
+    Voice(String),
     Decision { session: String, request: String, decision: i32 },
 }
 #[derive(Clone)]
@@ -76,7 +79,7 @@ impl Authority {
         let mut status = 1;
         let mut reason = 0;
         let mut dispatch = None;
-        if a.observed_revision > self.model.revision || !(1..=7).contains(&a.kind) {
+        if a.observed_revision > self.model.revision || !(1..=12).contains(&a.kind) {
             status = 3;
             reason = 7;
         } else {
@@ -147,7 +150,7 @@ impl Authority {
                         }
                     }
                 }
-                6 => {
+                6 | 12 => {
                     if !peer.can_navigate || session.as_ref().is_none_or(|s| !s.navigation_available) {
                         status = 3;
                         reason = 4;
@@ -156,12 +159,41 @@ impl Authority {
                         reason = 6;
                     } else {
                         peer.last_navigation = Some(now);
-                        self.model.view.selected_session_id = a.session_id.clone();
-                        self.model.view.task_anchor = 0;
-                        self.close_review();
+                        if a.kind == 6 {
+                            self.model.view.selected_session_id = a.session_id.clone();
+                            self.model.view.task_anchor = 0;
+                            self.close_review();
+                        }
                         status = 2;
-                        dispatch = Some(Dispatch::Desktop(a.session_id.clone()));
+                        dispatch = Some(if a.kind == 12 {
+                            Dispatch::Voice(a.session_id.clone())
+                        } else {
+                            Dispatch::Desktop(a.session_id.clone())
+                        });
                     }
+                }
+                8 | 9 | 11 => {
+                    if !peer.can_navigate {
+                        status = 3;
+                        reason = 4;
+                    } else if peer.last_navigation.is_some_and(|t| now.saturating_sub(t) < 400) {
+                        status = 3;
+                        reason = 6;
+                    } else {
+                        peer.last_navigation = Some(now);
+                        status = 2;
+                        dispatch =
+                            Some(if a.kind == 11 { Dispatch::ToggleApp } else { Dispatch::App { codex: a.kind == 9 } });
+                    }
+                }
+                10 => {
+                    use cafe_ui::patrons::{Patrons, ROSTERS};
+                    let current = Patrons::from_ids(&self.model.view.patron_ids).unwrap_or_default();
+                    let next = ROSTERS
+                        .iter()
+                        .position(|name| Patrons::roster(name).unwrap() == current)
+                        .map_or(0, |i| (i + 1) % ROSTERS.len());
+                    self.model.view.patron_ids = Patrons::roster(ROSTERS[next]).unwrap().ids().to_vec();
                 }
                 7 => {
                     if !peer.can_decide {
@@ -264,14 +296,14 @@ impl Authority {
             a.id,
             if delivered {
                 1
-            } else if a.kind == 6 {
+            } else if matches!(a.kind, 6 | 8 | 9 | 11 | 12) {
                 3
             } else {
                 4
             },
             if delivered {
                 0
-            } else if a.kind == 6 {
+            } else if matches!(a.kind, 6 | 8 | 9 | 11 | 12) {
                 9
             } else {
                 11

@@ -1,0 +1,5 @@
+if(CONFIG_TOKEN_CAFE_KEYPAD)
+  zephyr_library()
+  zephyr_include_directories(../../shared)
+  zephyr_library_sources(src/display.c src/transport.c src/pipar_custom_keycodes.c)
+endif()

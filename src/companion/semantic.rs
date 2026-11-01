@@ -72,14 +72,24 @@ fn registry() -> Result<Vec<Board>, Error> {
 pub struct SemanticMirror {
     shared: Arc<Mutex<Store>>,
     status: Arc<Mutex<Vec<String>>>,
+    keypad_status: Arc<Mutex<String>>,
 }
 impl SemanticMirror {
     pub fn start() -> Self {
+        Self::start_with_board(true)
+    }
+    pub fn start_with_board(connect_board: bool) -> Self {
         let mut epoch = [0; 16];
         std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut epoch)).expect("OS entropy");
         let shared = Arc::new(Mutex::new(Store::new(epoch)));
         let status = Arc::new(Mutex::new(vec!["starting v2".into()]));
-        let mirror = Self { shared: shared.clone(), status: status.clone() };
+        let keypad_status = Arc::new(Mutex::new("connect USB".into()));
+        let mirror = Self { shared: shared.clone(), status: status.clone(), keypad_status: keypad_status.clone() };
+        super::keypad::start(shared.clone(), keypad_status);
+        if !connect_board {
+            *status.lock().unwrap() = vec!["optional".into()];
+            return mirror;
+        }
         std::thread::spawn(move || {
             let boards = match registry() {
                 Ok(b) => b,
@@ -121,7 +131,7 @@ impl SemanticMirror {
         self.shared.lock().unwrap().ingest(scene, broker);
     }
     pub fn status(&self) -> String {
-        self.status.lock().unwrap().join("; ")
+        format!("Keypad: {} — Board: {}", self.keypad_status.lock().unwrap(), self.status.lock().unwrap().join("; "))
     }
 }
 struct Link {
@@ -144,15 +154,24 @@ fn advertised_name_matches(observed: &str, expected: &str) -> bool {
 }
 async fn discover(board: &Board) -> Result<Peripheral, Error> {
     let manager = Manager::new().await?;
-    let adapter = manager.adapters().await?.into_iter().next().ok_or("No BLE adapter")?;
+    let adapter = timeout(Duration::from_secs(5), manager.adapters())
+        .await
+        .map_err(|_| "Bluetooth adapter initialization timed out")??
+        .into_iter()
+        .next()
+        .ok_or("No BLE adapter")?;
     adapter.start_scan(ScanFilter { services: vec![SERVICE] }).await?;
     sleep(Duration::from_secs(5)).await;
     let mut candidates = vec![];
     for p in adapter.peripherals().await? {
-        if p.properties().await?.is_some_and(|v| {
-            v.services.contains(&SERVICE)
-                && v.local_name.as_deref().is_some_and(|name| advertised_name_matches(name, &board.name))
-        }) {
+        if timeout(Duration::from_secs(2), p.properties())
+            .await
+            .map_err(|_| "Bluetooth device properties timed out")??
+            .is_some_and(|v| {
+                v.services.contains(&SERVICE)
+                    && v.local_name.as_deref().is_some_and(|name| advertised_name_matches(name, &board.name))
+            })
+        {
             candidates.push(p);
         }
     }
@@ -268,19 +287,23 @@ async fn serve(
     let mut pending: VecDeque<(Action, u64)> = VecDeque::new();
     let mut bulk = VecDeque::new();
     let mut blob_queue = VecDeque::new();
-    let mut blob_turn = false;
     let mut navigation: Vec<(Action, std::sync::mpsc::Receiver<bool>, u64)> = vec![];
     let mut heartbeat = Instant::now();
+    let mut last_keypad_activity = 0;
+    let mut view_delivery: Option<(u64, Instant)> = None;
     loop {
         let now = start.elapsed().as_millis() as u64;
         err(link.transport.check(now))?;
-        if hello && heartbeat.elapsed() >= Duration::from_secs(1) {
+        let keypad_activity = shared.lock().unwrap().keypad_activity;
+        if hello && (heartbeat.elapsed() >= Duration::from_secs(1) || keypad_activity != last_keypad_activity) {
             err(link.transport.enqueue(&env(Payload::Heartbeat(Heartbeat {
                 applied_revision: shared.lock().unwrap().authority.model.revision,
                 monotonic_ms: now,
                 local_time_ms: Some(local_time_ms()),
+                keypad_activity: Some(keypad_activity),
             }))))?;
             heartbeat = Instant::now();
+            last_keypad_activity = keypad_activity;
         }
         // Complete provider delivery asynchronously; socket delivery is not execution.
         let mut completed = vec![];
@@ -292,7 +315,9 @@ async fn serve(
                     .as_ref()
                     .and_then(|b| b.outcome(&a.request_id))
                     .map(|outcome| matches!(outcome, Outcome::Delivered(_)));
-                if let Some(ok) = outcome.or_else(|| (now - *at > 3000).then_some(false)) {
+                if let Some(ok) =
+                    outcome.or_else(|| (now - *at > if a.kind == 12 { 15000 } else { 3000 }).then_some(false))
+                {
                     let r = store.authority.finish(&mut peer, a, ok);
                     store.keep_terminal(&a.session_id);
                     completed.push((a.id, r));
@@ -305,7 +330,9 @@ async fn serve(
         }
         let mut nav_done = vec![];
         for (a, rx, at) in &navigation {
-            if let Some(ok) = rx.try_recv().ok().or_else(|| (now - *at > 3000).then_some(false)) {
+            if let Some(ok) =
+                rx.try_recv().ok().or_else(|| (now - *at > if a.kind == 12 { 15000 } else { 3000 }).then_some(false))
+            {
                 let mut s = shared.lock().unwrap();
                 let r = s.authority.finish(&mut peer, a, ok);
                 eprintln!("token-cafe: desktop handoff action={} accepted={} elapsed_ms={}", a.id, ok, now - *at);
@@ -314,7 +341,7 @@ async fn serve(
             }
         }
         navigation.retain(|(a, _, _)| !nav_done.contains(&a.id));
-        if hello && (resync || last_sent.is_some()) && bulk.is_empty() && outstanding.len() < 8 {
+        if hello && (resync || last_sent.is_some()) && bulk.is_empty() && outstanding.is_empty() {
             let model = shared.lock().unwrap().authority.model.clone();
             if resync
                 || last_sent.as_ref().is_none_or(|old: &companion_core::model::Model| old.revision != model.revision)
@@ -323,19 +350,21 @@ async fn serve(
                     Some(old) => err(sync::update(old, &model, &link.epoch, &authority))?,
                     None => err(sync::snapshot(&model, &link.epoch, &authority))?,
                 };
+                if last_sent.as_ref().is_some_and(|old| old.view != model.view) {
+                    view_delivery = Some((model.revision, Instant::now()));
+                }
                 bulk.extend(messages);
+                // One unacknowledged model at a time: rapid navigation coalesces
+                // into the newest authority state instead of an eight-view backlog.
                 outstanding.push_back(model.revision);
                 last_sent = Some(model);
                 resync = false;
             }
         }
         if link.transport.queued() == 0 {
-            let e = if blob_turn && !blob_queue.is_empty() {
-                blob_queue.pop_front()
-            } else {
-                bulk.pop_front().or_else(|| blob_queue.pop_front())
-            };
-            blob_turn = !blob_turn;
+            // Finish the current authenticated message, then prefer the newest
+            // model/view over request text. Never reorder fragments or revisions.
+            let e = next_model_or_blob(&mut bulk, &mut blob_queue);
             if let Some(e) = e {
                 err(link.transport.enqueue(&e))?;
             }
@@ -356,7 +385,7 @@ async fn serve(
                 if !hello||e.authority_epoch!=authority{return Err("Wrong authority epoch".into());}
                 match e.payload.ok_or("Empty message")?{
                     Payload::Resync(_)=>{resync=true;outstanding.clear();},
-                    Payload::Applied(a)=>{status.lock().unwrap()[index]=format!("{} synced v2",board.name);if last_sent.as_ref().is_none_or(|m|a.revision>m.revision){return Err("Future Applied revision".into());}while outstanding.front().is_some_and(|r|*r<=a.revision){outstanding.pop_front();}},
+                    Payload::Applied(a)=>{status.lock().unwrap()[index]=format!("{} synced v2",board.name);if let Some((revision, sent))=view_delivery {if a.revision>=revision {eprintln!("Board view applied revision={} delivery_ms={}",revision,sent.elapsed().as_millis());view_delivery=None;}}if last_sent.as_ref().is_none_or(|m|a.revision>m.revision){return Err("Future Applied revision".into());}while outstanding.front().is_some_and(|r|*r<=a.revision){outstanding.pop_front();}},
                     Payload::Heartbeat(_)=>(),
                     Payload::BlobGet(b)=>{if !blob_queue.is_empty(){return Err("Concurrent blob request".into());}let body=shared.lock().unwrap().body(&b.sha256).map(Vec::from);if let Some(body)=body{for chunk in err(sync::chunks(&body))?{blob_queue.push_back(env(Payload::BlobChunk(chunk)));}}else{err(link.transport.enqueue(&env(Payload::BlobUnavailable(BlobUnavailable{sha256:b.sha256,reason:2}))))?;}},
                     Payload::BlobCancel(b)=>blob_queue.retain(|e|!matches!(&e.payload,Some(Payload::BlobChunk(c)) if c.sha256==b.sha256)),
@@ -364,7 +393,10 @@ async fn serve(
                         let mut s=shared.lock().unwrap();let body=s.body(&a.blob_id).map(Vec::from);let (mut result,dispatch)=err(s.authority.action(&mut peer,&a,now,body.as_deref()))?;
                         match dispatch{
                             Some(Dispatch::Decision{session,request,decision})=>{s.keep_terminal(&session);if s.decide(&request,decision){pending.push_back((a.clone(),now));}else{result=s.authority.finish(&mut peer,&a,false);s.keep_terminal(&session);}},
-                            Some(Dispatch::Desktop(id))=>{if let Some(url)=s.targets.get(&id).cloned(){if navigation.len()<16{let(tx,rx)=std::sync::mpsc::channel();std::thread::spawn(move||{#[cfg(target_os="macos")]let ok=std::process::Command::new("/usr/bin/open").arg(url).status().is_ok_and(|s|s.success());#[cfg(not(target_os="macos"))]let ok={let _=url;false};let _=tx.send(ok);});navigation.push((a.clone(),rx,now));}else{result=s.authority.finish(&mut peer,&a,false);}}else{result=s.authority.finish(&mut peer,&a,false);}},None=>(),
+                            Some(Dispatch::App{codex})=>{if navigation.is_empty(){let(tx,rx)=std::sync::mpsc::channel();std::thread::spawn(move||{let ok=super::open_desktop_app(codex);let _=tx.send(ok);});navigation.push((a.clone(),rx,now));}else{result=s.authority.finish(&mut peer,&a,false);}},
+                            Some(Dispatch::ToggleApp)=>{if navigation.is_empty(){let(tx,rx)=std::sync::mpsc::channel();std::thread::spawn(move||{let ok=super::keypad_desktop(&["toggle"]);let _=tx.send(ok);});navigation.push((a.clone(),rx,now));}else{result=s.authority.finish(&mut peer,&a,false);}},
+                            Some(Dispatch::Voice(id))=>{if let Some(url)=s.targets.get(&id).cloned(){if navigation.is_empty(){let title=super::voice_session_title(&s.authority.model,&id);let(tx,rx)=std::sync::mpsc::channel();std::thread::spawn(move||{let ok=super::keypad_desktop(&["voice",&url,&title]);let _=tx.send(ok);});navigation.push((a.clone(),rx,now));}else{result=s.authority.finish(&mut peer,&a,false);}}else{result=s.authority.finish(&mut peer,&a,false);}},
+                            Some(Dispatch::Desktop(id))=>{if let Some(url)=s.targets.get(&id).cloned(){if navigation.is_empty(){let(tx,rx)=std::sync::mpsc::channel();std::thread::spawn(move||{#[cfg(target_os="macos")]let ok=std::process::Command::new("/usr/bin/open").arg(url).status().is_ok_and(|s|s.success());#[cfg(not(target_os="macos"))]let ok={let _=url;false};let _=tx.send(ok);});navigation.push((a.clone(),rx,now));}else{result=s.authority.finish(&mut peer,&a,false);}}else{result=s.authority.finish(&mut peer,&a,false);}},None=>(),
                         }
                         err(link.transport.enqueue(&env(Payload::ActionResult(result))))?;
                     },_=>return Err("Unexpected board message".into()),
@@ -423,6 +455,7 @@ pub async fn exercise_fixture(
                     applied_revision: authority.model.revision,
                     monotonic_ms: now,
                     local_time_ms: Some(local_time_ms()),
+                    keypad_activity: None,
                 }),
             )))?;
             heartbeat = Instant::now();
@@ -459,6 +492,30 @@ pub async fn exercise_fixture(
     }
     link.peripheral.disconnect().await?;
     Ok(())
+}
+
+fn next_model_or_blob<T>(model: &mut VecDeque<T>, blobs: &mut VecDeque<T>) -> Option<T> {
+    model.pop_front().or_else(|| blobs.pop_front())
+}
+
+#[cfg(test)]
+mod scheduling_tests {
+    use super::*;
+
+    #[test]
+    fn navigation_precedes_remaining_request_text_and_preserves_snapshot_order() {
+        let mut model = VecDeque::new();
+        let mut blobs = VecDeque::from(["body 1", "body 2"]);
+        assert_eq!(next_model_or_blob(&mut model, &mut blobs), Some("body 1"));
+        model.extend(["snapshot begin", "snapshot part", "snapshot commit"]);
+        assert_eq!(next_model_or_blob(&mut model, &mut blobs), Some("snapshot begin"));
+        assert_eq!(next_model_or_blob(&mut model, &mut blobs), Some("snapshot part"));
+        assert_eq!(next_model_or_blob(&mut model, &mut blobs), Some("snapshot commit"));
+        model.push_back("navigation delta");
+        assert_eq!(next_model_or_blob(&mut model, &mut blobs), Some("navigation delta"));
+        assert_eq!(next_model_or_blob(&mut model, &mut blobs), Some("body 2"));
+        assert_eq!(next_model_or_blob(&mut model, &mut blobs), None);
+    }
 }
 
 /// Use the host timezone, including DST, without requiring timezone data on the MCU.

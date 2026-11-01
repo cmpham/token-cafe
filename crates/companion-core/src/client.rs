@@ -85,6 +85,7 @@ pub struct Client {
     unavailable: Option<Vec<u8>>,
     last_tick: u64,
     last_heartbeat: u64,
+    host_keypad_activity: Option<u64>,
     // Display time only; all input and approval deadlines remain monotonic.
     local_clock: Option<(u32, u64)>,
     contact: Option<Contact>,
@@ -92,6 +93,8 @@ pub struct Client {
     approval_button_contact: Option<(Target, u64)>,
     last_tap: Option<(Target, u64, i32, i32)>,
     last_touch: u64,
+    voice_action: Option<u64>,
+    keyboard_notice: Option<(&'static str, u64)>,
     attention_identities: BTreeMap<String, Vec<u8>>,
     attention_awake_until: u64,
     attention_acknowledged: bool,
@@ -126,12 +129,15 @@ impl Client {
             unavailable: None,
             last_tick: now,
             last_heartbeat: now,
+            host_keypad_activity: None,
             local_clock: None,
             contact: None,
             approval_button_down: false,
             approval_button_contact: None,
             last_tap: None,
             last_touch: now,
+            voice_action: None,
+            keyboard_notice: None,
             attention_identities: BTreeMap::new(),
             attention_awake_until: 0,
             attention_acknowledged: false,
@@ -175,6 +181,8 @@ impl Client {
         self.outgoing.pop_front()
     }
     pub fn disconnect(&mut self) {
+        self.voice_action = None;
+        self.keyboard_notice = None;
         self.approval_button_contact = None;
         self.connected = false;
         self.sleeping = false;
@@ -275,9 +283,22 @@ impl Client {
                 if !(1..=4).contains(&r.status) || !(0..=12).contains(&r.reason) || !self.intents.result(r) {
                     return Err(Error::Limit);
                 }
+                if self.voice_action == Some(r.action_id) && r.status != 2 {
+                    self.voice_action = None;
+                    self.keyboard_notice =
+                        Some((if r.status == 1 { "VOICE REQUESTED" } else { "CHECK VOICE APP" }, now + 6000));
+                }
                 self.sync(now)?;
             }
-            Payload::Heartbeat(h) => self.sync_clock(h.local_time_ms, now)?,
+            Payload::Heartbeat(h) => {
+                self.sync_clock(h.local_time_ms, now)?;
+                if let Some(sequence) = h.keypad_activity {
+                    if self.host_keypad_activity.is_some_and(|old| old != sequence) {
+                        self.input_activity(now);
+                    }
+                    self.host_keypad_activity = Some(sequence);
+                }
+            }
             Payload::Error(_) => return Err(Error::Invalid),
             _ => return Err(Error::Sequence),
         }
@@ -576,6 +597,9 @@ impl Client {
         }
     }
     pub fn tick(&mut self, now: u64) -> Result<()> {
+        if self.keyboard_notice.is_some_and(|(_, until)| now >= until) {
+            self.keyboard_notice = None;
+        }
         if self.refresh_at.is_some_and(|at| now >= at) {
             self.refresh_at = None;
             self.sync(now)?;
@@ -590,6 +614,7 @@ impl Client {
                     applied_revision: self.replica.model.revision,
                     monotonic_ms: now,
                     local_time_ms: None,
+                    keypad_activity: None,
                 }))?;
                 self.last_heartbeat = now;
             }
@@ -876,6 +901,191 @@ impl Client {
         }
         Ok(())
     }
+    /// Wake on authenticated remote input and cancel any interrupted local gesture.
+    /// The activity generation prevents repeated heartbeats from extending idle time.
+    pub fn input_activity(&mut self, now: u64) {
+        self.approval_button_contact = None;
+        self.contact = None;
+        self.last_tap = None;
+        self.last_touch = now;
+        self.wake_contact = false;
+        self.sleeping = false;
+    }
+
+    /// Four ASCII rows for the 128x32 keypad OLED. Mode comes from the same
+    /// selected view; READ describes the page, not a different knob-turn action.
+    pub fn keyboard_display(&self) -> [[u8; 16]; 4] {
+        fn row(s: &str) -> [u8; 16] {
+            let mut out = [b' '; 16];
+            for (slot, ch) in out.iter_mut().zip(s.chars()) {
+                *slot = if ch.is_ascii_graphic() || ch == ' ' { ch as u8 } else { b'?' };
+            }
+            out
+        }
+        if !self.connected || !self.replica.ready {
+            return [row("CAFE OFFLINE"), row("START TOKEN CAFE"), row("ON YOUR MAC"), row("")];
+        }
+        let v = self.view();
+        let mut sessions: Vec<_> = self.replica.model.sessions.values().collect();
+        sessions.sort_by(|a, b| (a.seat, &a.id).cmp(&(b.seat, &b.id)));
+        let position = sessions.iter().position(|s| s.id == v.selected_session_id);
+        let reading = v.page == 2;
+        let mode = if reading { "READ" } else { "BROWSE" };
+        let header = alloc::format!("{} {}/{}", mode, position.map_or(0, |i| i + 1), sessions.len());
+        let Some(s) = self.replica.model.sessions.get(&v.selected_session_id) else {
+            return [row(&header), row("SELECT AN AGENT"), row(""), row("TURN TO BROWSE")];
+        };
+        let name = if s.display_name.is_empty() { &s.title } else { &s.display_name };
+        let status = match s.status {
+            1 => "WORKING",
+            2 => "IDLE",
+            3 => "NEEDS INPUT",
+            _ => "DISCONNECTED",
+        };
+        let hint = if v.page == 2 {
+            if !s.navigation_available { "NO DESKTOP LINK" } else { "TURN>AGT PUSH>PC" }
+        } else {
+            "TURN>AGT PUSH>RD"
+        };
+        [row(&header), row(name), row(status), row(self.keyboard_notice.map_or(hint, |(text, _)| text))]
+    }
+
+    /// Physical keypad commands. No command can create an approval decision.
+    /// 1/2 Scroll up/down, 3 Theme, 4 Select, 5 Toggle apps, 6 Native voice,
+    /// 7 Claude, 8 Codex, 9 Select, 10/11 Previous/next agent.
+    pub fn keyboard(&mut self, command: u8, now: u64) -> Result<()> {
+        if !(1..=11).contains(&command) {
+            return Ok(());
+        }
+        self.approval_button_contact = None;
+        self.attention_acknowledged = true;
+        self.contact = None;
+        self.last_tap = None;
+        self.last_touch = now;
+        self.wake_contact = false;
+        self.sleeping = false;
+        if !self.connected || !self.replica.ready {
+            return Ok(());
+        }
+        let v = self.view();
+        match command {
+            1 | 2 => self.keyboard_scroll(command == 2, now),
+            3 => self.issue(Action { kind: 10, ..Default::default() }, now),
+            5 => self.issue(Action { kind: 11, ..Default::default() }, now),
+            7 | 8 => self.issue(Action { kind: if command == 7 { 8 } else { 9 }, ..Default::default() }, now),
+            6 => {
+                if self.replica.model.sessions.get(&v.selected_session_id).is_some_and(|s| s.navigation_available) {
+                    let id = self.next_action;
+                    self.issue(Action { kind: 12, session_id: v.selected_session_id, ..Default::default() }, now)?;
+                    self.voice_action = Some(id);
+                    self.keyboard_notice = Some(("OPENING VOICE", now + 15000));
+                }
+                Ok(())
+            }
+            4 | 9 => {
+                if v.page == 2 {
+                    if self.replica.model.sessions.get(&v.selected_session_id).is_some_and(|s| s.navigation_available) {
+                        self.issue(Action { kind: 6, session_id: v.selected_session_id, ..Default::default() }, now)?;
+                    }
+                } else {
+                    self.keyboard_review(v.selected_session_id, now)?;
+                }
+                Ok(())
+            }
+            10 | 11 => {
+                let mut sessions: Vec<_> = self.replica.model.sessions.values().collect();
+                sessions.sort_by(|a, b| (a.seat, &a.id).cmp(&(b.seat, &b.id)));
+                if sessions.is_empty() {
+                    return Ok(());
+                }
+                let forward = command == 11;
+                let index = sessions
+                    .iter()
+                    .position(|s| s.id == v.selected_session_id)
+                    .map(|i| if forward { (i + 1) % sessions.len() } else { (i + sessions.len() - 1) % sessions.len() })
+                    .unwrap_or(if forward { 0 } else { sessions.len() - 1 });
+                let id = sessions[index].id.clone();
+                self.scene.acknowledge_attention(&id);
+                self.issue(Action { kind: 1, session_id: id, ..Default::default() }, now)
+            }
+            _ => Ok(()),
+        }
+    }
+    fn keyboard_scroll(&mut self, forward: bool, now: u64) -> Result<()> {
+        let v = self.view();
+        if v.page == 2 {
+            if let Some(r) = &mut self.scene.review {
+                let before = r.anchor();
+                r.page(forward);
+                let anchor = r.anchor();
+                if before != anchor
+                    && let Some(blob) = v.review_blob
+                {
+                    self.issue(
+                        Action {
+                            kind: 5,
+                            session_id: v.selected_session_id,
+                            request_id: v.review_request_id,
+                            blob_id: blob.sha256,
+                            anchor: Some(anchor as u32),
+                            ..Default::default()
+                        },
+                        now,
+                    )?;
+                }
+            }
+        } else {
+            let before = self.scene.task_anchor();
+            self.scene.page_task(forward);
+            let anchor = self.scene.task_anchor();
+            if before != anchor
+                && let Some(blob) =
+                    self.replica.model.sessions.get(&v.selected_session_id).and_then(|s| s.task_blob.as_ref())
+            {
+                self.issue(
+                    Action {
+                        kind: 4,
+                        session_id: v.selected_session_id,
+                        blob_id: blob.sha256.clone(),
+                        anchor: Some(anchor as u32),
+                        ..Default::default()
+                    },
+                    now,
+                )?;
+            }
+        }
+        Ok(())
+    }
+    fn keyboard_review(&mut self, id: String, now: u64) -> Result<()> {
+        let Some(s) = self.replica.model.sessions.get(&id) else { return Ok(()) };
+        let (kind, request, blob) = if let Some(r) = &s.approval {
+            (1, r.id.clone(), r.body_blob.clone())
+        } else if s.unlinked_review_blob.is_some() {
+            (3, String::new(), s.unlinked_review_blob.clone())
+        } else {
+            (2, String::new(), s.task_blob.clone())
+        };
+        if let Some(blob) = blob {
+            self.scene.acknowledge_attention(&id);
+            self.issue(
+                Action {
+                    kind: 2,
+                    session_id: id,
+                    request_id: request,
+                    blob_id: blob.sha256,
+                    review_kind: kind,
+                    ..Default::default()
+                },
+                now,
+            )?;
+            self.local_review = true;
+            self.displayed_at = None;
+            self.rendered_identity.clear();
+            self.sync(now)?;
+        }
+        Ok(())
+    }
+
     /// Raw contact samples: pressed=1, released=0, cancelled/multiple=2.
     pub fn touch(
         &mut self,

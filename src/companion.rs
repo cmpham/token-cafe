@@ -763,3 +763,92 @@ mod tests {
 pub mod state;
 
 pub mod semantic;
+mod keypad;
+
+/// Only fixed application destinations are accepted from a paired keypad.
+/// Opening the app does not select a conversation or answer a request.
+fn open_desktop_app(codex: bool) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        // Codex is also distributed inside the unified ChatGPT desktop app.
+        let app = if codex {
+            if std::path::Path::new("/Applications/Codex.app").is_dir() { "Codex" } else { "ChatGPT" }
+        } else {
+            "Claude"
+        };
+        std::process::Command::new("/usr/bin/open").args(["-a", app]).status().is_ok_and(|s| s.success())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = codex;
+        false
+    }
+}
+
+/// Packaged helper uses native app activation and an explicitly named voice control.
+/// It never types a prompt or falls back to system dictation.
+fn keypad_desktop(args: &[&str]) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let Ok(executable) = std::env::current_exe() else { return false };
+        let Some(dir) = executable.parent() else { return false };
+        let Ok(mut child) = std::process::Command::new(dir.join("keypad-desktop")).args(args).spawn() else {
+            return false;
+        };
+        let start = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return status.success(),
+                Ok(None) if start.elapsed() < std::time::Duration::from_secs(10) => {
+                    std::thread::sleep(std::time::Duration::from_millis(50))
+                }
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = args;
+        false
+    }
+}
+
+/// A title is a fallback for apps which hide their route from Accessibility.
+/// Never use it if more than one live session has the same display name.
+fn voice_session_title(model: &companion_core::model::Model, id: &str) -> String {
+    let Some(session) = model.sessions.get(id) else { return String::new() };
+    if model.sessions.values().filter(|s| s.provider == session.provider && s.title == session.title).count() == 1 {
+        session.title.clone()
+    } else {
+        String::new()
+    }
+}
+
+#[cfg(test)]
+mod keypad_voice_tests {
+    #[test]
+    fn duplicate_titles_require_route_identity() {
+        let mut model = companion_core::model::Model::default();
+        for (id, provider) in [("codex:a", 2), ("claude:a", 1)] {
+            model.sessions.insert(
+                id.into(),
+                companion_core::wire::Session {
+                    id: id.into(),
+                    provider,
+                    title: "Same title".into(),
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(super::voice_session_title(&model, "codex:a"), "Same title");
+        let mut other = model.sessions["codex:a"].clone();
+        other.id = "codex:b".into();
+        model.sessions.insert(other.id.clone(), other);
+        assert_eq!(super::voice_session_title(&model, "codex:a"), "");
+        assert_eq!(super::voice_session_title(&model, "missing"), "");
+    }
+}

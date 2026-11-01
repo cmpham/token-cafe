@@ -300,7 +300,9 @@ pub unsafe extern "C" fn cafe_engine_feedback(e: *mut Engine, out: *mut u16) -> 
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cafe_engine_presented(e: *mut Engine, now: u64) {
-    if let Some(c) = &mut unsafe { &mut *e }.client {
+    let e = unsafe { &mut *e };
+    if let Some(c) = &mut e.client
+    {
         c.presented(now);
     }
 }

@@ -1,0 +1,141 @@
+{
+  "description": "Known-good VIA settings read back from serial 651A6626B5AE5931; no macros or bonds included. QMK/VIA codes, not ZMK consumer usages.",
+  "protocol": 13,
+  "layers": 2,
+  "keys": [
+    {
+      "layer": 0,
+      "row": 0,
+      "col": 0,
+      "code": 41
+    },
+    {
+      "layer": 0,
+      "row": 0,
+      "col": 1,
+      "code": 44
+    },
+    {
+      "layer": 0,
+      "row": 0,
+      "col": 2,
+      "code": 104
+    },
+    {
+      "layer": 0,
+      "row": 1,
+      "col": 0,
+      "code": 42
+    },
+    {
+      "layer": 0,
+      "row": 1,
+      "col": 1,
+      "code": 82
+    },
+    {
+      "layer": 0,
+      "row": 1,
+      "col": 2,
+      "code": 40
+    },
+    {
+      "layer": 0,
+      "row": 2,
+      "col": 0,
+      "code": 80
+    },
+    {
+      "layer": 0,
+      "row": 2,
+      "col": 1,
+      "code": 81
+    },
+    {
+      "layer": 0,
+      "row": 2,
+      "col": 2,
+      "code": 79
+    },
+    {
+      "layer": 1,
+      "row": 0,
+      "col": 0,
+      "code": 0
+    },
+    {
+      "layer": 1,
+      "row": 0,
+      "col": 1,
+      "code": 0
+    },
+    {
+      "layer": 1,
+      "row": 0,
+      "col": 2,
+      "code": 20992
+    },
+    {
+      "layer": 1,
+      "row": 1,
+      "col": 0,
+      "code": 0
+    },
+    {
+      "layer": 1,
+      "row": 1,
+      "col": 1,
+      "code": 168
+    },
+    {
+      "layer": 1,
+      "row": 1,
+      "col": 2,
+      "code": 32256
+    },
+    {
+      "layer": 1,
+      "row": 2,
+      "col": 0,
+      "code": 32258
+    },
+    {
+      "layer": 1,
+      "row": 2,
+      "col": 1,
+      "code": 32259
+    },
+    {
+      "layer": 1,
+      "row": 2,
+      "col": 2,
+      "code": 32257
+    }
+  ],
+  "encoders": [
+    {
+      "layer": 0,
+      "encoder": 0,
+      "direction": 0,
+      "code": 169
+    },
+    {
+      "layer": 0,
+      "encoder": 0,
+      "direction": 1,
+      "code": 170
+    },
+    {
+      "layer": 1,
+      "encoder": 0,
+      "direction": 0,
+      "code": 169
+    },
+    {
+      "layer": 1,
+      "encoder": 0,
+      "direction": 1,
+      "code": 170
+    }
+  ]
+}

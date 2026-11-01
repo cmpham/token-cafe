@@ -320,7 +320,8 @@ pub fn run(
         #[cfg(feature = "bluetooth")]
         semantic: match bluetooth {
             Some(CompanionConfig::Semantic) => Some(token_cafe::companion::semantic::SemanticMirror::start()),
-            _ => None,
+            Some(CompanionConfig::Legacy(_)) => None,
+            None => Some(token_cafe::companion::semantic::SemanticMirror::start_with_board(false)),
         },
         approvals: token_cafe::approval::Broker::start().map_err(|e| eprintln!("Approval bridge: {e}")).ok(),
         provider_sessions: Vec::new(),
@@ -460,7 +461,7 @@ impl App {
         );
         #[cfg(feature = "bluetooth")]
         if let Some(companion) = &self.semantic {
-            return format!("{base} — BLE: {}", companion.status());
+            return format!("{base} — {}", companion.status());
         }
         #[cfg(feature = "bluetooth")]
         if let Some(companion) = &self.companion {
@@ -637,7 +638,10 @@ impl App {
         let Some(s) = &self.shown else { return };
         match key.as_ref() {
             Key::Character("p" | "P") => {
-                self.roster_index = (self.roster_index + 1) % ROSTERS.len();
+                self.roster_index = ROSTERS
+                    .iter()
+                    .position(|name| Patrons::roster(name).unwrap() == self.scene.patrons)
+                    .map_or(0, |i| (i + 1) % ROSTERS.len());
                 self.scene.patrons = Patrons::roster(ROSTERS[self.roster_index]).unwrap();
                 self.scene.selected_seat = Some(self.selected_seat);
                 s.window.set_title(&self.window_title());

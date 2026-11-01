@@ -1016,3 +1016,450 @@ fn attention_led_acknowledges_current_batch_without_marking_requests_resolved() 
     publish_attention_snapshot(&mut c, &mut h, 12200);
     assert!(!c.approval_waiting());
 }
+#[test]
+fn keypad_navigation_and_app_shortcuts_never_answer_requests() {
+    let (mut c, mut host, mut peer) = setup();
+    c.keyboard(11, 1000).unwrap();
+    c.keyboard(4, 1010).unwrap();
+    let a = actions(&mut c);
+    assert_eq!(a.iter().map(|a| a.kind).collect::<Vec<_>>(), vec![1, 2]);
+    assert_eq!(c.view().page, 2);
+    let before = c.view();
+    for command in [7, 8] {
+        c.keyboard(command, 2000).unwrap();
+        let a = actions(&mut c);
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].kind, i32::from(command) + 1);
+        assert_eq!(c.view(), before, "app switch must preserve the review");
+        let model = host.model.clone();
+        let (r, d) = host.action(&mut peer, &a[0], 2000 + u64::from(command) * 1000, None).unwrap();
+        assert_eq!(r.status, 2);
+        assert_eq!(d, Some(companion_core::authority::Dispatch::App { codex: command == 8 }));
+        assert_eq!(host.model, model);
+        assert!(host.action(&mut peer, &a[0], 99999, None).unwrap().1.is_none(), "retry cannot launch twice");
+        host.finish(&mut peer, &a[0], true);
+    }
+    c.keyboard(9, 3000).unwrap();
+    let handoff = actions(&mut c);
+    assert_eq!(
+        handoff.iter().map(|a| a.kind).collect::<Vec<_>>(),
+        [6],
+        "knob press in review opens desktop, never decides"
+    );
+    assert_eq!(handoff[0].session_id, before.selected_session_id);
+    c.keyboard(11, 4000).unwrap();
+    assert_eq!(c.view().page, 1);
+    assert!(actions(&mut c).iter().all(|a| a.kind != 7));
+    c.disconnect();
+    for command in 1..=11 {
+        c.keyboard(command, 5000).unwrap();
+    }
+    assert!(actions(&mut c).is_empty(), "no offline commands are queued");
+}
+
+#[test]
+fn keypad_app_commands_require_navigation_permission() {
+    let (_, mut host, _) = setup();
+    let mut peer = Peer::new("unprivileged".into(), vec![1; 16], false, false);
+    for kind in [8, 9, 11, 12] {
+        let action = Action { id: kind as u64, kind, ..Default::default() };
+        let (r, dispatch) = host.action(&mut peer, &action, 10000, None).unwrap();
+        assert_eq!(r.status, 3);
+        assert!(dispatch.is_none());
+    }
+}
+
+#[test]
+fn knob_press_from_details_hands_off_the_exact_session_once() {
+    for (kind, navigable) in [(2, true), (3, true), (3, false)] {
+        let (mut c, mut host, mut peer) = setup();
+        let s = host.model.sessions.get_mut("claude:test").unwrap();
+        s.approval = None;
+        s.navigation_available = navigable;
+        if kind == 3 {
+            s.unlinked_review_blob = s.task_blob.clone();
+        }
+        host.model.revision += 1;
+        for e in sync::snapshot(&host.model, &[1; 16], &[2; 16]).unwrap() {
+            let raw = codec::encode(&e).unwrap();
+            c.receive(e, &raw, 10010).unwrap();
+        }
+        actions(&mut c);
+        c.keyboard(11, 11000).unwrap();
+        c.keyboard(9, 11100).unwrap();
+        assert_eq!(c.view().page, 2);
+        assert_eq!(c.view().review_kind, kind);
+        for a in actions(&mut c) {
+            assert!(matches!(a.kind, 1 | 2));
+            assert!(host.action(&mut peer, &a, 11110, None).unwrap().1.is_none());
+        }
+        c.keyboard(9, 11200).unwrap();
+        let handoff = actions(&mut c);
+        if navigable {
+            assert_eq!(handoff.len(), 1);
+            assert_eq!(handoff[0].kind, 6);
+            assert_eq!(handoff[0].session_id, "claude:test");
+            let (_, dispatch) = host.action(&mut peer, &handoff[0], 11210, None).unwrap();
+            assert_eq!(dispatch, Some(companion_core::authority::Dispatch::Desktop("claude:test".into())));
+            assert!(host.action(&mut peer, &handoff[0], 11220, None).unwrap().1.is_none());
+        } else {
+            assert!(handoff.is_empty());
+            assert_eq!(c.view().page, 2);
+        }
+        assert!(c.receipts.is_empty());
+    }
+}
+
+#[test]
+fn knob_always_browses_and_top_keys_scroll_without_changing_agents() {
+    let (mut c, mut host, _) = setup();
+    let body = (0..80).map(|i| format!("Task detail line {i:02}\n")).collect::<String>();
+    let blob = sync::blob(body.as_bytes()).unwrap();
+    let first = host.model.sessions.get_mut("claude:test").unwrap();
+    first.approval = None;
+    first.task_blob = Some(blob);
+    let mut second = first.clone();
+    second.id = "codex:other".into();
+    second.provider = 2;
+    second.seat = 2;
+    host.model.sessions.insert(second.id.clone(), second);
+    host.model.revision += 1;
+    for e in sync::snapshot(&host.model, &[1; 16], &[2; 16]).unwrap() {
+        let raw = codec::encode(&e).unwrap();
+        c.receive(e, &raw, 10010).unwrap();
+    }
+    for chunk in sync::chunks(body.as_bytes()).unwrap() {
+        c.blobs.receive(&chunk).unwrap();
+    }
+    actions(&mut c);
+
+    for (time, id) in [(11000, "claude:test"), (11100, "codex:other")] {
+        c.keyboard(11, time).unwrap();
+        assert_eq!(c.view().selected_session_id, id);
+        assert_eq!(c.view().page, 1, "turning only highlights the next agent");
+        assert!(c.scene.review.is_none());
+        assert_eq!(actions(&mut c).iter().map(|a| a.kind).collect::<Vec<_>>(), [1]);
+    }
+    c.keyboard(9, 11200).unwrap();
+    assert_eq!(c.view().page, 2);
+    assert_eq!(c.view().selected_session_id, "codex:other");
+    assert_eq!(actions(&mut c).iter().map(|a| a.kind).collect::<Vec<_>>(), [2]);
+
+    c.keyboard(2, 11300).unwrap();
+    assert_eq!(c.view().selected_session_id, "codex:other", "scrolling cannot switch agents");
+    assert!(c.view().review_anchor > 0);
+    assert_eq!(actions(&mut c).iter().map(|a| a.kind).collect::<Vec<_>>(), [5]);
+    c.keyboard(1, 11400).unwrap();
+    assert_eq!(c.view().review_anchor, 0);
+    assert_eq!(actions(&mut c).iter().map(|a| a.kind).collect::<Vec<_>>(), [5]);
+
+    c.keyboard(11, 11600).unwrap();
+    assert_eq!(c.view().selected_session_id, "claude:test");
+    assert_eq!(c.view().page, 1, "turning browses even after opening a review");
+    assert_eq!(actions(&mut c).iter().map(|a| a.kind).collect::<Vec<_>>(), [1]);
+    c.keyboard(2, 11700).unwrap();
+    assert!(c.view().task_anchor > 0);
+    assert_eq!(c.view().selected_session_id, "claude:test");
+    assert_eq!(actions(&mut c).iter().map(|a| a.kind).collect::<Vec<_>>(), [4]);
+    c.keyboard(1, 11800).unwrap();
+    assert_eq!(c.view().task_anchor, 0);
+    assert_eq!(actions(&mut c).iter().map(|a| a.kind).collect::<Vec<_>>(), [4]);
+}
+
+#[test]
+fn every_keypad_control_wakes_screen_and_restarts_idle_timer() {
+    for connected in [true, false] {
+        for command in 1..=11 {
+            let (mut c, _, _) = setup();
+            if !connected {
+                c.disconnect();
+            }
+            actions(&mut c);
+            c.tick(600_000).unwrap();
+            assert!(c.sleeping, "fixture must reach actual idle sleep");
+
+            let pressed_at = 600_100;
+            c.keyboard(command, pressed_at).unwrap();
+            assert!(!c.sleeping, "command {command}, connected={connected} must wake immediately");
+            if !connected {
+                assert!(actions(&mut c).is_empty(), "offline wake must not queue shortcuts");
+            }
+            c.tick(pressed_at + 33).unwrap();
+            assert!(!c.sleeping, "the next frame must remain awake");
+            c.tick(pressed_at + 599_999).unwrap();
+            assert!(!c.sleeping, "every control restarts the full idle interval");
+            c.tick(pressed_at + 600_000).unwrap();
+            assert!(c.sleeping, "ordinary idle sleep still applies after keypad wake");
+        }
+    }
+}
+
+#[test]
+fn keypad_cancels_a_held_external_approval_and_wakes_without_queuing() {
+    let (mut c, _, _) = setup();
+    arm_external_button(&mut c);
+    c.approval_button(true, 12000, &mut |_| true).unwrap();
+    c.keyboard(7, 12020).unwrap();
+    c.approval_button(false, 12050, &mut |_| true).unwrap();
+    assert!(actions(&mut c).iter().all(|a| a.kind != 7));
+    c.disconnect();
+    c.sleeping = true;
+    c.keyboard(8, 13000).unwrap();
+    assert!(!c.sleeping);
+    assert!(actions(&mut c).is_empty());
+}
+
+#[test]
+fn approval_view_updates_cannot_switch_the_knob_from_browsing_to_scrolling() {
+    let (mut c, mut host, mut peer) = setup();
+    let body = (0..80).map(|i| format!("Approval detail {i:02}\n")).collect::<String>();
+    let blob = sync::blob(body.as_bytes()).unwrap();
+    let first = host.model.sessions.get_mut("claude:test").unwrap();
+    let r = first.approval.as_mut().unwrap();
+    r.body_blob = Some(blob.clone());
+    r.digest = companion_core::crypto::request_digest(
+        &r.id,
+        &first.id,
+        first.provider as u8,
+        &r.title,
+        &r.tool_name,
+        &blob.sha256.as_slice().try_into().unwrap(),
+        blob.byte_length,
+        &[1, 2],
+    )
+    .unwrap()
+    .to_vec();
+    let mut second = first.clone();
+    second.id = "codex:other".into();
+    second.provider = 2;
+    second.seat = 2;
+    second.approval = None;
+    host.model.sessions.insert(second.id.clone(), second);
+    host.model.revision += 1;
+    let publish = |c: &mut Client, host: &Authority, now| {
+        for e in sync::snapshot(&host.model, &[1; 16], &[2; 16]).unwrap() {
+            let raw = codec::encode(&e).unwrap();
+            c.receive(e, &raw, now).unwrap();
+        }
+    };
+    publish(&mut c, &host, 10010);
+    for chunk in sync::chunks(body.as_bytes()).unwrap() {
+        c.blobs.receive(&chunk).unwrap();
+    }
+    actions(&mut c);
+    c.keyboard(11, 11000).unwrap();
+    assert_eq!(c.view().selected_session_id, "claude:test");
+    assert_eq!(c.view().page, 1);
+    let select = actions(&mut c);
+    assert_eq!(select.len(), 1);
+    assert_eq!(select[0].kind, 1);
+    let (result, _) = host.action(&mut peer, &select[0], 11010, None).unwrap();
+    receive(&mut c, Payload::ActionResult(result), 11020);
+    publish(&mut c, &host, 11030);
+
+    // A desktop/synchronized approval can appear between physical turns.
+    let r = host.model.sessions["claude:test"].approval.as_ref().unwrap();
+    host.model.view.page = 2;
+    host.model.view.review_kind = 1;
+    host.model.view.review_request_id = r.id.clone();
+    host.model.view.review_blob = r.body_blob.clone();
+    host.model.revision += 1;
+    publish(&mut c, &host, 11100);
+    assert_eq!(c.view().page, 2);
+    c.keyboard(11, 11200).unwrap();
+    assert_eq!(c.view().selected_session_id, "codex:other", "approval visibility cannot capture knob turns");
+    assert_eq!(c.view().page, 1);
+    assert_eq!(actions(&mut c).iter().map(|a| a.kind).collect::<Vec<_>>(), [1]);
+
+    c.keyboard(10, 11300).unwrap();
+    assert_eq!(c.view().selected_session_id, "claude:test");
+    assert_eq!(c.view().page, 1);
+    actions(&mut c);
+    c.keyboard(9, 11400).unwrap();
+    assert_eq!(c.view().page, 2);
+    assert_eq!(actions(&mut c).iter().map(|a| a.kind).collect::<Vec<_>>(), [2]);
+    c.keyboard(2, 11500).unwrap();
+    assert_eq!(c.view().selected_session_id, "claude:test");
+    assert!(c.view().review_anchor > 0, "only the top keys scroll the approval");
+    assert_eq!(actions(&mut c).iter().map(|a| a.kind).collect::<Vec<_>>(), [5]);
+    c.keyboard(11, 11700).unwrap();
+    assert_eq!(c.view().selected_session_id, "codex:other");
+    assert_eq!(c.view().page, 1);
+    assert_eq!(actions(&mut c).iter().map(|a| a.kind).collect::<Vec<_>>(), [1]);
+}
+
+#[test]
+fn finishing_long_keypad_setup_starts_a_fresh_idle_timer() {
+    let mut c = Client::new("qa".into(), vec![1; 16], true, 0);
+    // Calibration can take longer than ten minutes; uptime is not idle time.
+    let completed_at = 2_700_000;
+    c.sleeping = true;
+    c.input_activity(completed_at - 33);
+    c.tick(completed_at).unwrap();
+    assert!(!c.sleeping);
+    c.input_activity(completed_at); // overlay closes after final input
+    c.tick(completed_at + 33).unwrap();
+    assert!(!c.sleeping, "finishing setup must leave the cafe visible");
+    c.tick(completed_at + 599_999).unwrap();
+    assert!(!c.sleeping);
+    c.tick(completed_at + 600_000).unwrap();
+    assert!(c.sleeping, "ordinary idle sleep still works after setup");
+}
+
+#[test]
+fn keypad_setup_cancels_hidden_approval_gestures() {
+    let (mut c, _, _) = setup();
+    arm_external_button(&mut c);
+    c.approval_button(true, 12000, &mut |_| true).unwrap();
+    c.input_activity(12020);
+    c.approval_button(false, 12050, &mut |_| true).unwrap();
+    assert!(actions(&mut c).is_empty());
+    assert!(c.receipts.is_empty());
+}
+
+#[test]
+fn oled_keeps_knob_browse_hint_in_details_and_clears_private_state_offline() {
+    let (mut c, _, _) = setup();
+    c.keyboard(11, 11000).unwrap();
+    let rows = c.keyboard_display();
+    assert!(rows[0].starts_with(b"BROWSE"));
+    assert!(rows[1].starts_with(b"TEST CLAUDE"));
+    assert!(rows[2].starts_with(b"NEEDS INPUT"));
+    assert!(rows[3].starts_with(b"TURN>AGT PUSH>RD"));
+    c.keyboard(9, 11200).unwrap();
+    assert!(c.keyboard_display()[0].starts_with(b"READ"));
+    assert!(c.keyboard_display()[3].starts_with(b"TURN>AGT PUSH>PC"));
+    c.keyboard(11, 11400).unwrap();
+    assert!(c.keyboard_display()[0].starts_with(b"BROWSE"));
+    c.disconnect();
+    let rows = c.keyboard_display();
+    assert!(rows[0].starts_with(b"CAFE OFFLINE"));
+    assert!(rows[1].starts_with(b"START TOKEN CAFE"));
+    assert!(rows.iter().flatten().all(|b| (32..=126).contains(b)));
+}
+
+#[test]
+fn middle_select_and_knob_are_identical_on_cafe_and_details() {
+    let (mut key, _, _) = setup();
+    let (mut knob, _, _) = setup();
+    for client in [&mut key, &mut knob] {
+        client.keyboard(11, 11000).unwrap();
+        actions(client);
+    }
+    for time in [11100, 11200] {
+        key.keyboard(4, time).unwrap();
+        knob.keyboard(9, time).unwrap();
+        assert_eq!(key.view(), knob.view());
+        assert_eq!(actions(&mut key), actions(&mut knob));
+    }
+}
+
+#[test]
+fn voice_and_toggle_preserve_review_and_voice_targets_selected_session_once() {
+    use companion_core::authority::Dispatch;
+    for (command, kind) in [(5, 11), (6, 12)] {
+        let (mut c, mut host, mut peer) = setup();
+        c.keyboard(11, 11000).unwrap();
+        c.keyboard(4, 11100).unwrap();
+        for a in actions(&mut c) {
+            host.action(&mut peer, &a, 11110, None).unwrap();
+        }
+        let before = c.view();
+        let model = host.model.clone();
+        c.keyboard(command, 11200).unwrap();
+        assert_eq!(c.view(), before);
+        let issued = actions(&mut c);
+        assert_eq!(issued.len(), 1);
+        assert_eq!(issued[0].kind, kind);
+        let (r, dispatch) = host.action(&mut peer, &issued[0], 11210, None).unwrap();
+        assert_eq!(r.status, 2);
+        assert_eq!(
+            dispatch,
+            Some(if kind == 12 { Dispatch::Voice("claude:test".into()) } else { Dispatch::ToggleApp })
+        );
+        assert_eq!(host.model, model);
+        assert!(host.action(&mut peer, &issued[0], 11220, None).unwrap().1.is_none());
+        let failed = host.finish(&mut peer, &issued[0], false);
+        assert_eq!(failed.status, 3);
+        assert_eq!(host.model, model, "native voice never answers the approval");
+    }
+}
+
+#[test]
+fn voice_requires_a_live_desktop_target() {
+    let (mut c, mut host, mut peer) = setup();
+    c.keyboard(6, 11000).unwrap();
+    assert!(actions(&mut c).is_empty());
+    host.model.sessions.get_mut("claude:test").unwrap().navigation_available = false;
+    for id in ["claude:test", "claude:missing"] {
+        let a = Action {
+            id: if id == "claude:test" { 1 } else { 2 },
+            kind: 12,
+            session_id: id.into(),
+            ..Default::default()
+        };
+        let (r, dispatch) = host.action(&mut peer, &a, 12000, None).unwrap();
+        assert_eq!(r.status, 3);
+        assert!(dispatch.is_none());
+    }
+}
+
+#[test]
+fn patron_key_cycles_every_theme_without_changing_selection_or_requests() {
+    use cafe_ui::patrons::Patrons;
+    let (mut c, mut host, mut peer) = setup();
+    c.keyboard(11, 11000).unwrap();
+    c.keyboard(4, 11100).unwrap();
+    for a in actions(&mut c) {
+        host.action(&mut peer, &a, 11110, None).unwrap();
+    }
+    let sessions = host.model.sessions.clone();
+    let review = host.model.view.review_blob.clone();
+    for (i, name) in ["dragons", "pokemon", "mixed", "humans"].iter().enumerate() {
+        c.keyboard(3, 12000 + i as u64 * 1000).unwrap();
+        let issued = actions(&mut c);
+        assert_eq!(issued.len(), 1);
+        let (r, dispatch) = host.action(&mut peer, &issued[0], 12010 + i as u64 * 1000, None).unwrap();
+        assert_eq!(r.status, 1);
+        assert!(dispatch.is_none());
+        assert_eq!(host.model.view.patron_ids, Patrons::roster(name).unwrap().ids());
+        let view = host.model.view.clone();
+        host.action(&mut peer, &issued[0], 13000, None).unwrap();
+        assert_eq!(host.model.view, view, "a retry cannot cycle twice");
+        assert_eq!(host.model.view.selected_session_id, "claude:test");
+        assert_eq!(host.model.view.review_blob, review);
+        assert_eq!(host.model.sessions, sessions);
+    }
+}
+
+#[test]
+fn voice_feedback_reports_failure_without_claiming_recording_started() {
+    let (mut c, mut host, mut peer) = setup();
+    c.keyboard(11, 11000).unwrap();
+    for a in actions(&mut c) {
+        host.action(&mut peer, &a, 11010, None).unwrap();
+    }
+    c.keyboard(6, 11100).unwrap();
+    assert!(c.keyboard_display()[3].starts_with(b"OPENING VOICE"));
+    let issued = actions(&mut c);
+    host.action(&mut peer, &issued[0], 11110, None).unwrap();
+    let failed = host.finish(&mut peer, &issued[0], false);
+    receive(&mut c, Payload::ActionResult(failed), 11200);
+    assert!(c.keyboard_display()[3].starts_with(b"CHECK VOICE APP"));
+    c.disconnect();
+    assert!(c.keyboard_display()[0].starts_with(b"CAFE OFFLINE"));
+}
+
+#[test]
+fn mac_keypad_activity_wakes_board_once_without_replaying_input() {
+    let (mut c, _, _) = setup();
+    receive(&mut c, Payload::Heartbeat(Heartbeat { keypad_activity: Some(10), ..Default::default() }), 1);
+    c.tick(600_000).unwrap();
+    assert!(c.sleeping);
+    receive(&mut c, Payload::Heartbeat(Heartbeat { keypad_activity: Some(11), ..Default::default() }), 600_100);
+    assert!(!c.sleeping);
+    assert!(actions(&mut c).is_empty());
+    c.tick(1_200_099).unwrap(); assert!(!c.sleeping);
+    receive(&mut c, Payload::Heartbeat(Heartbeat { keypad_activity: Some(11), ..Default::default() }), 1_200_099);
+    c.tick(1_200_100).unwrap(); assert!(c.sleeping, "a repeated heartbeat must not extend the idle timer");
+}

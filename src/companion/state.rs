@@ -15,6 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 pub struct Store {
+    pub keypad_activity: u64,
     pub authority: Authority,
     pub epoch: [u8; 16],
     pub broker: Option<Broker>,
@@ -53,6 +54,7 @@ fn settle(r: &mut Request, outcome: Option<Outcome>) -> bool {
 impl Store {
     pub fn new(epoch: [u8; 16]) -> Self {
         Self {
+            keypad_activity: 0,
             authority: Authority {
                 model: Model { revision: 1, view: View { page: 1, ..Default::default() }, ..Default::default() },
             },
@@ -273,9 +275,16 @@ impl Store {
             next.view.origin_device_id = "desktop".into();
         }
         if !next.view.selected_session_id.is_empty() && !next.sessions.contains_key(&next.view.selected_session_id) {
-            next.view = View { page: 1, generation: old.view.generation + 1, ..Default::default() };
+            next.view = View {
+                page: 1,
+                generation: old.view.generation + 1,
+                patron_ids: next.view.patron_ids.clone(),
+                ..Default::default()
+            };
         }
-        next.view.patron_ids = scene.patrons.ids().to_vec();
+        if self.last_desktop.is_none() {
+            next.view.patron_ids = scene.patrons.ids().to_vec();
+        }
         if next.view.page == 2 {
             let s = next.sessions.get(&next.view.selected_session_id);
             let valid = next.view.review_blob.is_some()
@@ -366,6 +375,9 @@ impl Store {
         let seats = m.sessions.values().filter_map(|s| real(&s.id).map(|id| (id, s.seat as usize))).collect::<Vec<_>>();
         scene.set_authoritative_sessions(&ss, &seats);
         let v = &m.view;
+        if let Some(patrons) = cafe_ui::patrons::Patrons::from_ids(&v.patron_ids) {
+            scene.patrons = patrons;
+        }
         if let Some(id) = real(&v.selected_session_id) {
             scene.focus_patron(id);
         } else {
@@ -453,6 +465,25 @@ mod tests {
             store.ingest(&mut scene, None);
             assert_eq!(store.authority.model.view.patron_ids, scene.patrons.ids());
         }
+    }
+    #[test]
+    fn remote_theme_survives_desktop_collection_and_local_cycle() {
+        let mut scene = scene();
+        let mut store = Store::new([1; 16]);
+        store.ingest(&mut scene, None);
+        let mut peer = companion_core::authority::Peer::new("board".into(), vec![1; 16], false, true);
+        for (i, name) in ["dragons", "pokemon", "mixed", "humans"].iter().enumerate() {
+            let a = companion_core::wire::Action { id: i as u64 + 1, kind: 10, ..Default::default() };
+            store.authority.action(&mut peer, &a, 1000, None).unwrap();
+            for _ in 0..3 {
+                store.ingest(&mut scene, None);
+            }
+            assert_eq!(scene.patrons, crate::patrons::Patrons::roster(name).unwrap());
+            assert_eq!(store.authority.model.view.patron_ids, scene.patrons.ids());
+        }
+        scene.patrons = crate::patrons::Patrons::roster("mixed").unwrap();
+        store.ingest(&mut scene, None);
+        assert_eq!(store.authority.model.view.patron_ids, scene.patrons.ids());
     }
     #[test]
     fn replacing_review_without_task_returns_to_cafe() {

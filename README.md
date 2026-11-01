@@ -55,10 +55,10 @@ On macOS you can also build a local app bundle to launch from Finder or keep in 
 
 ```sh
 ./tools/build_macos.sh
-open "target/release/Token Café.app"
+open "$(sh tools/macos_app_path.sh)"
 ```
 
-The bundle is for local use; it is not signed for distribution or notarized. Finder launches use the default agent directories; use the terminal command when you need shell environment overrides.
+Every worktree builds the bundle into the main repository's `release/Token Café.app`, keeping one stable location for Finder, Dock, and macOS permissions. `tools/run_companion.sh` uses that same bundle. The bundle is for local use; it is not signed for distribution or notarized. Finder launches use the default agent directories; use the terminal command when you need shell environment overrides.
 
 | Command | |
 |---|---|
@@ -288,3 +288,7 @@ renders pixels locally at 1:1 scale; the desktop uses uniform integer scaling. P
 font glyphs and icons keep square pixels. Wider desks show longer names, and the
 task panel fits 32 characters per line. Touch coordinates map directly to the
 rendered scene; update both app and firmware together for the new scrollbar area.
+
+### Pipar Flake keypad
+
+The keypad connects directly to the Mac over USB, with Bluetooth fallback; an optional board mirrors the Mac. Start with the [keypad setup and recovery guide](docs/pipar-keypad.md) for the layout, both connection architectures, known-good VIA settings, OLED firmware, serial flashing, permissions, and troubleshooting. The former keypad-to-board path is historical, not an automatic fallback. See the [implementation review](docs/keypad-architecture-review.md) for module ownership and remaining limitations.

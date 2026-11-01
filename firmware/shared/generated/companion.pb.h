@@ -112,7 +112,12 @@ typedef enum _token_cafe_v2_ActionKind {
     token_cafe_v2_ActionKind_ACTION_SET_TASK_ANCHOR = 4,
     token_cafe_v2_ActionKind_ACTION_SET_REVIEW_ANCHOR = 5,
     token_cafe_v2_ActionKind_ACTION_OPEN_DESKTOP = 6,
-    token_cafe_v2_ActionKind_ACTION_DECIDE = 7
+    token_cafe_v2_ActionKind_ACTION_DECIDE = 7,
+    token_cafe_v2_ActionKind_ACTION_OPEN_CLAUDE_APP = 8,
+    token_cafe_v2_ActionKind_ACTION_OPEN_CODEX_APP = 9,
+    token_cafe_v2_ActionKind_ACTION_CYCLE_PATRONS = 10,
+    token_cafe_v2_ActionKind_ACTION_TOGGLE_DESKTOP_APP = 11,
+    token_cafe_v2_ActionKind_ACTION_START_VOICE = 12
 } token_cafe_v2_ActionKind;
 
 typedef enum _token_cafe_v2_ResultStatus {
@@ -182,6 +187,8 @@ typedef struct _token_cafe_v2_Heartbeat {
     uint64_t monotonic_ms;
     bool has_local_time_ms;
     uint32_t local_time_ms; /* host -> board only; same semantics as HelloAck */
+    bool has_keypad_activity;
+    uint64_t keypad_activity;
 } token_cafe_v2_Heartbeat;
 
 typedef struct _token_cafe_v2_Resync {
@@ -432,8 +439,8 @@ extern "C" {
 #define _token_cafe_v2_BlobUnavailableReason_ARRAYSIZE ((token_cafe_v2_BlobUnavailableReason)(token_cafe_v2_BlobUnavailableReason_BLOB_REASON_LIMIT+1))
 
 #define _token_cafe_v2_ActionKind_MIN token_cafe_v2_ActionKind_ACTION_UNSPECIFIED
-#define _token_cafe_v2_ActionKind_MAX token_cafe_v2_ActionKind_ACTION_DECIDE
-#define _token_cafe_v2_ActionKind_ARRAYSIZE ((token_cafe_v2_ActionKind)(token_cafe_v2_ActionKind_ACTION_DECIDE+1))
+#define _token_cafe_v2_ActionKind_MAX token_cafe_v2_ActionKind_ACTION_START_VOICE
+#define _token_cafe_v2_ActionKind_ARRAYSIZE ((token_cafe_v2_ActionKind)(token_cafe_v2_ActionKind_ACTION_START_VOICE+1))
 
 #define _token_cafe_v2_ResultStatus_MIN token_cafe_v2_ResultStatus_RESULT_UNSPECIFIED
 #define _token_cafe_v2_ResultStatus_MAX token_cafe_v2_ResultStatus_RESULT_UNKNOWN
@@ -491,7 +498,7 @@ extern "C" {
 #define token_cafe_v2_Hello_init_default         {"", 0, {0, {0}}, 0, 0, 0, {_token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN}, 0, {_token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN}, 0}
 #define token_cafe_v2_HelloAck_init_default      {0, {0, {0}}, 0, {_token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN}, 0, 0, 0, 0, 0, {_token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN}, false, 0}
 #define token_cafe_v2_ProtocolError_init_default {_token_cafe_v2_ErrorCode_MIN, false, 0, ""}
-#define token_cafe_v2_Heartbeat_init_default     {0, 0, false, 0}
+#define token_cafe_v2_Heartbeat_init_default     {0, 0, false, 0, false, 0}
 #define token_cafe_v2_Resync_init_default        {0, _token_cafe_v2_ResyncReason_MIN}
 #define token_cafe_v2_Applied_init_default       {0}
 #define token_cafe_v2_SnapshotBegin_init_default {0, 0, false, token_cafe_v2_View_init_default, false, token_cafe_v2_Usage_init_default, 0}
@@ -513,7 +520,7 @@ extern "C" {
 #define token_cafe_v2_Hello_init_zero            {"", 0, {0, {0}}, 0, 0, 0, {_token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN}, 0, {_token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN}, 0}
 #define token_cafe_v2_HelloAck_init_zero         {0, {0, {0}}, 0, {_token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN}, 0, 0, 0, 0, 0, {_token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN, _token_cafe_v2_Capability_MIN}, false, 0}
 #define token_cafe_v2_ProtocolError_init_zero    {_token_cafe_v2_ErrorCode_MIN, false, 0, ""}
-#define token_cafe_v2_Heartbeat_init_zero        {0, 0, false, 0}
+#define token_cafe_v2_Heartbeat_init_zero        {0, 0, false, 0, false, 0}
 #define token_cafe_v2_Resync_init_zero           {0, _token_cafe_v2_ResyncReason_MIN}
 #define token_cafe_v2_Applied_init_zero          {0}
 #define token_cafe_v2_SnapshotBegin_init_zero    {0, 0, false, token_cafe_v2_View_init_zero, false, token_cafe_v2_Usage_init_zero, 0}
@@ -556,6 +563,7 @@ extern "C" {
 #define token_cafe_v2_Heartbeat_applied_revision_tag 1
 #define token_cafe_v2_Heartbeat_monotonic_ms_tag 2
 #define token_cafe_v2_Heartbeat_local_time_ms_tag 3
+#define token_cafe_v2_Heartbeat_keypad_activity_tag 4
 #define token_cafe_v2_Resync_applied_revision_tag 1
 #define token_cafe_v2_Resync_reason_tag          2
 #define token_cafe_v2_Applied_revision_tag       1
@@ -738,7 +746,8 @@ X(a, STATIC,   SINGULAR, STRING,   detail,            3)
 #define token_cafe_v2_Heartbeat_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UINT64,   applied_revision,   1) \
 X(a, STATIC,   SINGULAR, UINT64,   monotonic_ms,      2) \
-X(a, STATIC,   OPTIONAL, UINT32,   local_time_ms,     3)
+X(a, STATIC,   OPTIONAL, UINT32,   local_time_ms,     3) \
+X(a, STATIC,   OPTIONAL, UINT64,   keypad_activity,   4)
 #define token_cafe_v2_Heartbeat_CALLBACK NULL
 #define token_cafe_v2_Heartbeat_DEFAULT NULL
 
@@ -967,7 +976,7 @@ extern const pb_msgdesc_t token_cafe_v2_ActionResult_msg;
 #define token_cafe_v2_BlobUnavailable_size       36
 #define token_cafe_v2_Delta_size                 4867
 #define token_cafe_v2_Envelope_size              4913
-#define token_cafe_v2_Heartbeat_size             28
+#define token_cafe_v2_Heartbeat_size             39
 #define token_cafe_v2_HelloAck_size              102
 #define token_cafe_v2_Hello_size                 152
 #define token_cafe_v2_ProtocolError_size         208

@@ -1,0 +1,4 @@
+name: token-cafe-keypad
+build:
+  cmake: .
+  kconfig: Kconfig
