@@ -81,6 +81,7 @@ struct Transcript {
     pending: Vec<(String, Evidence)>,
     prompt_pending: bool,
     awaiting_reply: bool,
+    structured_question: Option<(String, String)>,
     question: Option<String>,
 }
 
@@ -207,6 +208,7 @@ impl Transcript {
             return;
         }
         self.awaiting_reply = false;
+        self.structured_question = None;
         self.question = None;
         self.task = Some(evidence(text, source, ts));
         self.progress = None;
@@ -216,6 +218,7 @@ impl Transcript {
     }
     fn start(&mut self) {
         self.awaiting_reply = false;
+        self.structured_question = None;
         self.question = None;
         if !self.prompt_pending {
             self.task = None;
@@ -227,6 +230,7 @@ impl Transcript {
     }
     fn call(&mut self, id: &str, name: &str, input: &Value, ts: Option<String>) {
         self.awaiting_reply = false;
+        self.structured_question = None;
         self.question = None;
         self.prompt_pending = false;
         let mut ev = evidence(tool_label(name, input), "tool_call", ts);
@@ -238,8 +242,21 @@ impl Transcript {
         }
         self.pending.push((id.to_owned(), ev.clone()));
         self.activity = Some(Activity { evidence: ev, status: "observed" });
+        if name == "mcp__ccd_turn__wrap_up"
+            && let Some(ask) = input["ask"].as_str().map(str::trim).filter(|s| !s.is_empty())
+        {
+            let question: String = ask.chars().take(65536).collect();
+            self.structured_question = Some((id.to_owned(), question.clone()));
+            self.awaiting_reply = true;
+            self.question = Some(question);
+        }
     }
     fn result(&mut self, id: &str, failed: bool, ts: Option<String>) {
+        if failed && self.structured_question.as_ref().is_some_and(|(key, _)| key == id) {
+            self.structured_question = None;
+            self.awaiting_reply = false;
+            self.question = None;
+        }
         let Some(i) = self.pending.iter().position(|(key, _)| key == id) else { return };
         let (_, mut ev) = self.pending.remove(i);
         ev.source = "tool_result";
@@ -324,10 +341,14 @@ impl Transcript {
                             }
                         }
                         (Some("assistant"), Some("text")) => {
-                            self.awaiting_reply = asks_for_reply(b["text"].as_str().unwrap_or(""));
-                            self.question = self
-                                .awaiting_reply
-                                .then(|| b["text"].as_str().unwrap_or("").chars().take(65536).collect());
+                            self.awaiting_reply =
+                                self.structured_question.is_some() || asks_for_reply(b["text"].as_str().unwrap_or(""));
+                            self.question = self.awaiting_reply.then(|| {
+                                self.structured_question
+                                    .as_ref()
+                                    .map(|(_, q)| q.clone())
+                                    .unwrap_or_else(|| b["text"].as_str().unwrap_or("").chars().take(65536).collect())
+                            });
                             let text = excerpt(b["text"].as_str().unwrap_or(""));
                             if !text.is_empty() {
                                 self.progress = Some(evidence(text, "assistant_text", ts.clone()));
@@ -337,7 +358,10 @@ impl Transcript {
                         _ => {} // Never inspect thinking blocks.
                     }
                 }
-                if v["type"] == "assistant" && blocks.iter().any(|b| b["type"] == "tool_use") {
+                if v["type"] == "assistant"
+                    && blocks.iter().any(|b| b["type"] == "tool_use")
+                    && self.structured_question.is_none()
+                {
                     self.awaiting_reply = false;
                     self.question = None;
                 }
@@ -603,6 +627,27 @@ mod tests {
         assert!(!t.awaiting_reply);
         t.ingest(&waiting, Kind::Claude, "root");
         t.call("a", "Read", &json!({}), None);
+        assert!(!t.awaiting_reply);
+    }
+
+    #[test]
+    fn structured_claude_question_survives_result_and_summary_until_answered() {
+        let mut t = Transcript::default();
+        let card = json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"card","name":"mcp__ccd_turn__wrap_up","input":{"ask":"Apply the review fixes now?","actions":[{"label":"Fix all","message":"Apply fixes"}]}}]}});
+        t.ingest(&card, Kind::Claude, "root");
+        t.ingest(&json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"card","content":"shown"}]}}), Kind::Claude, "root");
+        t.ingest(&json!({"type":"assistant","message":{"content":[{"type":"text","text":"I recommend fixing the first three."}]}}), Kind::Claude, "root");
+        assert!(t.awaiting_reply);
+        assert_eq!(t.question.as_deref(), Some("Apply the review fixes now?"));
+        t.ingest(&json!({"type":"user","message":{"content":"Fix all"}}), Kind::Claude, "root");
+        assert!(!t.awaiting_reply);
+        t.ingest(&card, Kind::Claude, "root");
+        t.result("card", true, None);
+        assert!(!t.awaiting_reply);
+        t.ingest(&card, Kind::Claude, "root");
+        t.call("next", "Read", &json!({}), None);
+        assert!(!t.awaiting_reply);
+        t.call("empty", "mcp__ccd_turn__wrap_up", &json!({"ask":"  "}), None);
         assert!(!t.awaiting_reply);
     }
 

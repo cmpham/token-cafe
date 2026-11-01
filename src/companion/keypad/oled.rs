@@ -15,8 +15,14 @@ fn alert(s: &companion_core::wire::Session) -> Option<Alert> {
     if let Some(a) = &s.approval {
         return (a.state == 1).then(|| (s.id.clone(), a.id.clone(), a.digest.clone()));
     }
-    // Unlinked permission waits still need attention; ordinary questions do not.
-    (s.status == 3 && s.waiting_reason == 1).then(|| (s.id.clone(), String::new(), Vec::new()))
+    // Questions and permission waits both require the user's attention.
+    (s.status == 3).then(|| {
+        (
+            s.id.clone(),
+            format!("wait:{}", s.waiting_reason),
+            s.task_blob.as_ref().map_or_else(Vec::new, |b| b.sha256.clone()),
+        )
+    })
 }
 fn row(text: &str) -> [u8; 16] {
     let mut out = [b' '; 16];
@@ -108,11 +114,12 @@ mod tests {
             }
         }
         let mut o = Oled::default();
-        assert_eq!(o.rows(&m, 0)[1], row("2"));
-        assert_eq!(o.rows(&m, 0)[2], row("2"));
+        o.input(&m, 0); // Silence waiting alerts before checking idle totals.
+        assert_eq!(o.rows(&m, 6000)[1], row("2"));
+        assert_eq!(o.rows(&m, 6000)[2], row("2"));
         m.sessions.get_mut("1:1").unwrap().status = 2;
         m.sessions.get_mut("2:3").unwrap().status = 2;
-        let rows = o.rows(&m, 1);
+        let rows = o.rows(&m, 6001);
         assert_eq!(rows[1], row("1"));
         assert_eq!(rows[2], row("1"));
     }
@@ -137,7 +144,8 @@ mod tests {
         let a = m.sessions.get_mut("a").unwrap();
         a.status = 3;
         a.waiting_reason = 2;
-        assert_eq!(o.rows(&m, 6004)[0], row("@TC2I"));
+        assert_eq!(o.rows(&m, 6004)[0], row("@TC2A1"));
+        o.input(&m, 6004);
         m.sessions.get_mut("a").unwrap().waiting_reason = 1;
         assert_eq!(o.rows(&m, 6005)[0], row("@TC2A1"));
     }

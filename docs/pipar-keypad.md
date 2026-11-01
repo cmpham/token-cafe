@@ -9,6 +9,8 @@ This is the current runbook as of 2026-11-01. The supported connection is **keyp
 3. Unplug USB for `Bluetooth + OLED ready`. Reconnect USB to restore USB preference. A stale host heartbeat can take up to five seconds to expire.
 4. To use the board too, launch from the repository with `bash tools/run_companion.sh`. It runs that same release app with `--bluetooth` and the existing board registry. Stop the other companion instance first. Wait for `TokenCafe-6336 synced v2`.
 
+The production display uses **semantic-v2 firmware**: build with `bash tools/qemu_v2.sh board-build`, output `firmware/semantic/build/token_cafe_semantic_board.bin`. `tools/firmware.sh display-build` produces the legacy BLE display and is not compatible with this companion. When the app asset digest changes (including after a rebase), rebuild the engine and matching semantic board firmware together; flash only its application at `0x10000` to preserve pairing storage.
+
 A Finder launch currently starts keypad-only mode. `Board: optional` does **not** mean a board is connected. `START TOKEN CAFE…` on the board means it has no active synchronized companion. The production registry defaults in the launcher to `target/esp/v2-pairing/production.json`; `TC_BLE_REGISTRY` can select another registry. Registry/key files are private and must be backed up separately from source. The native app without that launcher uses `~/.token-cafe/boards.json` when explicitly started with `--bluetooth`.
 
 ## Connections and ownership
@@ -93,7 +95,7 @@ The OLED has three views, driven by `src/companion/keypad/oled.rs` and drawn loc
 
 - **Idle** (five seconds without keypad input): Claude icon and active-session count on the left; Codex icon and count on the right. Only working sessions and sessions waiting for input count as active; idle and disconnected sessions do not. Counts include sessions outside the eight board seats.
 - **Navigating**: selected session's provider icon/name above two rows of session name (up to 32 characters). Any mapped key or knob input extends this view for five seconds. Turns still browse; selection and scrolling semantics are unchanged. Non-ASCII characters use `?` with the 8×8 font.
-- **Pending approval** takes precedence: blink the requesting provider's icon on black, 500 ms on / 500 ms off. If both providers have pending approvals, show both icons. Any mapped key press or knob turn silences all current requests and returns to the navigation view; it does not approve anything. Removing the pending request stops its alert. A new request ID/digest can alert again. Unlinked permission waits also alert; ordinary questions do not. A companion restart resets the acknowledged set and may alert for still-pending requests again.
+- **Pending approval or question** takes precedence: blink the requesting provider's icon on black, 500 ms on / 500 ms off. If both providers have pending approvals, show both icons. Any mapped key press or knob turn silences all current requests and returns to the navigation view; it does not approve anything. Removing the pending request stops its alert. A new request ID/digest can alert again. Unlinked permission waits and questions also alert. Claude desktop `mcp__ccd_turn__wrap_up` cards with a nonempty `ask` are treated as waiting for input even when the provider reports idle; the following tool result and assistant summary preserve the question. A real user reply, resumed tool work, or failed card clears it. A companion restart resets the acknowledged set and may alert for still-pending requests again.
 
 The keypad cancels blinking locally on input, without waiting for a round trip. The Mac tracks request identities so repeated model refreshes and the idle timeout cannot restart an acknowledged alert. Firmware owns blink timing; it does not require alternating Bluetooth frames. Provider artwork is the same monochrome spark/knot used on the board. Normal views use the whole screen; battery percentage remains on offline/legacy text screens.
 
@@ -149,6 +151,10 @@ Require **`Device programmed.`**, then application enumeration with the same ser
 Re-read all 18 keys, four encoder bindings and 1,024 macro bytes; compare against the backup. Restore only confirmed differences (notably knob F13). Test USB, unplugged Bluetooth, OLED, shortcuts, and USB reconnect priority. A successful upload alone does not prove display rendering or correct bindings.
 
 The earlier pre-cleanup Mac-only application SHA-256 is `ce60c5d86e1ec2b8a1a533bf00f57bc2410829f3c4aebe64a9efbb028372ac02`; package `target/keypad-mac-bluetooth/pipar-mac-only.zip`. The OLED redesign supersedes that image; its deployment evidence is recorded below. Do not label a new image with an older installed hash.
+
+### Claude desktop question detection — 2026-11-01
+
+The `wrap_up.ask` regression was reproduced on a live desktop session: provider status said idle although “Apply the review fixes now?” remained unanswered. The updated collector reports waiting and preserves the exact question across a successful tool result and closing assistant summary. A user reply, subsequent tool call, or failed question-card tool clears that state. The keypad now alerts for all waiting sessions; question text changes contribute to its alert identity. Regression suite: 219 tests and strict Clippy passed. The app was rebuilt/reloaded at the stable release path. The production semantic board was rebuilt after the master rebase changed the asset digest, and application-only flashing completed with hash verification; no keypad reflash was needed.
 
 ### OLED redesign deployment — 2026-11-01
 
