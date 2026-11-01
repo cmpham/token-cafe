@@ -101,6 +101,14 @@ The keypad cancels blinking locally on input, without waiting for a round trip. 
 
 While using the controls, the OLED keeps the selected patron name visible for five seconds after the latest input; newly arriving alerts wait until that interval ends.
 
+Idle OLED: each app icon has an active-session count on the first row and **remaining weekly allowance** on the second. `29%` means 71% used. `--` means no valid weekly allowance is available (missing login, unsupported plan, request failure, reset, or data older than ten minutes). Values refresh every five minutes; this is account quota, not a percentage derived from local token totals. Claude uses the existing Claude Code login and its `seven_day` usage window; Codex uses the installed CLI's read-only `account/rateLimits/read` method and whichever window is 10,080 minutes. Tokens are neither logged nor saved, and the app never refreshes or changes credentials.
+
+When a live Claude Desktop Code process exposes a separate login, idle mode shows two unlabeled Claude allowance rows, CLI above Desktop, under the shared active-session count. Percentages use a larger 12-pixel font in this layout. Identity comes from the usage provider's account UUID **and organization UUID**, not email, matching percentages, or the shared `.claude.json` file (desktop sessions can overwrite that file). Identical identities are shown once. Desktop detection is macOS-only and requires a live desktop-launched Code process; unavailable or expired desktop credentials do not borrow the CLI percentage. Tokens are read only from verified Claude Desktop Code executables, checked against process-start time, and never enter session metadata or logs.
+
+The dual-account layout uses `@TC4I`: counts remain in rows 1/2; row 3 contains four-character slots for Claude CLI, Claude APP, and Codex remaining percentages. The single-account layout remains `@TC3I`. Navigation and attention alerts are unchanged.
+
+The idle layout uses `@TC3I`, with counts in rows 1/2 and fixed eight-character columns for remaining percentages in row 3. Install the matching keypad firmware before the updated host. The firmware still accepts the old `@TC2I` count-only layout. Navigation and alert layouts are unchanged.
+
 The transport still supplies four printable 16-character rows atomically. A versioned presentation marker in row 0 selects the layout: `@TC2I` (counts in rows 1/2), `@TC2N` (provider in row 1, name in rows 2/3), or `@TC2A1/2/3` (Claude/Codex/both, alert generation in row 1). Firmware retains plain text rendering for connection/offline messages and older hosts. Install the matching new keypad firmware before running a host that sends these markers; old firmware would display the marker as plain text.
 
 USB reserved reports are 32 bytes: `FE 54 43 4F 01` (`FE TCO`, version 1), command byte, then data. Command 0 probes capabilities; 1 carries a 20-byte display row; input command 2 carries action 1–11 and an 8-bit sequence followed by zero padding. Successful probe/row replies have byte 6 = 1 and byte 7 = 1. Command 3 explicitly clears the active Bluetooth profile over physical USB; normal operation never calls it. It destroys that profile's bond, so use only for intentional repair/migration.
@@ -164,6 +172,16 @@ Installed through USB serial DFU at approximately 11:39 (Asia/Ho_Chi_Minh): appl
 
 The matching app was rebuilt at the stable release path and restarted with the existing board registry. Native app title confirmed `USB + OLED ready; Bluetooth standby` and `TokenCafe-6336 synced v2`. Validation: 200 Rust workspace tests, 50 native keypad checks, 18 native desktop checks, sanitized C frame-parser test, and pinned firmware build passed. Physical OLED layout/blink and post-update unplugged Bluetooth acceptance still require user confirmation; transfer success alone is not visual proof.
 
+### Weekly allowance deployment — 2026-11-01
+
+Installed application-only firmware SHA-256 `f5d5aa82201854f70a56296a090b33455eb70afb184644648fc8dc6485b7fd72` (278,032 bytes), package `target/deploy-weekly/pipar-weekly.zip`. Packaged BIN matched the build; serial DFU reported `Device programmed.` Readback confirmed both layers, all 18 keys, four encoder bindings, version fields, and 1,024 macro bytes unchanged. The matching signed app was rebuilt at the stable release path and restarted. It reported USB/OLED ready, Bluetooth standby, and live remaining values of Claude 95%, Codex 28% at verification. The board renderer/protocol did not change. Physical OLED layout remains user-verifiable; successful transfer and transport readiness do not constitute a photograph of the display.
+
+Validation: 225 Rust tests, strict Clippy, sanitized C frame tests (including atomic weekly-row transport), 50 native keypad checks, 18 native desktop checks, and pinned firmware build passed. Private settings backups, package, hashes, and runtime log: `target/deploy-weekly/`.
+
+### Dual-Claude allowance deployment — 2026-11-01
+
+Installed application-only keypad SHA-256 `77aca8a918696ddfd00949567cd4df8240a5dc97127f7b7fee66825771d0d8f3` (278,236 bytes). DFU completed and post-update readback confirmed all keys, encoder mappings, version fields, and macro bytes unchanged. The rebuilt/restarted app confirmed separate provider account/organization identities and reported Claude CLI 95%, Claude Desktop 100%, Codex 28% remaining. USB/OLED and Bluetooth standby were ready. Validation: 227 Rust tests, strict Clippy, C transport sanitizers including the three-percentage frame, native helper tests, and pinned firmware build. Deployment artifacts/backups: `target/deploy-dual-weekly/`. OLED pixels have not been photographed; desktop detection requires a running Claude Desktop Code process.
+
 ## Historical direct-board operation
 
 This documents the route that worked earlier in this session. **Current board firmware has no keypad central/scanner, HID parser, calibration UI, keypad bonding, or OLED forwarding. Current keypad firmware consumes the mapped controls into the Mac service and no longer advertises the old OLED service.** Switching Bluetooth settings alone cannot restore this route.
@@ -204,3 +222,9 @@ User confirmed USB navigation and Claude/Codex shortcuts without a board, then c
 The scheduling follow-up passed 198 workspace tests. During 10:49–10:51 on November 1, 48 publisher-to-board acknowledgement measurements had median 289 ms and three spikes of 2.25–2.4 s. This is not physical knob-to-LCD latency and does not establish the root cause. No new disconnect accompanied those measurements. Do not claim navigation latency is resolved.
 
 Cleanup validation: `tools/test_keypad.sh` runs 50 native transport checks, 18 native recording matching checks (using checks retained under optimization), and the sanitized frame parser. The full workspace and pinned keypad build also pass. See [architecture review](keypad-architecture-review.md) for exact scope, source boundaries, and outstanding risks.
+
+### Larger unlabeled dual-account percentages (2026-11-01)
+
+Removed CLI/APP captions and used Montserrat 12 for the three percentage values, with Claude CLI above Desktop. Counts retain the compact top row. All allowed percentage glyphs fit in 12-pixel rows; four-character values fit within each 60-pixel column. Font resets preserve navigation and legacy layouts. Firmware build, sanitized transport tests, 50 keypad checks and 18 desktop checks passed.
+
+Installed application-only firmware SHA-256 `f0293f3e02b1022b21581c98d9eb4e26339677118cce77e24b8d9effac7867a7` after recovery from serial bootloader timeouts. The final transfer used the full activation delay and reported `Device programmed.`; the keypad returned to its normal USB interface. Readback confirmed all 18 keys, four encoder bindings, version fields, and 1,024 macro bytes unchanged. Token Café was restarted at the stable release path. Artifacts and logs: `target/deploy-large-weekly/` (successful transfer: `flash-powercycle.log`). Physical OLED appearance remains user-verifiable.

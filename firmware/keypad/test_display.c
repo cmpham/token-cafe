@@ -17,4 +17,17 @@ int main(void){
   packet(p,seq,row,'Z');assert(kd_receive(&f,p,20,13000));
  }
  assert(f.sequence==1&&f.lines[0][0]=='Z');
+ const char rows[4][17]={"@TC3I           ","8               ","12              ","100%    29%     "};
+ for(unsigned row=0;row<4;row++) {
+  packet(p,2,row,' ');memcpy(p+3,rows[row],16);
+  assert(kd_receive(&f,p,20,14000));
+  if(row<3)assert(f.lines[0][0]=='Z');
+ }
+ assert(!memcmp(f.lines,rows,sizeof(rows)));
+ const char dual[4][17]={"@TC4I           ","8               ","12              ","95% 100%29%     "};
+ for(unsigned row=0;row<4;row++) {
+  packet(p,3,row,' ');memcpy(p+3,dual[row],16);assert(kd_receive(&f,p,20,15000));
+ }
+ assert(!memcmp(f.lines,dual,sizeof(dual)));
+
 }

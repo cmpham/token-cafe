@@ -117,7 +117,8 @@ pub fn args(pid: u32) -> Option<Vec<String>> {
     parse_args(&proc_args(pid)?)
 }
 
-/// Only retain explicitly requested non-secret environment fields.
+/// Only retain explicitly requested fields. Credential readers must keep results
+/// private; the session collector uses a separate non-secret allowlist.
 pub fn environment(pid: u32, keys: &[&str]) -> Vec<(String, String)> {
     proc_args(pid).map(|raw| parse_environment(&raw, keys)).unwrap_or_default()
 }

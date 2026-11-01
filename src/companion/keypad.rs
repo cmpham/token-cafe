@@ -18,6 +18,7 @@ use std::{
 };
 
 mod oled;
+mod weekly;
 
 struct Local {
     client: Client,
@@ -105,8 +106,9 @@ impl Local {
 pub fn start(store: Arc<Mutex<Store>>, status: Arc<Mutex<String>>) {
     #[cfg(target_os = "macos")]
     std::thread::spawn(move || {
+        let weekly = weekly::start();
         loop {
-            if let Err(e) = run(store.clone(), status.clone()) {
+            if let Err(e) = run(store.clone(), status.clone(), weekly.clone()) {
                 eprintln!("Keypad transport: {e}");
             }
             std::thread::sleep(Duration::from_secs(3));
@@ -115,7 +117,11 @@ pub fn start(store: Arc<Mutex<Store>>, status: Arc<Mutex<String>>) {
     #[cfg(not(target_os = "macos"))]
     let _ = (store, status);
 }
-fn run(shared: Arc<Mutex<Store>>, status: Arc<Mutex<String>>) -> std::result::Result<(), Box<dyn std::error::Error>> {
+fn run(
+    shared: Arc<Mutex<Store>>,
+    status: Arc<Mutex<String>>,
+    weekly: Arc<Mutex<weekly::Weekly>>,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let executable = std::env::current_exe()?;
     let helper = executable.parent().ok_or("No helper directory")?.join("keypad-hid");
     let mut child = Command::new(helper).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
@@ -209,7 +215,7 @@ fn run(shared: Arc<Mutex<Store>>, status: Arc<Mutex<String>>) -> std::result::Re
                 });
                 pending = Some((a, rx, Instant::now()));
             }
-            let rows = oled.rows(&store.authority.model, now);
+            let rows = oled.rows(&store.authority.model, now, weekly.lock().unwrap().remaining());
             drop(store);
             if display != Some(rows) {
                 let strings: Vec<_> = rows.iter().map(|r| String::from_utf8_lossy(r).into_owned()).collect();
