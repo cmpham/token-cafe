@@ -194,19 +194,15 @@ fn run(
                     continue;
                 }
                 let url = match &d {
-                    Dispatch::Voice(id) | Dispatch::Desktop(id) => store.targets.get(id).cloned(),
+                    Dispatch::Desktop(id) => store.targets.get(id).cloned(),
                     _ => None,
-                };
-                let title = match &d {
-                    Dispatch::Voice(id) => super::voice_session_title(&store.authority.model, id),
-                    _ => String::new(),
                 };
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
                     let ok = match d {
                         Dispatch::App { codex } => super::open_desktop_app(codex),
                         Dispatch::ToggleApp => super::keypad_desktop(&["toggle"]),
-                        Dispatch::Voice(_) => url.is_some_and(|u| super::keypad_desktop(&["voice", &u, &title])),
+                        Dispatch::Voice => super::keypad_desktop(&["voice-focused"]),
                         Dispatch::Desktop(_) => url
                             .is_some_and(|u| Command::new("/usr/bin/open").arg(u).status().is_ok_and(|s| s.success())),
                         Dispatch::Decision { .. } => false,
@@ -233,6 +229,38 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn voice_ignores_selection_and_session_navigation() {
+        for selected in ["", "cli:unavailable"] {
+            let mut store = Store::new([1; 16]);
+            if !selected.is_empty() {
+                store.authority.model.sessions.insert(
+                    selected.into(),
+                    Session {
+                        id: selected.into(),
+                        provider: 1,
+                        status: 2,
+                        title: "CLI session".into(),
+                        navigation_available: false,
+                        ..Default::default()
+                    },
+                );
+            }
+            store.authority.model.view.selected_session_id = selected.into();
+            let mut local = Local::new(&store.epoch, 0).unwrap();
+            local.update(&store, 0).unwrap();
+            local.drain(&mut store, 0).unwrap();
+            local.client.keyboard(6, 1000).unwrap();
+            let dispatches = local.drain(&mut store, 1000).unwrap();
+            assert_eq!(dispatches.len(), 1);
+            assert_eq!(dispatches[0].1, Dispatch::Voice);
+            assert!(dispatches[0].0.session_id.is_empty());
+            assert_eq!(store.authority.model.view.selected_session_id, selected);
+            // The authority still rejects duplicate presses within its throttle.
+            local.client.keyboard(6, 1100).unwrap();
+            assert!(local.drain(&mut store, 1100).unwrap().is_empty());
+        }
+    }
     #[test]
     fn standalone_keypad_browses_selects_and_dispatches_without_board() {
         let mut store = Store::new([1; 16]);
@@ -271,7 +299,7 @@ mod tests {
         assert!(String::from_utf8_lossy(&local.client.keyboard_display()[1]).contains("AGENT A"));
         local.client.keyboard(6, 1000).unwrap();
         let d = local.drain(&mut store, 1000).unwrap();
-        assert_eq!(d[0].1, Dispatch::Voice("codex:a".into()));
+        assert_eq!(d[0].1, Dispatch::Voice);
         let result = store.authority.finish(&mut local.peer, &d[0].0, true);
         local.receive(Payload::ActionResult(result), 1100).unwrap();
         local.client.keyboard(4, 1200).unwrap();

@@ -11,7 +11,7 @@ pub enum Dispatch {
     Desktop(String),
     App { codex: bool },
     ToggleApp,
-    Voice(String),
+    Voice,
     Decision { session: String, request: String, decision: i32 },
 }
 #[derive(Clone)]
@@ -150,7 +150,7 @@ impl Authority {
                         }
                     }
                 }
-                6 | 12 => {
+                6 => {
                     if !peer.can_navigate || session.as_ref().is_none_or(|s| !s.navigation_available) {
                         status = 3;
                         reason = 4;
@@ -159,20 +159,14 @@ impl Authority {
                         reason = 6;
                     } else {
                         peer.last_navigation = Some(now);
-                        if a.kind == 6 {
-                            self.model.view.selected_session_id = a.session_id.clone();
-                            self.model.view.task_anchor = 0;
-                            self.close_review();
-                        }
+                        self.model.view.selected_session_id = a.session_id.clone();
+                        self.model.view.task_anchor = 0;
+                        self.close_review();
                         status = 2;
-                        dispatch = Some(if a.kind == 12 {
-                            Dispatch::Voice(a.session_id.clone())
-                        } else {
-                            Dispatch::Desktop(a.session_id.clone())
-                        });
+                        dispatch = Some(Dispatch::Desktop(a.session_id.clone()));
                     }
                 }
-                8 | 9 | 11 => {
+                8 | 9 | 11 | 12 => {
                     if !peer.can_navigate {
                         status = 3;
                         reason = 4;
@@ -182,8 +176,11 @@ impl Authority {
                     } else {
                         peer.last_navigation = Some(now);
                         status = 2;
-                        dispatch =
-                            Some(if a.kind == 11 { Dispatch::ToggleApp } else { Dispatch::App { codex: a.kind == 9 } });
+                        dispatch = Some(match a.kind {
+                            12 => Dispatch::Voice,
+                            11 => Dispatch::ToggleApp,
+                            _ => Dispatch::App { codex: a.kind == 9 },
+                        });
                     }
                 }
                 10 => {

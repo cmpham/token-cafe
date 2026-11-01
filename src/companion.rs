@@ -816,39 +816,3 @@ fn keypad_desktop(args: &[&str]) -> bool {
         false
     }
 }
-
-/// A title is a fallback for apps which hide their route from Accessibility.
-/// Never use it if more than one live session has the same display name.
-fn voice_session_title(model: &companion_core::model::Model, id: &str) -> String {
-    let Some(session) = model.sessions.get(id) else { return String::new() };
-    if model.sessions.values().filter(|s| s.provider == session.provider && s.title == session.title).count() == 1 {
-        session.title.clone()
-    } else {
-        String::new()
-    }
-}
-
-#[cfg(test)]
-mod keypad_voice_tests {
-    #[test]
-    fn duplicate_titles_require_route_identity() {
-        let mut model = companion_core::model::Model::default();
-        for (id, provider) in [("codex:a", 2), ("claude:a", 1)] {
-            model.sessions.insert(
-                id.into(),
-                companion_core::wire::Session {
-                    id: id.into(),
-                    provider,
-                    title: "Same title".into(),
-                    ..Default::default()
-                },
-            );
-        }
-        assert_eq!(super::voice_session_title(&model, "codex:a"), "Same title");
-        let mut other = model.sessions["codex:a"].clone();
-        other.id = "codex:b".into();
-        model.sessions.insert(other.id.clone(), other);
-        assert_eq!(super::voice_session_title(&model, "codex:a"), "");
-        assert_eq!(super::voice_session_title(&model, "missing"), "");
-    }
-}

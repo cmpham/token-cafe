@@ -1355,7 +1355,7 @@ fn middle_select_and_knob_are_identical_on_cafe_and_details() {
 }
 
 #[test]
-fn voice_and_toggle_preserve_review_and_voice_targets_selected_session_once() {
+fn voice_and_toggle_preserve_review_and_dispatch_once() {
     use companion_core::authority::Dispatch;
     for (command, kind) in [(5, 11), (6, 12)] {
         let (mut c, mut host, mut peer) = setup();
@@ -1373,10 +1373,7 @@ fn voice_and_toggle_preserve_review_and_voice_targets_selected_session_once() {
         assert_eq!(issued[0].kind, kind);
         let (r, dispatch) = host.action(&mut peer, &issued[0], 11210, None).unwrap();
         assert_eq!(r.status, 2);
-        assert_eq!(
-            dispatch,
-            Some(if kind == 12 { Dispatch::Voice("claude:test".into()) } else { Dispatch::ToggleApp })
-        );
+        assert_eq!(dispatch, Some(if kind == 12 { Dispatch::Voice } else { Dispatch::ToggleApp }));
         assert_eq!(host.model, model);
         assert!(host.action(&mut peer, &issued[0], 11220, None).unwrap().1.is_none());
         let failed = host.finish(&mut peer, &issued[0], false);
@@ -1386,22 +1383,19 @@ fn voice_and_toggle_preserve_review_and_voice_targets_selected_session_once() {
 }
 
 #[test]
-fn voice_requires_a_live_desktop_target() {
+fn voice_requires_no_live_desktop_target() {
+    use companion_core::authority::Dispatch;
     let (mut c, mut host, mut peer) = setup();
     c.keyboard(6, 11000).unwrap();
-    assert!(actions(&mut c).is_empty());
-    host.model.sessions.get_mut("claude:test").unwrap().navigation_available = false;
-    for id in ["claude:test", "claude:missing"] {
-        let a = Action {
-            id: if id == "claude:test" { 1 } else { 2 },
-            kind: 12,
-            session_id: id.into(),
-            ..Default::default()
-        };
-        let (r, dispatch) = host.action(&mut peer, &a, 12000, None).unwrap();
-        assert_eq!(r.status, 3);
-        assert!(dispatch.is_none());
-    }
+    let issued = actions(&mut c);
+    assert_eq!(issued.len(), 1);
+    assert!(issued[0].session_id.is_empty());
+    host.model.sessions.clear();
+    let before = host.model.clone();
+    let (r, dispatch) = host.action(&mut peer, &issued[0], 12000, None).unwrap();
+    assert_eq!(r.status, 2);
+    assert_eq!(dispatch, Some(Dispatch::Voice));
+    assert_eq!(host.model, before);
 }
 
 #[test]
@@ -1440,7 +1434,7 @@ fn voice_feedback_reports_failure_without_claiming_recording_started() {
         host.action(&mut peer, &a, 11010, None).unwrap();
     }
     c.keyboard(6, 11100).unwrap();
-    assert!(c.keyboard_display()[3].starts_with(b"OPENING VOICE"));
+    assert!(c.keyboard_display()[3].starts_with(b"STARTING VOICE"));
     let issued = actions(&mut c);
     host.action(&mut peer, &issued[0], 11110, None).unwrap();
     let failed = host.finish(&mut peer, &issued[0], false);

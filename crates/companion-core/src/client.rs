@@ -974,12 +974,10 @@ impl Client {
             5 => self.issue(Action { kind: 11, ..Default::default() }, now),
             7 | 8 => self.issue(Action { kind: if command == 7 { 8 } else { 9 }, ..Default::default() }, now),
             6 => {
-                if self.replica.model.sessions.get(&v.selected_session_id).is_some_and(|s| s.navigation_available) {
-                    let id = self.next_action;
-                    self.issue(Action { kind: 12, session_id: v.selected_session_id, ..Default::default() }, now)?;
-                    self.voice_action = Some(id);
-                    self.keyboard_notice = Some(("OPENING VOICE", now + 15000));
-                }
+                let id = self.next_action;
+                self.issue(Action { kind: 12, ..Default::default() }, now)?;
+                self.voice_action = Some(id);
+                self.keyboard_notice = Some(("STARTING VOICE", now + 15000));
                 Ok(())
             }
             4 | 9 => {

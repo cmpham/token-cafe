@@ -28,13 +28,6 @@ func walk(_ root: AXUIElement) -> [AXUIElement] {
     }
     return result
 }
-func identity(_ url: URL) -> String? {
-    if url.scheme == "codex", url.host == "threads" { return url.pathComponents.last }
-    if url.scheme == "claude", url.host == "code", url.path == "/continue" {
-        return URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "session" }?.value
-    }
-    return nil
-}
 func pauseForAppUpdate() {
     // NSWorkspace activation/focus updates arrive on the main run loop.
     // Sleeping this thread leaves its foreground-app cache stale after opening a link.
@@ -42,19 +35,6 @@ func pauseForAppUpdate() {
 }
 func normalizedTitle(_ text: String) -> String {
     text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-func titleMatches(_ candidate: String, _ expected: String) -> Bool {
-    let title = normalizedTitle(expected)
-    guard !title.isEmpty else { return false }
-    let candidate = normalizedTitle(candidate)
-    // The collector intentionally limits display names to 80 characters.
-    return candidate == title || (title.count == 80 && candidate.count > 80 && String(candidate.prefix(80)) == title)
-}
-func documentSession(_ text: String) -> String? {
-    guard let url = URL(string: text) else { return nil }
-    let parts = url.pathComponents.filter { $0 != "/" }
-    if parts.count == 2 && ["threads", "epitaxy"].contains(parts[0]) { return parts[1] }
-    return identity(url)
 }
 func headingText(_ element: AXUIElement, depth: Int = 0) -> [String] {
     let own = [kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute].map { string(element, $0) }.filter { !$0.isEmpty }
@@ -81,21 +61,54 @@ func voiceControlMatches(_ element: AXUIElement, labels: [String]) -> Bool {
         headingText(child, depth: 1).contains { voiceLabelMatches($0, labels: labels) }
     }
 }
-func sessionMatches(_ nodes: [AXUIElement], id: String, title: String) -> Bool {
-    let documents = nodes.filter { ["AXWebArea", "AXWindow"].contains(string($0, kAXRoleAttribute)) }
-    let visibleRoutes = documents.flatMap { node in
-        [kAXURLAttribute, kAXDocumentAttribute].compactMap { key -> String? in
-            guard let value = attribute(node, key) else { return nil }
+func supportsRecording(_ bundle: String) -> Bool {
+    [codexBundle, claudeBundle].contains(bundle)
+}
+func focusedWindow(_ root: AXUIElement) -> AXUIElement? {
+    guard let value = attribute(root, kAXFocusedWindowAttribute),
+          CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+    return unsafeBitCast(value, to: AXUIElement.self)
+}
+func canonicalContext(_ entries: [String]) -> [String] {
+    Array(Set(entries.filter { !$0.isEmpty })).sorted()
+}
+func windowContext(_ nodes: [AXUIElement]) -> [String] {
+    // Accessibility hydration can reorder nodes or add empty web areas. Neither
+    // changes the selected session. Compare only nonempty, canonical identity.
+    canonicalContext(nodes.filter { ["AXWindow", "AXWebArea"].contains(string($0, kAXRoleAttribute)) }.flatMap { node in
+        [kAXTitleAttribute, kAXURLAttribute, kAXDocumentAttribute].compactMap { key -> String? in
+            let value = attribute(node, key)
             let text = (value as? URL)?.absoluteString ?? (value as? String) ?? ""
-            return documentSession(text)
+            return text.isEmpty ? nil : key + ":" + text
         }
+    })
+}
+
+/// Some hosted web controls acknowledge AXPress without delivering a click.
+/// Click only the identified control, and reject overlays or stale geometry.
+func clickRecordingControl(_ control: AXUIElement, root: AXUIElement) -> Bool {
+    guard let rawPosition = attribute(control, kAXPositionAttribute),
+          let rawSize = attribute(control, kAXSizeAttribute),
+          CFGetTypeID(rawPosition) == AXValueGetTypeID(), CFGetTypeID(rawSize) == AXValueGetTypeID() else { return false }
+    var position = CGPoint.zero, size = CGSize.zero
+    guard AXValueGetValue(unsafeBitCast(rawPosition, to: AXValue.self), .cgPoint, &position),
+          AXValueGetValue(unsafeBitCast(rawSize, to: AXValue.self), .cgSize, &size),
+          position.x.isFinite, position.y.isFinite, size.width.isFinite, size.height.isFinite,
+          size.width > 0, size.height > 0 else { return false }
+    let point = CGPoint(x: position.x + size.width / 2, y: position.y + size.height / 2)
+    var hit: AXUIElement?
+    guard AXUIElementCopyElementAtPosition(root, Float(point.x), Float(point.y), &hit) == .success else { return false }
+    var matches = false
+    for _ in 0..<8 {
+        guard let node = hit else { break }
+        if CFEqual(node, control) { matches = true; break }
+        guard let parent = attribute(node, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+        hit = unsafeBitCast(parent, to: AXUIElement.self)
     }
-    // A known different route cannot be overridden by a matching sidebar/title.
-    if !visibleRoutes.isEmpty { return visibleRoutes.contains(id) }
-    // Codex sets the native window/document title rather than a heading.
-    // The host passes a title only when it uniquely identifies a live session.
-    if documents.contains(where: { titleMatches(string($0, kAXTitleAttribute), title) }) { return true }
-    return nodes.contains { node in
-        string(node, kAXRoleAttribute) == "AXHeading" && headingText(node).contains { titleMatches($0, title) }
-    }
+    guard matches,
+          let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+          let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { return false }
+    down.post(tap: .cghidEventTap)
+    up.post(tap: .cghidEventTap)
+    return true
 }
