@@ -1459,7 +1459,9 @@ fn mac_keypad_activity_wakes_board_once_without_replaying_input() {
     receive(&mut c, Payload::Heartbeat(Heartbeat { keypad_activity: Some(11), ..Default::default() }), 600_100);
     assert!(!c.sleeping);
     assert!(actions(&mut c).is_empty());
-    c.tick(1_200_099).unwrap(); assert!(!c.sleeping);
+    c.tick(1_200_099).unwrap();
+    assert!(!c.sleeping);
     receive(&mut c, Payload::Heartbeat(Heartbeat { keypad_activity: Some(11), ..Default::default() }), 1_200_099);
-    c.tick(1_200_100).unwrap(); assert!(c.sleeping, "a repeated heartbeat must not extend the idle timer");
+    c.tick(1_200_100).unwrap();
+    assert!(c.sleeping, "a repeated heartbeat must not extend the idle timer");
 }

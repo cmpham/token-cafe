@@ -152,6 +152,10 @@ fn advertised_name_matches(observed: &str, expected: &str) -> bool {
             .and_then(|s| s.rsplit_once(" ["))
             .is_some_and(|(_, advertised)| advertised == expected)
 }
+fn changed_model(store: &Store, last_revision: Option<u64>, resync: bool) -> Option<companion_core::model::Model> {
+    let model = &store.authority.model;
+    (resync || last_revision != Some(model.revision)).then(|| model.clone())
+}
 async fn discover(board: &Board) -> Result<Peripheral, Error> {
     let manager = Manager::new().await?;
     let adapter = timeout(Duration::from_secs(5), manager.adapters())
@@ -342,10 +346,14 @@ async fn serve(
         }
         navigation.retain(|(a, _, _)| !nav_done.contains(&a.id));
         if hello && (resync || last_sent.is_some()) && bulk.is_empty() && outstanding.is_empty() {
-            let model = shared.lock().unwrap().authority.model.clone();
-            if resync
-                || last_sent.as_ref().is_none_or(|old: &companion_core::model::Model| old.revision != model.revision)
-            {
+            // Most poll iterations have no model change. Check under the same
+            // lock as the clone so a revision cannot race its corresponding state.
+            let model = changed_model(
+                &shared.lock().unwrap(),
+                last_sent.as_ref().map(|old: &companion_core::model::Model| old.revision),
+                resync,
+            );
+            if let Some(model) = model {
                 let messages = match last_sent.as_ref().filter(|_| !resync) {
                     Some(old) => err(sync::update(old, &model, &link.epoch, &authority))?,
                     None => err(sync::snapshot(&model, &link.epoch, &authority))?,
@@ -385,7 +393,15 @@ async fn serve(
                 if !hello||e.authority_epoch!=authority{return Err("Wrong authority epoch".into());}
                 match e.payload.ok_or("Empty message")?{
                     Payload::Resync(_)=>{resync=true;outstanding.clear();},
-                    Payload::Applied(a)=>{status.lock().unwrap()[index]=format!("{} synced v2",board.name);if let Some((revision, sent))=view_delivery {if a.revision>=revision {eprintln!("Board view applied revision={} delivery_ms={}",revision,sent.elapsed().as_millis());view_delivery=None;}}if last_sent.as_ref().is_none_or(|m|a.revision>m.revision){return Err("Future Applied revision".into());}while outstanding.front().is_some_and(|r|*r<=a.revision){outstanding.pop_front();}},
+                    Payload::Applied(a)=>{
+                        status.lock().unwrap()[index]=format!("{} synced v2",board.name);
+                        if let Some((revision, sent))=view_delivery && a.revision>=revision {
+                            eprintln!("Board view applied revision={} delivery_ms={}",revision,sent.elapsed().as_millis());
+                            view_delivery=None;
+                        }
+                        if last_sent.as_ref().is_none_or(|m|a.revision>m.revision){return Err("Future Applied revision".into());}
+                        while outstanding.front().is_some_and(|r|*r<=a.revision){outstanding.pop_front();}
+                    },
                     Payload::Heartbeat(_)=>(),
                     Payload::BlobGet(b)=>{if !blob_queue.is_empty(){return Err("Concurrent blob request".into());}let body=shared.lock().unwrap().body(&b.sha256).map(Vec::from);if let Some(body)=body{for chunk in err(sync::chunks(&body))?{blob_queue.push_back(env(Payload::BlobChunk(chunk)));}}else{err(link.transport.enqueue(&env(Payload::BlobUnavailable(BlobUnavailable{sha256:b.sha256,reason:2}))))?;}},
                     Payload::BlobCancel(b)=>blob_queue.retain(|e|!matches!(&e.payload,Some(Payload::BlobChunk(c)) if c.sha256==b.sha256)),
@@ -526,13 +542,26 @@ fn local_time_ms() -> u32 {
 
 #[cfg(test)]
 mod discovery_tests {
-    use super::advertised_name_matches;
+    use super::{Store, advertised_name_matches, changed_model};
     #[test]
     fn cached_macos_name_preserves_exact_advertisement_match() {
         assert!(advertised_name_matches("TokenCafe-QA", "TokenCafe-QA"));
         assert!(advertised_name_matches("Old [TokenCafe-QA]", "TokenCafe-QA"));
         assert!(!advertised_name_matches("Old [TokenCafe-QA-other]", "TokenCafe-QA"));
         assert!(!advertised_name_matches("TokenCafe-QA [Other]", "TokenCafe-QA"));
+    }
+    #[test]
+    fn unchanged_revision_is_skipped_but_resync_republishes_it() {
+        let mut store = Store::new([1; 16]);
+        let first = changed_model(&store, None, false).unwrap();
+        assert!(changed_model(&store, Some(first.revision), false).is_none());
+        assert_eq!(changed_model(&store, Some(first.revision), true), Some(first.clone()));
+        store.authority.model.revision += 1;
+        store.authority.model.usage.tokens_display = "1.2M".into();
+        let changed = changed_model(&store, Some(first.revision), false).unwrap();
+        assert_eq!(changed, store.authority.model);
+        assert_eq!(changed.revision, first.revision + 1);
+        assert_ne!(changed.usage, first.usage);
     }
 }
 

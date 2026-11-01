@@ -25,12 +25,15 @@ pub struct Store {
     terminal: BTreeMap<String, (Request, Instant)>,
     pub last_desktop: Option<View>,
 }
-fn bounded(s: &str, max: usize) -> String {
+fn bounded_slice(s: &str, max: usize) -> &str {
     let mut end = s.len().min(max);
     while !s.is_char_boundary(end) {
         end -= 1;
     }
-    s[..end].into()
+    &s[..end]
+}
+fn bounded(s: &str, max: usize) -> String {
+    bounded_slice(s, max).into()
 }
 pub fn wire_id(s: &str) -> String {
     if s.len() <= 128 { s.into() } else { format!("id:{}", crypto::hex(&crypto::hash(s.as_bytes()))) }
@@ -71,9 +74,13 @@ impl Store {
         self.blobs.get(sha).map(|(b, _)| b.as_slice())
     }
     fn blob(&mut self, text: &str) -> BlobRef {
-        let text = bounded(text, 32768);
+        let text = bounded_slice(text, 32768);
         let b = sync::blob(text.as_bytes()).expect("bounded UTF8");
-        self.blobs.insert(b.sha256.clone(), (text.into_bytes(), Instant::now()));
+        if let Some((_, last_used)) = self.blobs.get_mut(&b.sha256) {
+            *last_used = Instant::now();
+        } else {
+            self.blobs.insert(b.sha256.clone(), (text.as_bytes().to_vec(), Instant::now()));
+        }
         b
     }
     pub fn keep_terminal(&mut self, session: &str) {
@@ -84,7 +91,15 @@ impl Store {
     pub fn ingest(&mut self, scene: &mut Scene, broker: Option<&Broker>) {
         self.broker = broker.cloned();
         let old = self.authority.model.clone();
-        let mut next = old.clone();
+        // Sessions are rebuilt below; cloning the previous map a second time
+        // would allocate every request and session just to discard them.
+        let mut next = Model {
+            revision: old.revision,
+            view: old.view.clone(),
+            usage: old.usage.clone(),
+            overflow_count: old.overflow_count,
+            ..Default::default()
+        };
         let mut sessions = vec![];
         self.targets.clear();
         if let Some(u) = scene.usage() {
@@ -93,9 +108,9 @@ impl Store {
                 cost_display: scene::fmt_usd(u.usd),
             };
         }
-        let input = scene.sessions().to_vec();
-        let details = scene.details().to_vec();
-        let requests = scene.requests().to_vec();
+        let input = scene.sessions();
+        let details = scene.details();
+        let requests = scene.requests();
         self.terminal
             .retain(|_, (r, t)| t.elapsed() < Duration::from_secs(if matches!(r.state, 2 | 6) { 30 } else { 5 }));
         // Desktop decisions bypass the authority; the broker's record finishes them.
@@ -393,16 +408,30 @@ impl Store {
                     .and_then(|b| self.body(&b.sha256))
                     .and_then(|b| std::str::from_utf8(b).ok())
                     .unwrap_or("TEXT UNAVAILABLE - OPEN DESKTOP");
-                let request = crate::approval::Request {
-                    choices: r.map_or(0, |r| r.allowed_decisions.iter().filter(|d| **d >= 3).count() as u8),
-                    id: r.map_or_else(String::new, |r| r.id.clone()),
-                    session: real(&s.id).unwrap_or_else(|| s.id.clone()),
-                    title: r.map_or_else(|| s.title.clone(), |r| r.title.clone()),
-                    tool_name: r.map_or_else(String::new, |r| r.tool_name.clone()),
-                    text: text.into(),
-                };
-                if scene.review.as_ref().is_none_or(|old| old.request() != &request) {
-                    scene.review = Some(crate::review::Review::new(request, false));
+                let id = r.map_or("", |r| r.id.as_str());
+                let session = real(&s.id).unwrap_or_else(|| s.id.clone());
+                let title = r.map_or(s.title.as_str(), |r| r.title.as_str());
+                let tool_name = r.map_or("", |r| r.tool_name.as_str());
+                if scene.review.as_ref().is_none_or(|old| {
+                    let old = old.request();
+                    old.id != id
+                        || old.session != session
+                        || old.title != title
+                        || old.tool_name != tool_name
+                        || old.text != text
+                        || old.choices != r.map_or(0, |r| r.allowed_decisions.iter().filter(|d| **d >= 3).count() as u8)
+                }) {
+                    scene.review = Some(crate::review::Review::new(
+                        crate::approval::Request {
+                            choices: r.map_or(0, |r| r.allowed_decisions.iter().filter(|d| **d >= 3).count() as u8),
+                            id: id.into(),
+                            session,
+                            title: title.into(),
+                            tool_name: tool_name.into(),
+                            text: text.into(),
+                        },
+                        false,
+                    ));
                 }
                 if let Some(review) = &mut scene.review {
                     review.set_anchor(v.review_anchor as usize);
@@ -618,5 +647,75 @@ mod tests {
         let text = "claude:café";
         let expected = text.bytes().fold(2166136261u32, |h, b| (h ^ u32::from(b)).wrapping_mul(16777619));
         assert_eq!(appearance(text), expected);
+    }
+    #[test]
+    fn repeated_large_blobs_reuse_storage_and_changed_text_keeps_old_body_fetchable() {
+        let mut scene = scene();
+        let text = format!("{}é", "x".repeat(32767));
+        scene.set_details(vec![scene::SessionDetail { id: "claude:a".into(), target: None, task: text }]);
+        let mut store = Store::new([1; 16]);
+        store.ingest(&mut scene, None);
+        let first = store.authority.model.sessions["claude:a"].task_blob.clone().unwrap();
+        assert_eq!(first.byte_length, 32767);
+        assert!(store.authority.model.sessions["claude:a"].task_truncated);
+        let original_pointer = store.body(&first.sha256).unwrap().as_ptr();
+        let revision = store.authority.model.revision;
+        for _ in 0..3 {
+            store.ingest(&mut scene, None);
+            assert_eq!(store.authority.model.revision, revision);
+            assert_eq!(store.body(&first.sha256).unwrap().as_ptr(), original_pointer);
+        }
+
+        let changed = "y".repeat(32767);
+        scene.set_details(vec![scene::SessionDetail { id: "claude:a".into(), target: None, task: changed.clone() }]);
+        store.ingest(&mut scene, None);
+        let current = store.authority.model.sessions["claude:a"].task_blob.clone().unwrap();
+        assert_ne!(current.sha256, first.sha256);
+        assert_eq!(store.body(&current.sha256).unwrap(), changed.as_bytes());
+        assert_eq!(store.body(&first.sha256).unwrap(), "x".repeat(32767).as_bytes());
+        assert!(!store.authority.model.sessions["claude:a"].task_truncated);
+        for (_, at) in store.blobs.values_mut() {
+            *at = Instant::now() - Duration::from_secs(31);
+        }
+        store.ingest(&mut scene, None);
+        assert!(store.body(&first.sha256).is_none());
+        assert_eq!(store.body(&current.sha256).unwrap(), changed.as_bytes());
+    }
+    #[test]
+    fn open_review_refreshes_changed_identity_without_replacing_unchanged_body() {
+        let mut scene = scene();
+        let mut request = crate::approval::Request {
+            choices: 0,
+            id: "review-fixture".into(),
+            session: "claude:a".into(),
+            title: "ALLOW Bash?".into(),
+            tool_name: "Bash".into(),
+            text: "Full synthetic question".repeat(1000),
+        };
+        scene.set_requests(vec![request.clone()]);
+        let mut store = Store::new([1; 16]);
+        store.ingest(&mut scene, None);
+        let body = store.authority.model.sessions["claude:a"].approval.as_ref().unwrap().body_blob.clone();
+        store.authority.model.view = View {
+            selected_session_id: "claude:a".into(),
+            page: 2,
+            review_kind: 1,
+            review_request_id: request.id.clone(),
+            review_blob: body.clone(),
+            ..Default::default()
+        };
+        store.ingest(&mut scene, None);
+        assert_eq!(scene.review.as_ref().unwrap().request(), &request);
+        let pointer = scene.review.as_ref().unwrap().request().text.as_ptr();
+        store.ingest(&mut scene, None);
+        assert_eq!(scene.review.as_ref().unwrap().request().text.as_ptr(), pointer);
+
+        request.title = "Confirm synthetic Bash operation".into();
+        request.tool_name = "Synthetic tool".into();
+        scene.set_requests(vec![request.clone()]);
+        store.ingest(&mut scene, None);
+        assert_eq!(scene.review.as_ref().unwrap().request(), &request);
+        assert_eq!(store.authority.model.view.review_blob, body);
+        assert!(companion_core::model::validate(&store.authority.model).is_ok());
     }
 }

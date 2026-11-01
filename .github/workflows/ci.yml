@@ -24,6 +24,8 @@ jobs:
           /tmp/tc-test-touch
           cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined firmware/test_screen_idle.c -o /tmp/tc-test-idle
           /tmp/tc-test-idle
+          cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined firmware/test_frame_damage.c -o /tmp/tc-test-damage
+          /tmp/tc-test-damage
           cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined firmware/test_protocol.c firmware/main/protocol.c -o /tmp/tc-test-protocol
           /tmp/tc-test-protocol
       - name: Semantic wire decoder sanitizer corpus

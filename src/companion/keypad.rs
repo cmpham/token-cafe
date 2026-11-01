@@ -160,15 +160,14 @@ fn run(shared: Arc<Mutex<Store>>, status: Arc<Mutex<String>>) -> std::result::Re
             let now = start.elapsed().as_millis() as u64;
             let mut store = shared.lock().unwrap();
             local.update(&store, now).map_err(protocol)?;
-            if let Some((a, rx, at)) = &pending {
-                if let Some(ok) =
+            if let Some((a, rx, at)) = &pending
+                && let Some(ok) =
                     rx.try_recv().ok().or_else(|| (at.elapsed() > Duration::from_secs(15)).then_some(false))
-                {
-                    let r = store.authority.finish(&mut local.peer, a, ok);
-                    local.receive(Payload::ActionResult(r), now).map_err(protocol)?;
-                    eprintln!("Keypad desktop action={} accepted={ok}", a.kind);
-                    pending = None;
-                }
+            {
+                let r = store.authority.finish(&mut local.peer, a, ok);
+                local.receive(Payload::ActionResult(r), now).map_err(protocol)?;
+                eprintln!("Keypad desktop action={} accepted={ok}", a.kind);
+                pending = None;
             }
             for (cmd, at) in rx.try_iter().take(32) {
                 if at.elapsed() > Duration::from_millis(500) {

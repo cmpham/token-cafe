@@ -75,10 +75,13 @@ impl<'a> Gfx<'a> {
     pub fn rect(&mut self, x: i32, y: i32, w: i32, h: i32, c: u32) {
         let (x0, y0) = (x.max(self.cx0), y.max(self.cy0));
         let (x1, y1) = ((x + w).min(self.cx1), (y + h).min(self.cy1));
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let stride = W * self.scale;
+        let (x0, x1) = (x0 as usize * self.scale, x1 as usize * self.scale);
         for j in y0 * self.scale as i32..y1 * self.scale as i32 {
-            for i in x0 * self.scale as i32..x1 * self.scale as i32 {
-                self.fb[j as usize * W * self.scale + i as usize] = c;
-            }
+            self.fb[j as usize * stride + x0..j as usize * stride + x1].fill(c);
         }
     }
 
@@ -239,6 +242,50 @@ impl<'a> Gfx<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rectangles_match_independent_clipped_pixel_oracle_at_both_scales() {
+        for scale in [1, 2] {
+            for [cx0, cy0, cx1, cy1] in [
+                [0, 0, W as i32, H as i32],
+                [5, 7, 105, 150],
+                [-9, -8, 13, 11],
+                [40, 50, 20, 30],
+                [600, 700, 800, 900],
+                [-100, -100, -10, -10],
+            ] {
+                for [x, y, w, h] in [
+                    [-12, -13, 30, 31],
+                    [0, 0, 480, 272],
+                    [474, 267, 20, 20],
+                    [8, 9, 33, 42],
+                    [10, 11, -3, 5],
+                    [10, 11, 3, -5],
+                    [5, 5, 0, 0],
+                    [600, 700, 10, 10],
+                ] {
+                    let mut actual = alloc::vec![0x123456;W*H*scale*scale];
+                    let mut gfx = Gfx::new(&mut actual);
+                    gfx.clip(cx0, cy0, cx1, cy1);
+                    gfx.rect(x, y, w, h, 0xabcdef);
+                    for py in 0..H * scale {
+                        for px in 0..W * scale {
+                            let (lx, ly) = ((px / scale) as i32, (py / scale) as i32);
+                            let inside = lx >= x
+                                && lx < x + w
+                                && ly >= y
+                                && ly < y + h
+                                && lx >= cx0
+                                && lx < cx1
+                                && ly >= cy0
+                                && ly < cy1;
+                            assert_eq!(actual[py * W * scale + px], if inside { 0xabcdef } else { 0x123456 });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn shadow_lookup_is_pixel_exact() {
         let mut frame = alloc::vec![0; W * H];

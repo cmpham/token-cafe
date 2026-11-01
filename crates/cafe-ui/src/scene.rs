@@ -7,7 +7,7 @@
 use crate::FloatMath;
 use alloc::collections::BTreeMap as HashMap;
 use alloc::{
-    borrow::ToOwned,
+    borrow::{Cow, ToOwned},
     format,
     string::{String, ToString},
     vec,
@@ -207,6 +207,7 @@ enum Pose {
 struct Agent {
     id: String,
     name: String,
+    plate_name: String,
     codex: bool,
     branch: Option<String>,
     active_subagents: Option<usize>,
@@ -291,6 +292,7 @@ pub struct Scene {
     first: bool,
     usage: Option<Usage>,
     usage_text: Option<(String, String)>,
+    usage_labels: Option<(String, String)>,
     usage_rows: Vec<UsageRow>,
     usage_account_rows: Vec<UsageRow>,
     usage_accounts: bool,
@@ -303,6 +305,7 @@ pub struct Scene {
     selected: Option<String>,
     task_page: usize,
     requests: Vec<crate::approval::Request>,
+    request_previews: Vec<String>,
     pub review: Option<crate::review::Review>,
     pub handoff_request: Option<String>,
     footer_origin: Option<String>,
@@ -532,6 +535,7 @@ impl Scene {
             first: true,
             usage: None,
             usage_text: None,
+            usage_labels: None,
             usage_rows: Vec::new(),
             usage_account_rows: Vec::new(),
             usage_accounts: false,
@@ -544,6 +548,7 @@ impl Scene {
             selected: None,
             task_page: 0,
             requests: Vec::new(),
+            request_previews: Vec::new(),
             review: None,
             handoff_request: None,
             footer_origin: None,
@@ -616,6 +621,7 @@ impl Scene {
                     let mut a = Agent {
                         id: s.id.clone(),
                         name: String::new(),
+                        plate_name: String::new(),
                         codex: false,
                         branch: None,
                         active_subagents: None,
@@ -660,7 +666,10 @@ impl Scene {
             if fresh || a.state != s.state || a.why != s.why {
                 a.since = self.t - s.age_s as i64 * 1000;
             }
-            a.name = s.name.clone();
+            if a.name != s.name {
+                a.name.clone_from(&s.name);
+                a.plate_name = shorten(&s.name, PLATE_LEN).to_ascii_uppercase();
+            }
             a.branch = s.branch.clone();
             a.active_subagents = s.active_subagents;
             a.codex = s.kind == Kind::Codex;
@@ -918,7 +927,13 @@ impl Scene {
                 self.notify_attention(&request.session);
             }
         }
-        self.requests = requests;
+        if self.requests != requests {
+            self.request_previews = requests
+                .iter()
+                .map(|request| crate::text::layout_prefix(&request.text, 60, 1).remove(0).text)
+                .collect();
+            self.requests = requests;
+        }
         self.reconcile_attention();
     }
 
@@ -1227,6 +1242,9 @@ impl Scene {
     }
 
     pub fn set_usage(&mut self, usage: Usage) {
+        if self.usage != Some(usage) {
+            self.usage_labels = Some((fmt_tokens(usage.tokens), fmt_usd(usage.usd)));
+        }
         self.usage = Some(usage);
     }
 
@@ -1397,12 +1415,13 @@ impl Scene {
 
     /// The chalkboard and its labels are in the background; only the values move.
     fn draw_tab(&self, g: &mut Gfx) {
-        let (tok, usd) = self.usage_text.clone().unwrap_or_else(|| match self.usage {
-            Some(u) => (fmt_tokens(u.tokens), fmt_usd(u.usd)),
-            None => ("--".into(), "--".into()),
-        });
-        g.text(&tok, TAB_X + TAB_W - 3 - text_width(&tok, 1), TAB_Y + 5, c::CHALK_HI, 1, None);
-        g.text(&usd, TAB_X + TAB_W - 3 - text_width(&usd, 1), TAB_Y + 14, c::CHALK_GOLD, 1, None);
+        let (tok, usd) = self
+            .usage_text
+            .as_ref()
+            .or(self.usage_labels.as_ref())
+            .map_or(("--", "--"), |(tok, usd)| (tok.as_str(), usd.as_str()));
+        g.text(tok, TAB_X + TAB_W - 3 - text_width(tok, 1), TAB_Y + 5, c::CHALK_HI, 1, None);
+        g.text(usd, TAB_X + TAB_W - 3 - text_width(usd, 1), TAB_Y + 14, c::CHALK_GOLD, 1, None);
         if !self.usage_rows.is_empty() {
             g.text("+", TAB_X - 8, TAB_Y + 8, c::CHALK_HI, 1, None);
         }
@@ -1519,8 +1538,8 @@ impl Scene {
             g.rect(cx - 11, y + 3, 22, 5, c::DESK_FRONT_LO);
             return;
         };
-        let name = shorten(&ag.name, PLATE_LEN).to_ascii_uppercase();
-        let w = text_width(&name, 1) + 6;
+        let name = &ag.plate_name;
+        let w = text_width(name, 1) + 6;
         let x = cx - (w >> 1);
         let waiting = self.attention.contains_key(&ag.id);
         g.rect(x, y, w, 11, base::K);
@@ -1533,7 +1552,7 @@ impl Scene {
         };
         g.rect(x + 1, y + 1, w - 2, 9, face);
         g.rect(x + 1, y + 9, w - 2, 1, c::PLATE_LO);
-        g.text(&name, x + 3, y + 2, if ag.state == State::Idle { a::IDLE_TEXT } else { base::K }, 1, None);
+        g.text(name, x + 3, y + 2, if ag.state == State::Idle { a::IDLE_TEXT } else { base::K }, 1, None);
     }
 
     fn draw_desk(&self, g: &mut Gfx, i: usize) {
@@ -1743,6 +1762,15 @@ impl Scene {
         }
     }
 
+    // Cached text has already been escaped. Never feed it through layout again.
+    // Empty requests keep the caller's contextual permission/question fallback.
+    fn footer_preview(&self, request: Option<usize>, fallback: &str) -> Cow<'_, str> {
+        match request.filter(|&i| !self.requests[i].text.is_empty()) {
+            Some(i) => Cow::Borrowed(&self.request_previews[i]),
+            None => Cow::Owned(crate::text::layout_prefix(fallback, 60, 1).remove(0).text),
+        }
+    }
+
     /// The message window: whoever waits for the human (portrait, name and
     /// what they want), else the party status. Focus never rotates on a timer.
     fn draw_message(&self, g: &mut Gfx, now: NaiveTime) {
@@ -1775,11 +1803,9 @@ impl Scene {
             self.draw_patron_portrait(g, id, 8, y + 15);
             g.text(&ellipsize(name, 55), 50, y + 5, c::GOLD, 1, None);
             g.text(status, 50, y + 13, c::GOLD, 1, None);
-            let preview = crate::text::layout(text, 60);
-            if let Some(line) = preview.first() {
-                let line = ellipsize(&line.text, if self.next_attention_id().is_some() { 31 } else { 35 });
-                g.text(&line, 50, y + 22, c::TEXT, 2, Some(c::TEXT_SHADOW));
-            }
+            let preview = self.footer_preview(request, text);
+            let line = ellipsize(&preview, if self.next_attention_id().is_some() { 31 } else { 35 });
+            g.text(&line, 50, y + 22, c::TEXT, 2, Some(c::TEXT_SHADOW));
             let viewed = self.attention.get(id).is_some_and(Option::is_none);
             crate::review::draw_button(g, 50, y + 38, 140, 20, "VIEW REQUEST >");
             g.text(
@@ -2367,6 +2393,76 @@ mod tests {
         scene.set_requests(vec![crate::approval::Request { id: "two".into(), ..request }]);
         assert!(scene.attention_bright());
         assert_eq!(scene.selected_id(), Some("b"));
+    }
+
+    #[test]
+    fn cached_request_preview_tracks_full_identity_and_order() {
+        let mut scene = Scene::new();
+        let request = crate::approval::Request {
+            choices: 0,
+            id: "request".into(),
+            session: "session".into(),
+            title: "Title".into(),
+            tool_name: "fixture".into(),
+            text: "\t\nUnicode: é 🚀 ".repeat(3000),
+        };
+        scene.set_requests(vec![request.clone()]);
+        assert_eq!(scene.request_previews, [crate::text::layout(&request.text, 60)[0].text.clone()]);
+        let allocation = scene.request_previews[0].as_ptr();
+        scene.set_requests(vec![request.clone()]);
+        assert_eq!(allocation, scene.request_previews[0].as_ptr(), "unchanged preview must be reused");
+        let changed = crate::approval::Request { text: "Changed body".into(), ..request.clone() };
+        let empty = crate::approval::Request { id: "empty".into(), text: String::new(), ..request.clone() };
+        scene.set_requests(vec![empty.clone(), changed.clone()]);
+        assert_eq!(scene.request_previews, ["", "Changed body"]);
+        scene.set_requests(vec![changed, empty]);
+        assert_eq!(scene.request_previews, ["Changed body", ""]);
+        scene.set_requests(vec![]);
+        assert!(scene.request_previews.is_empty());
+    }
+
+    #[test]
+    fn footer_cache_preserves_single_escaping_width_and_empty_fallback() {
+        let mut scene = Scene::new();
+        for text in
+            ["Read C:\\tmp\twith café 🚀\rcontrols\0", "abcdefghijklmnopqrstuvwxyz0123456789", "\nsecond line", ""]
+        {
+            let request = crate::approval::Request {
+                choices: 0,
+                id: "r".into(),
+                session: "s".into(),
+                title: "Title".into(),
+                tool_name: "Fixture".into(),
+                text: text.into(),
+            };
+            scene.set_requests(vec![request]);
+            let fallback = if text.is_empty() { "OPEN REQUEST FOR PERMISSION DETAILS" } else { text };
+            let expected = crate::text::layout(fallback, 60)[0].text.clone();
+            assert_eq!(scene.footer_preview(Some(0), fallback), expected);
+            assert_eq!(scene.footer_preview(None, fallback), expected);
+            for width in [31, 35] {
+                assert_eq!(ellipsize(&scene.footer_preview(Some(0), fallback), width), ellipsize(&expected, width));
+            }
+        }
+    }
+
+    #[test]
+    fn display_labels_refresh_only_with_source_changes() {
+        let mut scene = Scene::new();
+        let mut patron = session("name", State::Work);
+        scene.set_sessions(&[patron.clone()]);
+        let old = scene.agents[0].plate_name.as_ptr();
+        scene.set_sessions(&[patron.clone()]);
+        assert_eq!(old, scene.agents[0].plate_name.as_ptr());
+        patron.name = "Changed long name-1c".into();
+        scene.set_sessions(&[patron]);
+        assert_eq!(scene.agents[0].plate_name, shorten("Changed long name-1c", PLATE_LEN).to_ascii_uppercase());
+        scene.set_usage(Usage { tokens: 123456.0, usd: 12.5 });
+        assert_eq!(scene.usage_labels, Some((fmt_tokens(123456.0), fmt_usd(12.5))));
+        scene.set_usage_text("custom tokens".into(), "custom cost".into());
+        scene.set_usage(Usage { tokens: 9999.0, usd: 5.0 });
+        assert_eq!(scene.usage_text, Some(("custom tokens".into(), "custom cost".into())));
+        assert_eq!(scene.usage_labels, Some((fmt_tokens(9999.0), fmt_usd(5.0))));
     }
 
     fn session(id: &str, state: State) -> Session {

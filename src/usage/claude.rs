@@ -113,20 +113,15 @@ pub(super) fn parse(path: &Path) -> std::io::Result<Vec<Response>> {
     let mut owners: HashMap<String, BTreeSet<(String, Option<String>)>> = HashMap::new();
     let mut response_sessions = HashMap::new();
     let fallback_session = path.file_stem().and_then(|p| p.to_str()).unwrap_or("");
-    let mut reader = BufReader::new(fs::File::open(path)?);
-    let mut line = Vec::new();
+    let mut lines = lines(path)?;
     let mut line_number = 0;
-    loop {
-        line.clear();
-        if reader.read_until(b'\n', &mut line)? == 0 {
-            break;
-        }
+    while let Some(line) = lines.next()? {
         line_number += 1;
-        let ownership = contains(&line, b"\"bridge-session\"");
-        if !ownership && !(contains(&line, b"\"usage\"") && contains(&line, b"\"assistant\"")) {
+        let ownership = contains(line, b"\"bridge-session\"");
+        if !(ownership || contains(line, b"\"usage\"") && contains(line, b"\"assistant\"")) {
             continue;
         }
-        let Ok(d) = serde_json::from_slice::<Value>(&line) else { continue };
+        let Ok(d) = serde_json::from_slice::<Value>(line) else { continue };
         let session = d["sessionId"].as_str().unwrap_or(fallback_session);
         if d["type"] == "bridge-session" {
             if let Some(account) = d["ownerAccountUuid"].as_str().filter(|s| !s.is_empty()) {
@@ -142,7 +137,7 @@ pub(super) fn parse(path: &Path) -> std::io::Result<Vec<Response>> {
         }
         let msg = &d["message"];
         let usage = &msg["usage"];
-        if !usage.as_object().is_some_and(|o| !o.is_empty()) {
+        if usage.as_object().is_none_or(|o| o.is_empty()) {
             continue;
         }
         let Some(day) = local_day(d.get("timestamp")) else { continue };

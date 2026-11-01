@@ -55,7 +55,16 @@ fn diff(a: &[u32], b: &[u32]) -> Option<Area> {
     let stride = W * k;
     let mut area: Option<Area> = None;
     for (y, (ra, rb)) in a.chunks_exact(stride).zip(b.chunks_exact(stride)).enumerate() {
-        let Some(x0) = ra.iter().zip(rb).position(|(p, q)| p != q) else { continue };
+        // Fast bulk comparison for unchanged rows, without an extra scan of
+        // densely changed frames. Keep damage in logical room coordinates.
+        let x0 = if ra[0] != rb[0] {
+            0
+        } else {
+            if ra == rb {
+                continue;
+            }
+            ra.iter().zip(rb).position(|(p, q)| p != q).unwrap()
+        };
         let x1 = stride - ra.iter().zip(rb).rev().position(|(p, q)| p != q).unwrap();
         let row = Area { x0: x0 / k, y0: y / k, x1: x1.div_ceil(k), y1: y / k + 1 };
         area = Some(area.map_or(row, |a| a.union(row)));
@@ -96,18 +105,32 @@ fn paint(fb: &[u32], out: &mut [u32], w: usize, h: usize, area: Area, full: bool
     if x0 >= x1 || y0 >= y1 {
         return None;
     }
-    let mut row = vec![0u32; x1 - x0];
     let mut row_of = usize::MAX;
     for y in y0..y1 {
         let sy = (y - f.oy) * detail / f.k;
+        let start = y * w + x0;
+        let end = y * w + x1;
         if sy != row_of {
             let src = &fb[sy * W * detail..(sy + 1) * W * detail];
-            for (i, px) in row.iter_mut().enumerate() {
-                *px = src[(x0 + i - f.ox) * detail / f.k];
+            let row = &mut out[start..end];
+            let sx = (x0 - f.ox) * detail / f.k;
+            if f.k == detail {
+                row.copy_from_slice(&src[sx..sx + row.len()]);
+            } else if f.k.is_multiple_of(detail) {
+                for (pixels, &color) in row.chunks_mut(f.k / detail).zip(&src[sx..]) {
+                    pixels.fill(color);
+                }
+            } else {
+                // Odd window scales and 2x-to-1x downsampling retain the exact
+                // nearest-neighbor mapping of the high-detail framebuffer.
+                for (i, px) in row.iter_mut().enumerate() {
+                    *px = src[(x0 + i - f.ox) * detail / f.k];
+                }
             }
             row_of = sy;
+        } else {
+            out.copy_within(start - w..end - w, start);
         }
-        out[y * w + x0..y * w + x1].copy_from_slice(&row);
     }
     let nz = |v: usize| NonZeroU32::new(v as u32).unwrap();
     Some(Rect { x: x0 as u32, y: y0 as u32, width: nz(x1 - x0), height: nz(y1 - y0) })
@@ -1002,6 +1025,81 @@ mod tests {
         b[10 * W + 20] ^= 1;
         b[30 * W + 5] ^= 1;
         assert_eq!(diff(&a, &b), Some(Area { x0: 5, y0: 10, x1: 21, y1: 31 }));
+    }
+
+    #[test]
+    fn damage_matches_pixel_oracle_at_both_detail_levels() {
+        for detail in [1, 2] {
+            let stride = W * detail;
+            let old = vec![0; W * H * detail * detail];
+            assert_eq!(diff(&old, &old), None);
+            for step in [1, 3, stride - 1, stride, stride + 1, old.len() - 1, old.len(), old.len() + 1] {
+                for offset in [0, stride - 1, stride * (H * detail - 1), old.len() - 1] {
+                    let mut new = old.clone();
+                    for i in (offset..new.len()).step_by(step) {
+                        new[i] = 0xabcdef;
+                    }
+                    let expected = old.iter().zip(&new).enumerate().filter(|(_, (a, b))| a != b).fold(
+                        None::<Area>,
+                        |area, (i, _)| {
+                            let (x, y) = (i % stride / detail, i / stride / detail);
+                            let pixel = Area { x0: x, y0: y, x1: x + 1, y1: y + 1 };
+                            Some(area.map_or(pixel, |a| a.union(pixel)))
+                        },
+                    );
+                    assert_eq!(diff(&old, &new), expected, "detail={detail} step={step} offset={offset}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn paint_matches_pixel_oracle_for_detail_scaling_clipping_and_buffer_age() {
+        for detail in [1, 2] {
+            // Every physical pixel is distinct: duplicated/lost HD subpixels cannot hide.
+            let fb: Vec<u32> = (0..W * H * detail * detail).map(|i| i as u32 + 1).collect();
+            let areas = [
+                Area::ALL,
+                Area { x0: 7, y0: 11, x1: 18, y1: 17 },
+                Area { x0: W - 1, y0: H - 1, x1: W, y1: H },
+                Area { x0: 2, y0: 3, x1: 2, y1: 8 },
+            ];
+            let sizes = (1..=7).flat_map(|k| [(W * k, H * k), (W * k + 17, H * k + 29)]).chain([
+                (0, 0),
+                (1, 1),
+                (200, 100),
+                (W + 11, H - 1),
+                (W - 1, H + 13),
+            ]);
+            for (w, h) in sizes {
+                let f = fit(w, h);
+                for area in areas {
+                    for full in [false, true] {
+                        let mut got = vec![0xabcdef; w * h];
+                        let damage = paint(&fb, &mut got, w, h, area, full);
+                        let mut touched = 0;
+                        for y in 0..h {
+                            for x in 0..w {
+                                let inside = x >= f.ox + area.x0 * f.k
+                                    && x < f.ox + area.x1 * f.k
+                                    && y >= f.oy + area.y0 * f.k
+                                    && y < f.oy + area.y1 * f.k;
+                                let expected = if inside {
+                                    touched += 1;
+                                    fb[(y - f.oy) * detail / f.k * W * detail + (x - f.ox) * detail / f.k]
+                                } else if full {
+                                    0
+                                } else {
+                                    0xabcdef
+                                };
+                                assert_eq!(got[y * w + x], expected, "detail={detail}, {w}x{h}, {area:?}, ({x},{y})");
+                            }
+                        }
+                        assert_eq!(damage.map_or(0, |r| r.width.get() as usize * r.height.get() as usize), touched);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

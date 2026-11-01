@@ -24,7 +24,8 @@ use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, TimeZone};
 use serde_json::{Value, json};
 
 const M: f64 = 1_000_000.0;
-const CACHE_VERSION: u64 = 2;
+// Reparse entries that older versions could have cached after a partial read.
+const CACHE_VERSION: u64 = 3;
 
 mod claude;
 pub use claude::{Group, Surface};
@@ -106,13 +107,42 @@ fn local_day(ts: Option<&Value>) -> Option<String> {
     Some(day.format("%Y-%m-%d").to_string())
 }
 
-fn lines(path: &Path) -> std::io::Result<impl Iterator<Item = Vec<u8>>> {
-    let f = BufReader::new(fs::File::open(path)?);
-    Ok(f.split(b'\n').map_while(Result::ok))
+/// Reuse one allocation for a transcript's lines, including the often large
+/// tool-result records skipped by the usage parsers. Read errors must reach the
+/// caller so a partial tally is never persisted as a successful cache entry.
+struct Lines<R> {
+    reader: R,
+    buffer: Vec<u8>,
+}
+
+impl<R: BufRead> Lines<R> {
+    fn next(&mut self) -> std::io::Result<Option<&[u8]>> {
+        self.buffer.clear();
+        if self.reader.read_until(b'\n', &mut self.buffer)? == 0 {
+            return Ok(None);
+        }
+        if self.buffer.last() == Some(&b'\n') {
+            self.buffer.pop();
+        }
+        Ok(Some(&self.buffer))
+    }
+}
+
+fn lines(path: &Path) -> std::io::Result<Lines<BufReader<fs::File>>> {
+    Ok(Lines { reader: BufReader::new(fs::File::open(path)?), buffer: Vec::new() })
 }
 
 fn contains(hay: &[u8], needle: &[u8]) -> bool {
     memchr::memmem::find(hay, needle).is_some()
+}
+
+#[cfg(test)]
+fn parse_claude(path: &Path) -> std::io::Result<Days> {
+    let mut days = Days::new();
+    for response in claude::parse(path)? {
+        days.entry(response.day).or_default().add(response.tally);
+    }
+    Ok(days)
 }
 
 fn charge(sink: &mut Days, day: Option<String>, model: &str, inp: i64, cached: i64, written: i64, out: i64) {
@@ -131,15 +161,19 @@ fn charge(sink: &mut Days, day: Option<String>, model: &str, inp: i64, cached: i
 /// for the same responses, so the two are accumulated separately and the
 /// modern one wins; adding them double-counts every token.
 fn parse_codex(path: &Path) -> std::io::Result<Days> {
+    parse_codex_lines(lines(path)?)
+}
+
+fn parse_codex_lines(mut lines: Lines<impl BufRead>) -> std::io::Result<Days> {
     let (mut modern, mut legacy) = (Days::new(), Days::new());
     let mut model = "unknown".to_string();
     let mut running: Option<[i64; 4]> = None;
     let mut seen = std::collections::HashSet::new();
-    for line in lines(path)? {
-        if !contains(&line, b"\"model\"") && !contains(&line, b"token") {
+    while let Some(line) = lines.next()? {
+        if !contains(line, b"\"model\"") && !contains(line, b"token") {
             continue;
         }
-        let Ok(d) = serde_json::from_slice::<Value>(&line) else { continue };
+        let Ok(d) = serde_json::from_slice::<Value>(line) else { continue };
         let kind = d.get("type").and_then(Value::as_str).unwrap_or("");
         let p = d.get("payload").unwrap_or(&Value::Null);
         if kind == "turn_context" || kind == "session_meta" {
@@ -513,6 +547,71 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reusable_lines_preserve_split_semantics_and_reuse_storage() {
+        let input = b"first\n\ninvalid-\xff\r\nlast";
+        let expected: Vec<_> = BufRead::split(input.as_slice(), b'\n').map(Result::unwrap).collect();
+        let mut lines = Lines { reader: input.as_slice(), buffer: Vec::new() };
+        let mut actual = Vec::new();
+        while let Some(line) = lines.next().unwrap() {
+            actual.push(line.to_vec());
+        }
+        assert_eq!(actual, expected);
+        let mut lines = Lines { reader: b"longer first line\nshort\n".as_slice(), buffer: Vec::new() };
+        let first = lines.next().unwrap().unwrap().as_ptr();
+        assert_eq!(lines.next().unwrap().unwrap().as_ptr(), first);
+        assert!(lines.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn reusable_lines_propagate_errors_instead_of_caching_partial_totals() {
+        struct Broken;
+        impl std::io::Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("fixture read failure"))
+            }
+        }
+        let reader = std::io::Read::chain(b"complete\npartial".as_slice(), Broken);
+        let mut lines = Lines { reader: BufReader::with_capacity(4, reader), buffer: Vec::new() };
+        assert_eq!(lines.next().unwrap(), Some(b"complete".as_slice()));
+        assert_eq!(lines.next().unwrap_err().kind(), std::io::ErrorKind::Other);
+        let record = b"{\"type\":\"token_usage_record\",\"timestamp\":\"2026-10-10T12:00:00\",\"payload\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}}\n";
+        let reader = BufReader::new(std::io::Read::chain(record.as_slice(), Broken));
+        assert!(parse_codex_lines(Lines { reader, buffer: Vec::new() }).is_err());
+        let days = parse_codex_lines(Lines { reader: record.as_slice(), buffer: Vec::new() }).unwrap();
+        assert_eq!(days["2026-10-10"].tokens, 15);
+    }
+
+    fn transcript(records: &[Value]) -> (crate::collect::TestDir, PathBuf) {
+        let dir = crate::collect::TestDir::new();
+        let path = dir.0.join("usage.jsonl");
+        // An unterminated final record is intentionally accepted by the usage parser.
+        let data = records.iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+        fs::write(&path, data).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn claude_usage_keeps_final_streamed_response_and_cache_ttls() {
+        let response = |out, model| {
+            json!({"type": "assistant", "timestamp": "2026-10-10T12:00:00", "requestId": "request",
+                "message": {"id": "response", "model": model, "usage": {
+                    "input_tokens": 100, "output_tokens": out, "cache_read_input_tokens": 20,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 40, "ephemeral_1h_input_tokens": 10}}}})
+        };
+        let (_dir, path) = transcript(&[
+            response(20, "claude-opus-5-5"),
+            response(30, "claude-opus-5-5"),
+            response(25, "claude-opus-5-5"),
+            response(999, "<synthetic>"),
+            json!({"type": "user", "message": {"usage": {"output_tokens": 999}}}),
+        ]);
+        let days = parse_claude(&path).unwrap();
+        assert_eq!(days.len(), 1);
+        assert_eq!(days["2026-10-10"].tokens, 200);
+        assert!((days["2026-10-10"].cost - 1284.0 / M).abs() < 1e-12);
+    }
+
+    #[test]
     fn usage_counts_all_claude_roots_without_charging_aliases_twice() {
         let dir = crate::collect::TestDir::new();
         let a = dir.0.join("personal");
@@ -581,6 +680,54 @@ mod tests {
         assert_eq!(parsed, 0);
         assert_eq!(days["2026-10-10"].tokens, 63);
         assert_eq!(warm.groups, counter.groups);
+    }
+
+    #[test]
+    fn codex_modern_usage_deduplicates_and_overrides_legacy_with_model_changes() {
+        let record = |id, input, cached, written, output| {
+            json!({"type": "token_usage_record", "timestamp": "2026-10-10T12:00:00",
+                "payload": {"response_id": id, "usage": {"input_tokens": input,
+                    "cached_input_tokens": cached, "cache_write_input_tokens": written, "output_tokens": output}}})
+        };
+        let (_dir, path) = transcript(&[
+            json!({"type": "session_meta", "payload": {"model": "gpt-5.4"}}),
+            record("first", 100, 20, 10, 30),
+            record("first", 100, 20, 10, 30),
+            json!({"type": "event_msg", "timestamp": "2026-10-10T12:00:00", "payload": {
+                "type": "token_count", "info": {"total_token_usage": {"input_tokens": 1000, "output_tokens": 500}}}}),
+            json!({"type": "turn_context", "payload": {"payload": {"model": "gpt-5.4-mini"}}}),
+            record("second", 200, 20, 0, 10),
+        ]);
+        let days = parse_codex(&path).unwrap();
+        assert_eq!(days.len(), 1);
+        assert_eq!(days["2026-10-10"].tokens, 340);
+        assert!((days["2026-10-10"].cost - 842.75 / M).abs() < 1e-12);
+    }
+
+    #[test]
+    fn codex_legacy_usage_differences_totals_and_recovers_after_counter_reset() {
+        let record = |input, cached, written, output| {
+            json!({"type": "event_msg", "timestamp": "2026-10-10T12:00:00", "payload": {
+                "type": "token_count", "info": {"total_token_usage": {"input_tokens": input,
+                    "cached_input_tokens": cached, "cache_write_input_tokens": written, "output_tokens": output}}}})
+        };
+        let (_dir, path) = transcript(&[
+            record(100, 20, 10, 30),
+            record(100, 20, 10, 30),
+            record(150, 30, 20, 40),
+            record(10, 2, 0, 4),
+        ]);
+        assert_eq!(parse_codex(&path).unwrap()["2026-10-10"], Tally { tokens: 204, cost: 0.0 });
+    }
+
+    #[test]
+    fn cache_from_before_read_error_fix_is_reparsed() {
+        let dir = crate::collect::TestDir::new();
+        let path = dir.0.join("usage.json");
+        fs::write(&path, json!({"version":2,"files":{}}).to_string()).unwrap();
+        assert!(Counter::load(&path).is_none());
+        fs::write(&path, json!({"version":CACHE_VERSION,"files":{}}).to_string()).unwrap();
+        assert!(Counter::load(&path).unwrap().is_empty());
     }
 
     #[test]

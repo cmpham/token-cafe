@@ -762,8 +762,8 @@ mod tests {
 
 pub mod state;
 
-pub mod semantic;
 mod keypad;
+pub mod semantic;
 
 /// Only fixed application destinations are accepted from a paired keypad.
 /// Opening the app does not select a conversation or answer a request.

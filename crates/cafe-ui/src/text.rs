@@ -6,13 +6,24 @@ pub struct Line {
     pub text: String,
 }
 pub fn layout(text: &str, width: usize) -> Vec<Line> {
+    layout_prefix(text, width, usize::MAX)
+}
+/// Lay out only the visible prefix, retaining the same escaped cells and byte
+/// anchors as full layout without scanning or allocating the hidden tail.
+pub fn layout_prefix(text: &str, width: usize, max_lines: usize) -> Vec<Line> {
     assert!(width > 0);
     let mut result = Vec::new();
+    if max_lines == 0 {
+        return result;
+    }
     let mut line = Line { offset: 0, text: String::new() };
     let mut cells = 0;
     for (offset, c) in text.char_indices() {
         if c == '\n' {
             result.push(line);
+            if result.len() == max_lines {
+                return result;
+            }
             line = Line { offset: offset + 1, text: String::new() };
             cells = 0;
             continue;
@@ -20,6 +31,9 @@ pub fn layout(text: &str, width: usize) -> Vec<Line> {
         // Almost all input is ASCII. Emit cells directly instead of allocating
         // a temporary String for each source character.
         let mut emit = |ch| {
+            if result.len() == max_lines {
+                return;
+            }
             if cells == width {
                 result.push(core::mem::replace(&mut line, Line { offset, text: String::new() }));
                 cells = 0;
@@ -62,6 +76,9 @@ pub fn layout(text: &str, width: usize) -> Vec<Line> {
             }
             c => emit(c),
         }
+        if result.len() == max_lines {
+            return result;
+        }
     }
     result.push(line);
     result
@@ -103,6 +120,10 @@ mod equivalence_tests {
         for input in [text, "é中🚀\u{10ffff}\\\t\r\n".repeat(20), String::new()] {
             for width in [1, 2, 4, 32, 54] {
                 assert_eq!(layout(&input, width), reference(&input, width));
+                for count in [0, 1, 2, 9, 256] {
+                    let expected: Vec<_> = reference(&input, width).into_iter().take(count).collect();
+                    assert_eq!(layout_prefix(&input, width, count), expected);
+                }
             }
         }
     }

@@ -25,6 +25,7 @@
 #include "mbedtls/sha256.h"
 #include "touch_coordinates.h"
 #include "screen_idle.h"
+#include "frame_damage.h"
 static spi_device_handle_t lcd;
 static const spi_device_interface_config_t lcd_config={.command_bits=8,.address_bits=24,
     .clock_speed_hz=20000000,.mode=0,.spics_io_num=45,.queue_size=1,
@@ -89,11 +90,8 @@ void board_present_feedback(const uint8_t *frame,int x,int y){
     int top=y-10<0?0:y-10,bottom=y+10>=TC_HEIGHT?TC_HEIGHT-1:y+10;
     int width=right-left+1,rows=bottom-top+1;
     window(0x2a,left,right);window(0x2b,top,bottom);command(0x2c,NULL,0);
-    for(int row=0;row<rows;row++)for(int col=0;col<width;col++){
-        int dst=(row*width+col)*2,src=((top+row)*TC_WIDTH+left+col)*2;
-        dma[dst]=frame[src+1];dma[dst+1]=frame[src];
-        previous[src]=frame[src];previous[src+1]=frame[src+1];
-    }
+    frame_damage_stage((uint16_t *)dma,(uint16_t *)previous,(const uint16_t *)frame,
+        TC_WIDTH,(FrameDamage){left,top,right,bottom});
     spi_transaction_t t={.cmd=0x32,.addr=0x003c00,.flags=SPI_TRANS_MODE_QIO,.tx_buffer=dma,.length=width*rows*16};
     ESP_ERROR_CHECK(spi_device_polling_transmit(lcd,&t));
 }
@@ -110,33 +108,27 @@ void board_present(const uint8_t *frame) {
 #endif
     for (int y=0;y<TC_HEIGHT;y+=LCD_ROWS) {
         int rows=TC_HEIGHT-y < LCD_ROWS ? TC_HEIGHT-y : LCD_ROWS;
-        int left=0,right=TC_WIDTH-1;
+        FrameDamage damage={0,y,TC_WIDTH-1,y+rows-1};
 #if TC_SEMANTIC
-        if(!memcmp(previous+y*TC_WIDTH*2,frame+y*TC_WIDTH*2,rows*TC_WIDTH*2))continue;
-        // Bound changed columns within this strip. Tiny local animation or
-        // pressed-feedback updates should not transfer 480 pixels per row.
-        left=TC_WIDTH;right=-1;
-        const uint16_t *before=(const uint16_t *)previous,*after=(const uint16_t *)frame;
-        for(int row=y;row<y+rows;row++)for(int col=0;col<TC_WIDTH;col++){
-            int p=row*TC_WIDTH+col;if(before[p]!=after[p]){if(col<left)left=col;if(col>right)right=col;}
-        }
-        if(right<left)continue;
+        if(!frame_damage_find((const uint16_t *)previous,(const uint16_t *)frame,TC_WIDTH,y,rows,&damage))continue;
 #endif
-        int width=right-left+1;
-        window(0x2a,left,right);
-        window(0x2b,y,y+rows-1);
+        int width=damage.right-damage.left+1;
+        rows=damage.bottom-damage.top+1;
+        window(0x2a,damage.left,damage.right);
+        window(0x2b,damage.top,damage.bottom);
         command(0x2c,NULL,0);
-        for(int row=0;row<rows;row++)for(int col=0;col<width;col++){
-            int dst=(row*width+col)*2,src=((y+row)*TC_WIDTH+left+col)*2;
-            dma[dst]=frame[src+1];dma[dst+1]=frame[src];
-        }
+        frame_damage_stage((uint16_t *)dma,
+#if TC_SEMANTIC
+            (uint16_t *)previous,
+#else
+            NULL,
+#endif
+            (const uint16_t *)frame,TC_WIDTH,damage);
         spi_transaction_t t={.cmd=0x32,.addr=0x003c00,.flags=SPI_TRANS_MODE_QIO,
             .tx_buffer=dma,.length=width*rows*16};
         ESP_ERROR_CHECK(spi_device_polling_transmit(lcd,&t));
     }
-#if TC_SEMANTIC
-    memcpy(previous,frame,TC_FRAME_BYTES);
-#else
+#if !TC_SEMANTIC
     fingerprint_set(next_crc);
 #endif
 }

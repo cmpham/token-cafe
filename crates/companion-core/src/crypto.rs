@@ -1,9 +1,6 @@
 //! Exact v2 handshake, request identity and encrypted two-lane fragments.
 use alloc::{string::String, vec::Vec};
-use chacha20poly1305::{
-    ChaCha20Poly1305, KeyInit, Nonce,
-    aead::{Aead, Payload},
-};
+use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce, Tag, aead::AeadInPlace};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
@@ -118,13 +115,14 @@ impl Cipher {
     pub fn new(key: &[u8; 32], prefix: [u8; 4], direction: u8) -> Self {
         Self { cipher: ChaCha20Poly1305::new(key.into()), prefix, direction, counter: 0, failed: false }
     }
-    fn parts(&self, counter: u64) -> ([u8; 12], Vec<u8>) {
+    fn parts(&self, counter: u64) -> ([u8; 12], [u8; 14]) {
         let mut n = [0; 12];
         n[..4].copy_from_slice(&self.prefix);
         n[4..].copy_from_slice(&counter.to_le_bytes());
-        let mut ad = b"tc-v2".to_vec();
-        ad.push(self.direction);
-        ad.extend_from_slice(&counter.to_le_bytes());
+        let mut ad = [0; 14];
+        ad[..5].copy_from_slice(b"tc-v2");
+        ad[5] = self.direction;
+        ad[6..].copy_from_slice(&counter.to_le_bytes());
         (n, ad)
     }
     pub fn seal(&mut self, id: u32, total: u32, offset: u32, data: &[u8]) -> Result<Vec<u8>> {
@@ -132,18 +130,19 @@ impl Cipher {
             return Err(Error::Authentication);
         }
         let counter = self.counter.checked_add(1).ok_or(Error::Counter)?;
-        let mut p = Vec::with_capacity(12 + data.len());
-        p.extend_from_slice(&id.to_le_bytes());
-        p.extend_from_slice(&total.to_le_bytes());
-        p.extend_from_slice(&offset.to_le_bytes());
-        p.extend_from_slice(data);
+        // The clear counter, encrypted fragment, and tag share one allocation.
+        let mut out = Vec::with_capacity(36 + data.len());
+        out.extend_from_slice(&counter.to_le_bytes());
+        out.extend_from_slice(&id.to_le_bytes());
+        out.extend_from_slice(&total.to_le_bytes());
+        out.extend_from_slice(&offset.to_le_bytes());
+        out.extend_from_slice(data);
         let (n, ad) = self.parts(counter);
-        let enc = self
+        let tag = self
             .cipher
-            .encrypt(Nonce::from_slice(&n), Payload { msg: &p, aad: &ad })
+            .encrypt_in_place_detached(Nonce::from_slice(&n), &ad, &mut out[8..])
             .map_err(|_| Error::Authentication)?;
-        let mut out = counter.to_le_bytes().to_vec();
-        out.extend(enc);
+        out.extend_from_slice(&tag);
         self.counter = counter;
         Ok(out)
     }
@@ -160,9 +159,10 @@ impl Cipher {
                 return Err(Error::Counter);
             }
             let (n, ad) = self.parts(c);
-            let p = self
-                .cipher
-                .decrypt(Nonce::from_slice(&n), Payload { msg: &wire[8..], aad: &ad })
+            let tag_start = wire.len() - 16;
+            let mut p = wire[8..tag_start].to_vec();
+            self.cipher
+                .decrypt_in_place_detached(Nonce::from_slice(&n), &ad, &mut p, Tag::from_slice(&wire[tag_start..]))
                 .map_err(|_| Error::Authentication)?;
             self.counter = c;
             Ok(p)
@@ -214,6 +214,9 @@ impl Reassembly {
                 l.id = id;
                 l.total = total;
                 l.bytes.clear();
+                // `total` has already passed the lane bound. Reserve once rather
+                // than grow/copy the message at successive fragment boundaries.
+                l.bytes.reserve_exact(total);
                 l.partial = true;
             }
             if l.id != id || l.total != total || l.bytes.len() != off {
@@ -308,6 +311,59 @@ mod tests {
             assert!(rx.open(&wire).is_err());
         }
         assert!(Cipher::new(&key, [8; 4], 2).open(&wire).is_err());
+    }
+    #[test]
+    fn every_fragment_size_preserves_payload_header_and_counter() {
+        for direction in [1, 2] {
+            let mut tx = Cipher::new(&[5; 32], [6; 4], direction);
+            let mut rx = Cipher::new(&[5; 32], [6; 4], direction);
+            for len in 0..=476 {
+                let data: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+                let wire = tx.seal(0x80000015, 4096, 137, &data).unwrap();
+                assert_eq!(wire.len(), len + 36);
+                assert_eq!(u64::from_le_bytes(wire[..8].try_into().unwrap()), len as u64 + 1);
+                use chacha20poly1305::aead::{Aead, Payload};
+                let counter = (len as u64 + 1).to_le_bytes();
+                let mut nonce = [6; 12];
+                nonce[4..].copy_from_slice(&counter);
+                let mut aad = b"tc-v2".to_vec();
+                aad.push(direction);
+                aad.extend_from_slice(&counter);
+                let mut payload = Vec::new();
+                payload.extend_from_slice(&0x80000015u32.to_le_bytes());
+                payload.extend_from_slice(&4096u32.to_le_bytes());
+                payload.extend_from_slice(&137u32.to_le_bytes());
+                payload.extend_from_slice(&data);
+                let cipher = ChaCha20Poly1305::new((&[5; 32]).into());
+                let mut expected = counter.to_vec();
+                expected
+                    .extend(cipher.encrypt(Nonce::from_slice(&nonce), Payload { msg: &payload, aad: &aad }).unwrap());
+                assert_eq!(wire, expected);
+                let plain = rx.open(&wire).unwrap();
+                assert_eq!(&plain[..4], &0x80000015u32.to_le_bytes());
+                assert_eq!(&plain[4..8], &4096u32.to_le_bytes());
+                assert_eq!(&plain[8..12], &137u32.to_le_bytes());
+                assert_eq!(&plain[12..], data);
+            }
+        }
+    }
+    #[test]
+    fn counters_fail_closed_on_gaps_and_never_wrap() {
+        let mut tx = Cipher::new(&[5; 32], [6; 4], 1);
+        let first = tx.seal(1, 1, 0, b"a").unwrap();
+        let second = tx.seal(2, 1, 0, b"b").unwrap();
+        let mut rx = Cipher::new(&[5; 32], [6; 4], 1);
+        assert_eq!(rx.open(&second), Err(Error::Counter));
+        assert_eq!(rx.open(&first), Err(Error::Authentication));
+
+        tx.counter = u64::MAX - 1;
+        let final_wire = tx.seal(3, 1, 0, b"c").unwrap();
+        let mut rx = Cipher::new(&[5; 32], [6; 4], 1);
+        rx.counter = u64::MAX - 1;
+        assert_eq!(&rx.open(&final_wire).unwrap()[12..], b"c");
+        assert_eq!(tx.seal(4, 1, 0, b"d"), Err(Error::Counter));
+        assert_eq!(rx.open(&first), Err(Error::Counter));
+        assert_eq!(rx.open(&final_wire), Err(Error::Authentication));
     }
     #[test]
     fn interleaved_lanes_and_timeout() {

@@ -1,5 +1,9 @@
 # Companion v2 staged validation ledger
 
+Latest targeted validation: [November 1 selective optimization recovery](../qa/stash-recovery-2026-11-01.md).
+Native tests, Linux startup, sanitizers, QEMU and desktop/firmware builds passed;
+this revision has not been deployed to the physical board or production app.
+
 Baseline: cmpham, ff2ff33. No production deployment before simulation gate passes.
 
 | Gate | Status | Evidence |

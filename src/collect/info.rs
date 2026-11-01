@@ -373,8 +373,9 @@ impl Transcript {
         }
         file.seek(SeekFrom::Start(self.offset))?;
         let mut reader = BufReader::new(file.take(meta.len().saturating_sub(self.offset)));
+        let mut line = Vec::new();
         loop {
-            let mut line = Vec::new();
+            line.clear();
             let mut consumed = 0u64;
             let mut complete = false;
             loop {
