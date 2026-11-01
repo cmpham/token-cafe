@@ -212,6 +212,47 @@ fn main() {
         s("01a11478", "ml-pipeline-6e", Codex, Work, Why::None, P::Auto, 0),
     ]);
     run(&mut cafe, 2600);
+    if std::env::args().any(|arg| arg == "--focus") {
+        cafe.patrons = token_cafe::patrons::Patrons::roster("mixed").unwrap();
+        cafe.set_details(
+            [
+                ("b07e11a2", "Add pagination to the API"),
+                ("24eb1748", "May I run the checkout tests?"),
+                ("516264dc", "Document the new setup flow"),
+                ("1a342e2a", "LAST: Review the migration"),
+                ("c0dex9f1", "Which deployment region?"),
+                ("01a10a65", "LAST: Update the settings page"),
+                ("9a7c33d0", "LAST: Check invoice totals"),
+                ("01a11478", "Validate the training pipeline"),
+            ]
+            .into_iter()
+            .map(|(id, task)| token_cafe::scene::SessionDetail { id: id.into(), task: task.into(), target: None })
+            .collect(),
+        );
+        cafe.select_next();
+        png("docs/focus.png", &rgb(&cafe, late, 3), 3);
+        // Mixed creature art exceeds the exact global GIF palette's 255 colours.
+        let mut enc = gif::Encoder::new(
+            BufWriter::new(File::create("docs/focus.gif").unwrap()),
+            (W * 2) as u16,
+            (H * 2) as u16,
+            &[],
+        )
+        .unwrap();
+        enc.set_repeat(gif::Repeat::Infinite).unwrap();
+        for _ in 0..8 {
+            for _ in 0..10 {
+                let pixels = rgb(&cafe, late, 2);
+                let mut frame = gif::Frame::from_rgb_speed((W * 2) as u16, (H * 2) as u16, &pixels, 10);
+                frame.delay = 10;
+                enc.write_frame(&frame).unwrap();
+                run(&mut cafe, 100);
+            }
+            cafe.select_next();
+        }
+        println!("docs/focus.gif (80 frames)");
+        return;
+    }
     if std::env::args().any(|arg| arg == "--patrons") {
         for roster in ["dragons", "pokemon", "mixed"] {
             cafe.patrons = token_cafe::patrons::Patrons::roster(roster).unwrap();

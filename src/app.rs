@@ -749,6 +749,17 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        #[cfg(feature = "bluetooth")]
+        if matches!(
+            &event,
+            WindowEvent::KeyboardInput { .. }
+                | WindowEvent::MouseInput { .. }
+                | WindowEvent::MouseWheel { .. }
+                | WindowEvent::Touch(_)
+        ) && let Some(semantic) = &mut self.semantic
+        {
+            semantic.navigation_input();
+        }
         match event {
             WindowEvent::CloseRequested => el.exit(),
             WindowEvent::RedrawRequested => self.present(),

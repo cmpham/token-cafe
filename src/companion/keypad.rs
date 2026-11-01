@@ -183,6 +183,9 @@ fn run(
                     continue;
                 }
                 oled.input(&store.authority.model, now);
+                if matches!(cmd, 1 | 2 | 4 | 9 | 10 | 11) {
+                    store.navigation_input();
+                }
                 store.keypad_activity = store.keypad_activity.wrapping_add(1);
                 local.client.keyboard(cmd, now).map_err(protocol)?;
             }
@@ -302,18 +305,19 @@ mod tests {
         assert_eq!(d[0].1, Dispatch::Voice);
         let result = store.authority.finish(&mut local.peer, &d[0].0, true);
         local.receive(Payload::ActionResult(result), 1100).unwrap();
-        local.client.keyboard(4, 1200).unwrap();
-        local.drain(&mut store, 1200).unwrap();
-        assert_eq!(store.authority.model.view.page, 2);
-        local.client.keyboard(9, 2200).unwrap();
-        let open = local.drain(&mut store, 2200).unwrap();
+        local.client.keyboard(4, 2100).unwrap();
+        let open = local.drain(&mut store, 2100).unwrap();
         assert_eq!(open[0].1, Dispatch::Desktop("codex:a".into()));
-        local.client.keyboard(11, 2300).unwrap();
-        local.drain(&mut store, 2300).unwrap();
+        assert_eq!(store.authority.model.view.page, 2);
+        local.client.keyboard(9, 3100).unwrap();
+        let open = local.drain(&mut store, 3100).unwrap();
+        assert_eq!(open[0].1, Dispatch::Desktop("codex:a".into()));
+        local.client.keyboard(11, 3200).unwrap();
+        local.drain(&mut store, 3200).unwrap();
         assert_eq!(store.authority.model.view.selected_session_id, "claude:b");
         assert_eq!(store.authority.model.view.page, 1);
-        local.client.keyboard(7, 3300).unwrap();
-        assert_eq!(local.drain(&mut store, 3300).unwrap()[0].1, Dispatch::App { codex: false });
+        local.client.keyboard(7, 4200).unwrap();
+        assert_eq!(local.drain(&mut store, 4200).unwrap()[0].1, Dispatch::App { codex: false });
         assert_eq!(store.authority.model.view.selected_session_id, "claude:b");
     }
 }

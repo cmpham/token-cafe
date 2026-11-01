@@ -24,6 +24,7 @@ pub struct Store {
     arrival: Vec<String>,
     terminal: BTreeMap<String, (Request, Instant)>,
     pub last_desktop: Option<View>,
+    details_deadline: Option<Instant>,
 }
 fn bounded_slice(s: &str, max: usize) -> &str {
     let mut end = s.len().min(max);
@@ -68,10 +69,38 @@ impl Store {
             arrival: vec![],
             terminal: BTreeMap::new(),
             last_desktop: None,
+            details_deadline: None,
         }
     }
     pub fn body(&self, sha: &[u8]) -> Option<&[u8]> {
         self.blobs.get(sha).map(|(b, _)| b.as_slice())
+    }
+    pub fn navigation_input(&mut self) {
+        self.navigation_input_at(Instant::now());
+    }
+    fn navigation_input_at(&mut self, now: Instant) {
+        self.details_deadline = Some(now + Duration::from_secs(30));
+    }
+    fn expire_details(&mut self, now: Instant) {
+        if self.authority.model.view.page != 2 {
+            self.details_deadline = None;
+            return;
+        }
+        let deadline = self.details_deadline.get_or_insert(now + Duration::from_secs(30));
+        if now < *deadline {
+            return;
+        }
+        let model = &mut self.authority.model;
+        let v = &mut model.view;
+        v.page = 1;
+        v.review_kind = 0;
+        v.review_request_id.clear();
+        v.review_blob = None;
+        v.review_anchor = 0;
+        v.generation += 1;
+        v.origin_device_id = "desktop".into();
+        model.revision += 1;
+        self.details_deadline = None;
     }
     fn blob(&mut self, text: &str) -> BlobRef {
         let text = bounded_slice(text, 32768);
@@ -333,6 +362,7 @@ impl Store {
                 eprintln!("BLE v2: model rejected; retaining previous state");
             }
         }
+        self.expire_details(Instant::now());
         self.apply(scene);
         self.last_desktop = Some(self.desktop_view(scene));
         let now = Instant::now();
@@ -466,6 +496,51 @@ impl Store {
 mod tests {
     use super::*;
     use companion_core::authority::Peer;
+    #[test]
+    fn details_timeout_returns_both_views_to_cafe_and_preserves_selection() {
+        let mut scene = scene();
+        scene.focus_patron("claude:a".into());
+        let mut store = Store::new([1; 16]);
+        store.ingest(&mut scene, None);
+        scene.review = Some(crate::review::Review::new(
+            crate::approval::Request {
+                session: "claude:a".into(),
+                text: "Full task".into(),
+                id: String::new(),
+                title: "Task".into(),
+                tool_name: String::new(),
+                choices: 0,
+            },
+            false,
+        ));
+        store.ingest(&mut scene, None);
+        assert_eq!(store.authority.model.view.page, 2);
+        let start = Instant::now();
+        store.details_deadline = Some(start + Duration::from_secs(30));
+        store.expire_details(start + Duration::from_millis(29999));
+        assert_eq!(store.authority.model.view.page, 2);
+        // A navigation event at a page boundary still extends the timeout.
+        store.navigation_input_at(start + Duration::from_secs(20));
+        let deadline = store.details_deadline.unwrap();
+        assert_eq!(deadline, start + Duration::from_secs(50));
+        store.ingest(&mut scene, None);
+        assert_eq!(store.details_deadline, Some(deadline), "data refresh does not extend the timeout");
+        store.expire_details(deadline - Duration::from_millis(1));
+        assert_eq!(store.authority.model.view.page, 2);
+        let revision = store.authority.model.revision;
+        store.expire_details(deadline);
+        assert_eq!(store.authority.model.view.page, 1);
+        assert_eq!(store.authority.model.view.selected_session_id, "claude:a");
+        assert!(store.authority.model.view.review_blob.is_none());
+        assert!(store.authority.model.revision > revision);
+        assert!(companion_core::model::validate(&store.authority.model).is_ok());
+        store.apply(&mut scene);
+        store.last_desktop = Some(store.desktop_view(&scene));
+        assert!(scene.review.is_none());
+        store.ingest(&mut scene, None);
+        assert_eq!(store.authority.model.view.page, 1, "refresh cannot reopen expired details");
+        assert!(store.details_deadline.is_none());
+    }
     fn scene() -> Scene {
         let mut scene = Scene::new();
         scene.set_sessions(&[scene::Session {

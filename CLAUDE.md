@@ -1,46 +1,90 @@
-# token-cafe
+# Token Café contributor guide
 
-A Rust desktop app that shows the Claude Code and Codex sessions on this machine as patrons of a pixel-art night café. Supports Linux and macOS; Windows process discovery is not implemented.
+Token Café shows live Claude Code and Codex sessions as patrons of a pixel-art café. Linux and macOS are supported; Windows process discovery is not implemented. The Mac is the authority for the optional Pipar Flake keypad and ESP32-S3 display.
 
-## Commands
+## Build and validate
 
-- `cargo build --release`, then `target/release/token-cafe` (live), `--demo` (fixed list showing every pose), `--print` (sessions and month total as text), `--scale N` (initial size, default 3x). Keys: 1-6 window size, f / F11 fullscreen, Esc leave fullscreen/clear selection, Tab next session, Left/Right select patron, Up/Down task page, t toggle always on top, q quit. `--always-on-top` starts pinned; combine with `--scale 1` for a small floating café.
-- `--session-info` prints task/activity JSON for live sessions; add `--watch` for changed snapshots every second. `src/collect/info.rs` is an opt-in, bounded incremental transcript reader; it also supplies the selectable focus panel. Tap a patron or the bottom summary to select; tap the selected patron or an empty desk to clear. Left/Right or the main banner cycles patrons; Up/Down, the mouse wheel, or the right-hand scrollbar navigates two-line task pages. Escape clears selection outside fullscreen. Keep evidence sources/timestamps and distinguish observed tool calls from returned results.
-- `cargo test --workspace`, `cargo clippy --workspace --all-targets` (kept warning-free), `cargo fmt --all` (`rustfmt.toml`: width 120). The root is both a package and the workspace root, so plain `cargo test` skips `crates/`.
-- After editing `design/cafe.js`: `node tools/gen_assets.mjs`, then `cargo run --release --example screenshots` to refresh the README images in `docs/`.
+```sh
+cargo build --release --locked
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo fmt --all -- --check
+bash tools/test_keypad.sh  # sanitized C OLED parser; on macOS, Swift keypad/recording checks
+sh tools/build_macos.sh   # macOS app + native helpers, local ad-hoc signing
+```
 
-## Layout
+Use workspace tests: plain `cargo test` skips workspace member crates. Run checks appropriate to the change. Native tests do not interact with running apps or prove physical recording/firmware behavior.
 
-- `design/cafe.js`: the art (sprites as palette strings) and the scene's behaviour in plain JS. `tools/gen_assets.mjs` turns it into `crates/cafe-ui/src/assets.rs` (palette-slot sprites, 0xRRGGBB colours, 5x7 font) and `crates/cafe-ui/src/bg.rgb` (the static room). Both are generated: `assets.rs` is skipped by rustfmt (`#[rustfmt::skip]` in `lib.rs`), `bg.rgb` is marked binary in `.gitattributes`.
-- `crates/cafe-ui/src/scene.rs` + `crates/cafe-ui/src/gfx.rs`: the café, drawn into a 480x272 0xRRGGBB frame.
-- `src/collect/`: which sessions are live. `procfs.rs` implements Linux discovery; `macos.rs` uses libproc and sysctl on macOS.
-- `src/usage.rs`: this month's tokens and list-price dollars from both tools' transcripts.
-- `src/main.rs`: CLI and two feeder threads (sessions every 1 s, usage every 60 s) sending `Update`s over a channel. `src/app.rs`: the winit 0.30 + softbuffer 0.4 window.
-- `examples/screenshots.rs`: renders `docs/cafe.png`, `docs/night.png` and `docs/arrivals.gif` from the scene (the GIF stores only changed pixels per frame).
+On this managed Mac, the installed Rust toolchain uses `CARGO_HOME=/tmp/token-cafe-cargo`, `RUSTUP_HOME=/tmp/token-cafe-rustup`, and `/tmp/token-cafe-cargo/bin` on `PATH`; these are local paths, not project requirements.
 
-## How it behaves
+Every worktree publishes to the primary repository's `release/Token Café.app`. Launch that stable bundle for Finder, Dock and macOS permissions; do not launch a competing copy from a temporary build directory. Rebuilds are not notarized distribution releases and macOS grants may need rechecking. `bash tools/run_companion.sh` launches the same app with the provisioned board registry when present. Run one app/keypad helper at a time. Keep the primary checkout on `master` for this repository; Android work belongs on its separate branch.
 
-- The scene ticks in fixed 33 ms steps. The first session list seats everyone at once; later newcomers walk in from the door and leavers walk out. 8 seats; the rest wait outside. A patron's looks are an FNV-1a hash of the session id.
-- Idle patrons stretch or sip, take coffee after 2 min and fall asleep after 10. `Session::age_s` (time in the current state) keeps that right across an app restart.
-- Names are shortened in the scene, an ellipsis for the message window and 8 characters for the nameplate, keeping a `-1c` style suffix of up to 3 characters.
-- Claude Code: `~/.claude/sessions/<pid>.json` (status busy/idle/waiting, `waitingFor`: "permission prompt" -> "!", anything else -> "?"). A file counts only while its `procStart` (clock ticks since boot) equals field 22 of `/proc/<pid>/stat`, so dead or reused pids are skipped. On macOS, compare its formatted `procStart` date with the native process start time, falling back to `startedAt` for older files.
-- Claude desktop: Code-tab sessions use the same live PID/status records. Join `cliSessionId` to the cached macOS `claude-code-sessions` metadata for titles/archive flags; never treat saved history as liveness. Ordinary Chat and Cowork are not collected.
-- Codex CLI: `codex` TUI processes (subcommands like `exec` and `mcp` are not sessions) -> the rollout JSONL they hold open, else the newest `threads` row for their cwd in `~/.codex/state_5.sqlite` -> last `task_started` vs `task_complete`/`turn_aborted`. The first read scans back in 256 KB chunks until a task event turns up; later reads take only what was appended. Codex logs no approval requests, so it never shows "wait".
-- Codex desktop: parse global option values before identifying `app-server`; exclude `exec-server` and other helpers. Each loaded root rollout is a separate patron, titled from SQLite and deduplicated against CLI sessions. Exclude archived roots and subagent-only logs. Root task events determine its state; old subagent activity cannot keep a completed root busy. No cwd/database history fallback for servers.
-- Usage: list prices are in `usage.rs` (update them when vendors change prices). Transcripts last written before the 1st of the month are skipped; per-file results are cached in `~/.cache/token-cafe/usage.json` on Linux or `~/Library/Caches/token-cafe/usage.json` on macOS (`XDG_CACHE_HOME` overrides either) by size and mtime. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are honoured.
-- Window: the frame is scaled by the largest whole number that fits, letterboxed. Only what changed since the presented buffer was last shown is repainted (softbuffer buffer age + `present_with_damage`). Wayland app_id and X11 class are `token-cafe`.
+## Running and controls
 
-## Conventions
+- `target/release/token-cafe`: live; `--demo`: fictional sessions; `--print`: live sessions and monthly totals; `--usage-json`: recorded usage breakdown.
+- `--session-info [--watch]`: bounded local task/activity evidence for verified live sessions; output can contain private requests and paths.
+- `--scale N`: initial size (macOS default 1, elsewhere 3); `--always-on-top`: start pinned. Keys 1–6 resize, F/F11 fullscreen, T pin, Q quit.
+- Click a patron or bottom summary to focus; click the selected patron/empty desk to clear. Tab, Left/Right and the main banner include overflow sessions. Up/Down, wheel and scrollbar page task text. Escape exits fullscreen or clears focus.
+- P cycles rosters; C chooses a character seat; [ / ] change its character. U opens monthly usage; A changes app/recorded-organization breakdown.
+- macOS: identified iTerm Claude CLI single-click reveals the existing pane; other supported desktop sessions open on double-click. Never guess a terminal or session by project path.
 
-- Demo data, tests and screenshots use made-up project names; keep real session names out of the repo.
+## Current behavior to preserve
 
-## Semantic companion
+- Eight seats, Claude on the left and Codex on the right. Active/waiting patrons have seating priority over idle patrons on their own side. Extra sessions wait outside. Selection follows session identity through swaps and refreshes.
+- One gold outline marks focus, including during walking. Attention uses badges/footer, not a second focus style. No timer rotates the selected patron or footer. New waiting prompts pulse for 30 seconds, then keep a reminder until resolved; acknowledgement does not approve.
+- Idle patrons stretch/sip, fetch coffee after two minutes, sleep after ten. Session state age survives app restarts. Initial sessions seat immediately; subsequent arrivals/departures walk.
+- Keypad knob browses **only the eight visible patrons**, in seat order, including when leaving a details page. Press once for details and to focus the identified desktop session. Details return to the café after 30 seconds without navigation input. The OLED keeps navigation visible for five seconds after input.
+- Bottom-left mic starts native recording in the **currently focused Codex or Claude window/session**, independent of café selection. It must not activate an app, open a session, use a global voice shortcut, or submit text. Switching app/window/exposed session context cancels a pending request.
+- `voice-focused` uses the uniquely identified recording control, validates its hit-test, and posts one click. A rejected hit-test sends no event and may retry within the same request; never retry a posted click. Codex confirms **Stop dictation**; Claude confirms click dispatch only. One-press behavior was physically confirmed for both apps. Requires macOS Accessibility permission.
+- Idle OLED shows active (working/waiting) counts, including overflow, and remaining weekly allowance. Separate Claude CLI/Desktop account identities use account UUID + organization UUID, never email; two unlabeled percentages appear CLI above Desktop. Missing/stale data displays `--`. Poll every five minutes, expire after ten minutes. `@TC3I` is single-account; `@TC4I` is dual-account. Matching keypad firmware is required.
 
-- `crates/cafe-ui` is the shared desktop/board renderer; root modules re-export it.
-- `crates/companion-core` owns bounded Protobuf state/actions, crypto, reconciliation,
-  text cache, local gestures and approval guards. `firmware/engine` statically links it.
-- `firmware/semantic` is the physical BLE/LCD/touch/NVS adapter; `firmware/v2` is QEMU.
-- Follow the simulation-before-hardware gate and private-key handling in
-  `docs/protocol/operations.md`; fixtures must never dispatch real approvals.
-- No timer rotates selected patrons or footer messages. Manual focus and waiting
-  indicators remain. Update both app and board whenever the renderer digest changes.
+## Source map
+
+| Location | Responsibility |
+| --- | --- |
+| `design/cafe.js`, `tools/gen_assets.mjs` | Sprite/background source and generated `crates/cafe-ui/src/assets.rs`, `bg.rgb` |
+| `crates/cafe-ui` | Shared renderer, 480×272 logical canvas, desktop detail rendering, scene/input/attention |
+| `src/app.rs`, `src/main.rs` | winit/softbuffer window, integer scaling, damage tracking, collectors |
+| `src/collect/` | Linux procfs/macOS libproc + sysctl discovery; bounded task evidence in `info.rs` |
+| `src/usage.rs` | Monthly local transcript accounting, API list-price estimates, versioned cache |
+| `crates/companion-core` | Bounded Protobuf state/actions, authentication, reconciliation, gestures and approval guards |
+| `src/companion/keypad/` | Mac-owned keypad routing, OLED presentation and weekly quota polling |
+| `native/keypad/`, `native/desktop/` | macOS USB/Bluetooth bridge and focused-app recording helper |
+| `firmware/keypad/` | Pipar nRF52840 firmware and OLED rendering |
+| `firmware/engine`, `firmware/semantic`, `firmware/v2` | Shared board engine, physical BLE/LCD/touch/NVS adapter, QEMU adapter |
+| `examples/screenshots.rs` | Reproducible README screenshots/GIFs with fictional sessions |
+
+## Collection and privacy rules
+
+Claude live PID/status records must match process identity; desktop metadata enriches a live Code-tab session and never establishes liveness. Ordinary Claude Chat/Cowork/cloud history is not collected. Codex desktop gets one patron per open root rollout, excludes archived/subagent-only logs, and deduplicates CLI references. Saved sidebar history alone is not live. Root task events determine state; old subagent activity cannot keep a completed root busy.
+
+Respect `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, and `TOKEN_CAFE_CLAUDE_CONFIG_DIRS`; keep profile transcripts isolated and deduplicate path aliases. Claude identity uses account and organization UUIDs. Current CLI login is a hint, not historical billing proof. Preserve unknown/unassigned attribution rather than guessing. Monthly dollars are API list-price estimates, not subscription quotas.
+
+Task evidence is bounded and incremental. Preserve timestamps/sources, `history_partial`, and the distinction between observed tool calls, returned results and explicit failures. Do not expose raw tool arguments, outputs or reasoning in the café.
+
+The weekly quota poller is separate from local collection: it reads existing Claude credentials (Keychain on macOS; verified Desktop Code process credentials for a separate Desktop account), makes read-only quota/profile requests, and uses Codex's `account/rateLimits/read`. Never log/save tokens, refresh credentials, change logins, or include secrets in process arguments. Keep registries, pairing keys, macros and real session captures out of Git. Tests and previews use fictional names.
+
+## Hardware changes
+
+Read [keypad setup/recovery](docs/pipar-keypad.md), [architecture](docs/keypad-architecture-review.md), and [board operations](docs/protocol/operations.md) before device work. Preserve the simulation-before-hardware gate; fixtures must never dispatch real approvals.
+
+The keypad connects directly to the Mac, USB preferred with Bluetooth fallback. The optional board independently connects to the Mac; the old keypad-to-board route is historical. Only one helper owns the keypad. Keypad controls never approve/deny requests.
+
+Renderer digest changes require rebuilding the shared engine and matching semantic board firmware. `bash tools/qemu_v2.sh board-build` builds the current physical board; legacy `tools/firmware.sh display-build` is incompatible with semantic-v2. Preserve pairing NVS during application-only flashing. Mac-only recording changes need no device firmware update.
+
+Keypad firmware: `bash tools/build_keypad.sh` uses pinned dependencies/Docker. Verify device identity before flashing; the nRF52840 keypad and ESP32 board are different devices. Back up/read back both layers, encoder bindings and macros. A zero uploader exit status is insufficient: require `Device programmed.`, normal device enumeration and unchanged settings. Report transfer, transport and physical behavior separately.
+
+## Documentation and media
+
+[README](README.md) is the user overview. Current renderer previews: [café](docs/cafe.png), [mixed roster](docs/cafe-mixed.gif), [selection](docs/focus.gif), [attention](docs/attention.gif). These are rendered fixtures, not physical hardware recordings.
+
+After editing art, run `node tools/gen_assets.mjs`; do not hand-edit generated assets. Regenerate media from current code:
+
+```sh
+cargo run --release --locked --example screenshots
+cargo run --release --locked --example screenshots -- --patrons
+cargo run --release --locked --example screenshots -- --focus
+cargo run --release --locked --example screenshots -- --attention
+```
+
+Inspect generated PNGs and representative GIF frames before publishing. Keep real session names out of tracked media. See [visual QA](docs/qa/REVIEW.md), [protocol](docs/protocol/companion-v2.md), and [hardware recreation](docs/hardware/recreate-approval-controller.md) for detailed evidence and procedures.

@@ -1022,7 +1022,7 @@ fn keypad_navigation_and_app_shortcuts_never_answer_requests() {
     c.keyboard(11, 1000).unwrap();
     c.keyboard(4, 1010).unwrap();
     let a = actions(&mut c);
-    assert_eq!(a.iter().map(|a| a.kind).collect::<Vec<_>>(), vec![1, 2]);
+    assert_eq!(a.iter().map(|a| a.kind).collect::<Vec<_>>(), vec![1, 6, 2]);
     assert_eq!(c.view().page, 2);
     let before = c.view();
     for command in [7, 8] {
@@ -1043,8 +1043,8 @@ fn keypad_navigation_and_app_shortcuts_never_answer_requests() {
     let handoff = actions(&mut c);
     assert_eq!(
         handoff.iter().map(|a| a.kind).collect::<Vec<_>>(),
-        [6],
-        "knob press in review opens desktop, never decides"
+        [6, 2],
+        "knob press opens desktop and details, never decides"
     );
     assert_eq!(handoff[0].session_id, before.selected_session_id);
     c.keyboard(11, 4000).unwrap();
@@ -1070,43 +1070,52 @@ fn keypad_app_commands_require_navigation_permission() {
 }
 
 #[test]
-fn knob_press_from_details_hands_off_the_exact_session_once() {
-    for (kind, navigable) in [(2, true), (3, true), (3, false)] {
-        let (mut c, mut host, mut peer) = setup();
-        let s = host.model.sessions.get_mut("claude:test").unwrap();
-        s.approval = None;
-        s.navigation_available = navigable;
-        if kind == 3 {
-            s.unlinked_review_blob = s.task_blob.clone();
-        }
-        host.model.revision += 1;
-        for e in sync::snapshot(&host.model, &[1; 16], &[2; 16]).unwrap() {
-            let raw = codec::encode(&e).unwrap();
-            c.receive(e, &raw, 10010).unwrap();
-        }
-        actions(&mut c);
-        c.keyboard(11, 11000).unwrap();
-        c.keyboard(9, 11100).unwrap();
-        assert_eq!(c.view().page, 2);
-        assert_eq!(c.view().review_kind, kind);
-        for a in actions(&mut c) {
-            assert!(matches!(a.kind, 1 | 2));
-            assert!(host.action(&mut peer, &a, 11110, None).unwrap().1.is_none());
-        }
-        c.keyboard(9, 11200).unwrap();
-        let handoff = actions(&mut c);
-        if navigable {
-            assert_eq!(handoff.len(), 1);
-            assert_eq!(handoff[0].kind, 6);
-            assert_eq!(handoff[0].session_id, "claude:test");
-            let (_, dispatch) = host.action(&mut peer, &handoff[0], 11210, None).unwrap();
-            assert_eq!(dispatch, Some(companion_core::authority::Dispatch::Desktop("claude:test".into())));
-            assert!(host.action(&mut peer, &handoff[0], 11220, None).unwrap().1.is_none());
-        } else {
-            assert!(handoff.is_empty());
+fn one_keypad_press_opens_details_and_hands_off_only_navigable_sessions() {
+    for command in [4, 9] {
+        for (kind, navigable) in [(1, true), (2, true), (3, true), (2, false)] {
+            let (mut c, mut host, mut peer) = setup();
+            let s = host.model.sessions.get_mut("claude:test").unwrap();
+            if kind != 1 {
+                s.approval = None;
+            }
+            s.navigation_available = navigable;
+            if kind == 3 {
+                s.unlinked_review_blob = s.task_blob.clone();
+            }
+            host.model.revision += 1;
+            for e in sync::snapshot(&host.model, &[1; 16], &[2; 16]).unwrap() {
+                let raw = codec::encode(&e).unwrap();
+                c.receive(e, &raw, 10010).unwrap();
+            }
+            actions(&mut c);
+            c.keyboard(11, 11000).unwrap();
+            for a in actions(&mut c) {
+                host.action(&mut peer, &a, 11000, None).unwrap();
+            }
+            c.keyboard(command, 11100).unwrap();
             assert_eq!(c.view().page, 2);
+            assert_eq!(c.view().review_kind, kind);
+            let sent = actions(&mut c);
+            assert_eq!(sent.iter().map(|a| a.kind).collect::<Vec<_>>(), if navigable { vec![6, 2] } else { vec![2] });
+            let mut handoffs = 0;
+            for a in sent {
+                let (_, dispatch) = host.action(&mut peer, &a, 11110, None).unwrap();
+                if navigable && a.kind == 6 {
+                    assert_eq!(dispatch, Some(companion_core::authority::Dispatch::Desktop("claude:test".into())));
+                    handoffs += 1;
+                } else {
+                    assert!(dispatch.is_none());
+                }
+                assert!(
+                    host.action(&mut peer, &a, 11120, None).unwrap().1.is_none(),
+                    "replayed press cannot dispatch twice"
+                );
+            }
+            assert_eq!(handoffs, usize::from(navigable));
+            assert_eq!(host.model.view.page, 2);
+            assert_eq!(host.model.view.review_kind, kind);
+            assert!(c.receipts.is_empty(), "press never approves a request");
         }
-        assert!(c.receipts.is_empty());
     }
 }
 
@@ -1143,7 +1152,7 @@ fn knob_always_browses_and_top_keys_scroll_without_changing_agents() {
     c.keyboard(9, 11200).unwrap();
     assert_eq!(c.view().page, 2);
     assert_eq!(c.view().selected_session_id, "codex:other");
-    assert_eq!(actions(&mut c).iter().map(|a| a.kind).collect::<Vec<_>>(), [2]);
+    assert_eq!(actions(&mut c).iter().map(|a| a.kind).collect::<Vec<_>>(), [6, 2]);
 
     c.keyboard(2, 11300).unwrap();
     assert_eq!(c.view().selected_session_id, "codex:other", "scrolling cannot switch agents");
@@ -1277,7 +1286,7 @@ fn approval_view_updates_cannot_switch_the_knob_from_browsing_to_scrolling() {
     actions(&mut c);
     c.keyboard(9, 11400).unwrap();
     assert_eq!(c.view().page, 2);
-    assert_eq!(actions(&mut c).iter().map(|a| a.kind).collect::<Vec<_>>(), [2]);
+    assert_eq!(actions(&mut c).iter().map(|a| a.kind).collect::<Vec<_>>(), [6, 2]);
     c.keyboard(2, 11500).unwrap();
     assert_eq!(c.view().selected_session_id, "claude:test");
     assert!(c.view().review_anchor > 0, "only the top keys scroll the approval");
@@ -1366,16 +1375,16 @@ fn voice_and_toggle_preserve_review_and_dispatch_once() {
         }
         let before = c.view();
         let model = host.model.clone();
-        c.keyboard(command, 11200).unwrap();
+        c.keyboard(command, 12200).unwrap();
         assert_eq!(c.view(), before);
         let issued = actions(&mut c);
         assert_eq!(issued.len(), 1);
         assert_eq!(issued[0].kind, kind);
-        let (r, dispatch) = host.action(&mut peer, &issued[0], 11210, None).unwrap();
+        let (r, dispatch) = host.action(&mut peer, &issued[0], 12210, None).unwrap();
         assert_eq!(r.status, 2);
         assert_eq!(dispatch, Some(if kind == 12 { Dispatch::Voice } else { Dispatch::ToggleApp }));
         assert_eq!(host.model, model);
-        assert!(host.action(&mut peer, &issued[0], 11220, None).unwrap().1.is_none());
+        assert!(host.action(&mut peer, &issued[0], 12220, None).unwrap().1.is_none());
         let failed = host.finish(&mut peer, &issued[0], false);
         assert_eq!(failed.status, 3);
         assert_eq!(host.model, model, "native voice never answers the approval");

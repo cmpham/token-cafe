@@ -12,7 +12,7 @@ They type while they work, nap while you're away, and raise a hand when they nee
 ![macOS](https://img.shields.io/badge/macOS-supported-3fb950?logo=apple&logoColor=white)
 ![Windows](https://img.shields.io/badge/Windows-help_wanted-8b949e?logo=windows&logoColor=white)
 
-<img src="docs/cafe.png" alt="The café at night: eight desks, patrons typing, thinking, sleeping and raising their hands, and a message window saying CHECKOUT-1C needs your OK" width="720">
+<img src="docs/cafe.png" alt="Current café renderer with eight fictional Claude and Codex patrons and an attention request" width="720">
 
 </div>
 
@@ -35,12 +35,24 @@ New sessions walk in from the door and finished ones walk out. Claude occupies t
 <img src="docs/arrivals.gif" alt="Three new patrons walk in from the door and take their seats while one leaves" width="640">
 </div>
 
-Up on the wall, **the tab** keeps a running total for the calendar month: tokens used and what they'd cost at the vendors' list prices, Claude and Codex together. (If you're on a subscription, that's a measure of how much you've used, not a bill.) When nobody needs you, working patrons take turns speaking for four seconds, with a one-second pause showing the café totals and clock. Each patron rotates through work chatter, their current Git branch (including linked worktrees or a detached commit), and the number of active direct Codex sub-agents observed in open rollout files. Unavailable details are skipped; Claude sub-agent counts are not currently collected. Permission requests and questions take priority.
+Up on the wall, **the tab** keeps a running total for the calendar month: tokens used and what they'd cost at the vendors' list prices, Claude and Codex together. (If you're on a subscription, that's a measure of how much you've used, not a bill.) Selection stays where you put it: no timer changes the selected patron or cycles the footer. Permission requests and questions show attention indicators while preserving the session you are reading.
 
 <div align="center">
 <img src="docs/night.png" alt="A quiet night at 03:12: one patron working, two asleep, one with a coffee" width="640">
 <br><sub>3 a.m.: one agent still working, the rest have dozed off.</sub>
 </div>
+
+## Selection and attention
+
+<img src="docs/focus.png" alt="Selected fictional patron highlighted by a gold desk outline" width="720">
+
+<img src="docs/focus.gif" alt="Gold focus outline moving between the eight patrons" width="640">
+
+The gold outline marks the selected patron. Waiting patrons retain attention markers, and the footer offers **VIEW REQUEST** and **NEXT**. Selection follows the session when seats change. The keypad knob skips sessions outside the visible seats.
+
+<img src="docs/attention.gif" alt="An incoming permission request pulses, then settles into a steady reminder" width="640">
+
+These screenshots and GIFs are rendered from the current scene with fictional sessions; they are not captures of private chats or photographs of the hardware. Regenerate them with the commands under [Under the hood](#under-the-hood).
 
 ## Getting started
 
@@ -121,7 +133,7 @@ Regenerate the art contact sheet with `python3 tools/build_patrons.py` (Pillow),
 
 ## How it knows
 
-Everything is read locally; nothing leaves your machine. Token Café only reads files, and writes one cache file.
+Session discovery and monthly token accounting read local files. Optional companion controls can navigate existing sessions or invoke native recording. The keypad’s weekly allowance feature queries the providers using existing logins; see [keypad privacy and permissions](docs/pipar-keypad.md). Board pairing and usage caches are stored locally.
 
 | | Where it looks |
 |---|---|
@@ -138,7 +150,7 @@ Both surfaces can run together, including when they share `~/.claude`. Token Caf
 
 Desktop identity comes from an allowlist of non-secret process environment fields (`CLAUDE_CODE_ACCOUNT_UUID`, `CLAUDE_CODE_ORGANIZATION_UUID`), falling back to the account/organization folders in the Desktop session index. Desktop history only enriches a validated live process. Ambiguous index copies supply no account or archive status, and a CLI resume does not inherit Desktop's archive status.
 
-For CLI processes without identity environment fields, the profile's `.claude.json` `oauthAccount` supplies a **current login hint** (`source: current_config`), shown as `CURRENT ORG`. It cannot prove which account an already-running CLI process authenticated with before a login switch. A missing identity remains unknown. Token Café never reads Keychain credentials or retains OAuth tokens from process environments.
+For CLI processes without identity environment fields, the profile's `.claude.json` `oauthAccount` supplies a **current login hint** (`source: current_config`), shown as `CURRENT ORG`. It cannot prove which account an already-running CLI process authenticated with before a login switch. A missing identity remains unknown. Session attribution does not read Keychain credentials or retain OAuth tokens. The separate weekly allowance poller uses existing credentials only for read-only quota requests; it never logs or saves tokens or changes logins.
 
 Transcripts are looked up within the live session's own config directory. The monthly chalkboard combines local usage across discovered/configured profiles. Press **U** to see Desktop and CLI totals separately, then **A** for recorded organization groups. The breakdown uses each assistant response's saved `entrypoint`; older responses without this evidence stay unassigned. Account groups use consistent `bridge-session` owner metadata for that response's session, including copied parent session IDs. Conflicting or absent ownership remains unknown. A recorded owner is evidence of session ownership, not proof of the account billed for every request; today's CLI login is never used to relabel historical usage.
 
@@ -169,15 +181,17 @@ Changing the art means editing `design/cafe.js`, then:
 
 ```sh
 node tools/gen_assets.mjs                          # regenerate the sprites and the room
-cargo run --release --example screenshots          # refresh docs/*.png and docs/arrivals.gif
-cargo run --example screenshots -- --monologues    # preview rotation in target/monologues.gif
+cargo run --release --example screenshots          # café, night, arrivals
+cargo run --release --example screenshots -- --patrons   # roster PNGs and GIFs
+cargo run --release --example screenshots -- --focus     # selection PNG and GIF
+cargo run --release --example screenshots -- --attention # request PNG and GIF
 ```
 
 ### Attention alerts
 
 A newly waiting patron pulses the full footer background for 30 seconds, then keeps an amber
-frame until the request is resolved. A solid amber frame highlights the active
-patron; other waiting patrons keep quiet corner markers and steady nameplates.
+frame until the request is resolved. A gold outline highlights the selected
+patron; waiting patrons keep status badges and highlighted nameplates.
 The footer shows the patron, approval/question type, a larger request preview,
 and the waiting queue count. Framed VIEW REQUEST and NEXT controls make actions
 visible; NEXT disappears when only one patron is waiting.
@@ -212,7 +226,7 @@ The café started life on a 2.8″ ESP32-S3 desk display, as a little JRPG-style
 Patrons render from 96×96 animation cells (48×48 logical room footprint) onto a 960×544 desktop frame, while furniture and text keep the original pixel grid. Dragon artwork is recompiled from the full-size sources; Pokémon retain their native sprite detail. Window shortcuts 1–6 keep their existing sizes.
 ### Session information
 
-Click a patron to show its latest request in the bottom panel. Requests wrap into two-line pages, with up to 19 characters per line. Use Up/Down, scroll the mouse wheel over the bottom panel, or click/drag its vertical scrollbar to read the request. Up/Down opens focus on page one when nothing is selected and stops at the first/last page. The scrollbar thumb shows position in the text; its full 44×48 surrounding region accepts taps. Tap the main banner or press Left/Right to switch patrons; the pointing hand, portrait, and task details change together. Tap the selected patron or an empty desk to clear focus; tap the unfocused bottom panel to open it. Tab cycles all live sessions, including those outside. Escape clears selection when not in fullscreen. Native touch taps are accepted on release, with drags, cancellation and duplicate emulated mouse input filtered. Selection stays with the session through updates; a closed session clears it. Approval/question alerts appear when unfocused; manual focus keeps a waiting count visible without blocking selection. Idle sessions show `LAST` rather than implying ongoing work. Unsupported font characters display as one `?` each.
+Click a patron to show its latest request in the bottom panel. Requests wrap into two-line pages, with up to 32 characters per line. Use Up/Down, scroll the mouse wheel over the bottom panel, or click/drag its vertical scrollbar to read the request. Up/Down opens focus on page one when nothing is selected and stops at the first/last page. The scrollbar thumb shows position in the text; its full 44×48 surrounding region accepts taps. Tap the main banner or press Left/Right to switch patrons; the gold focus outline, portrait, and task details change together. Tap the selected patron or an empty desk to clear focus; tap the unfocused bottom panel to open it. Tab cycles all live sessions, including those outside. Escape clears selection when not in fullscreen. Native touch taps are accepted on release, with drags, cancellation and duplicate emulated mouse input filtered. Selection stays with the session through updates; a closed session clears it. Approval/question alerts appear when unfocused; manual focus keeps a waiting count visible without blocking selection. Idle sessions show `LAST` rather than implying ongoing work. Unsupported font characters display as one `?` each.
 
 `--session-info` reads transcripts only for sessions confirmed by the live collectors. It prints identity, project, state, the latest human-request excerpt, public assistant text, and the last observed tool action. Evidence includes its source and timestamp; tool actions also include the tool name. Idle sessions explicitly label the request as historical (`task_scope: last_request`). Missing details stay null with a state-based fallback.
 
@@ -291,4 +305,15 @@ rendered scene; update both app and firmware together for the new scrollbar area
 
 ### Pipar Flake keypad
 
-The keypad connects directly to the Mac over USB, with Bluetooth fallback; an optional board mirrors the Mac. Start with the [keypad setup and recovery guide](docs/pipar-keypad.md) for the layout, both connection architectures, known-good VIA settings, OLED firmware, serial flashing, permissions, and troubleshooting. The former keypad-to-board path is historical, not an automatic fallback. See the [implementation review](docs/keypad-architecture-review.md) for module ownership and remaining limitations.
+The keypad connects directly to the Mac over USB, with Bluetooth fallback; an optional board mirrors the Mac. The Mac owns session selection and actions.
+
+- **Knob:** browse only the eight visible patrons, in seat order. A single gold outline identifies the current patron across the app and matching board firmware; the OLED shows its name for five seconds after input. Press once to view details and focus the exact supported desktop session. Details return to the café after 30 seconds without navigation input. Desktop banner/Tab navigation still includes overflow sessions.
+- **Idle OLED:** active-session counts above remaining weekly allowances. Separate Claude CLI and Desktop accounts can show two unlabeled percentages, CLI above Desktop, even when their emails match. `--` means unavailable or stale. Quotas refresh every five minutes and expire after ten minutes; they are separate from monthly token estimates.
+- **Bottom-left mic:** start native recording in the currently focused Codex or Claude session, independently of the selected café patron. It preserves app focus and never submits text. macOS Accessibility permission is required; both apps have been physically verified to start with one press.
+- **Other keys:** scroll task pages, cycle character rosters, select details, toggle apps, or open Claude/Codex. Waiting prompts blink the OLED until acknowledged or resolved; keypad controls do not approve requests.
+
+Build the macOS app with `sh tools/build_macos.sh`; it also packages the native keypad and recording helpers. Start one instance from the stable release bundle. Use `bash tools/run_companion.sh` for an already provisioned optional board. Renderer changes require matching board firmware; changes confined to Mac-side recording logic do not require board or keypad flashing.
+
+Start with the [keypad setup and recovery guide](docs/pipar-keypad.md) for the layout, both connection architectures, known-good VIA settings, OLED firmware, serial flashing, permissions, and troubleshooting. The former keypad-to-board path is historical, not an automatic fallback.
+
+See the [implementation review](docs/keypad-architecture-review.md) for module ownership and remaining limitations.

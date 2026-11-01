@@ -130,6 +130,9 @@ impl SemanticMirror {
     pub fn synchronize(&mut self, scene: &mut Scene, broker: Option<&Broker>) {
         self.shared.lock().unwrap().ingest(scene, broker);
     }
+    pub fn navigation_input(&mut self) {
+        self.shared.lock().unwrap().navigation_input();
+    }
     pub fn status(&self) -> String {
         format!("Keypad: {} — Board: {}", self.keypad_status.lock().unwrap(), self.status.lock().unwrap().join("; "))
     }
@@ -406,6 +409,7 @@ async fn serve(
                     Payload::BlobGet(b)=>{if !blob_queue.is_empty(){return Err("Concurrent blob request".into());}let body=shared.lock().unwrap().body(&b.sha256).map(Vec::from);if let Some(body)=body{for chunk in err(sync::chunks(&body))?{blob_queue.push_back(env(Payload::BlobChunk(chunk)));}}else{err(link.transport.enqueue(&env(Payload::BlobUnavailable(BlobUnavailable{sha256:b.sha256,reason:2}))))?;}},
                     Payload::BlobCancel(b)=>blob_queue.retain(|e|!matches!(&e.payload,Some(Payload::BlobChunk(c)) if c.sha256==b.sha256)),
                     Payload::Action(a)=>{
+                        if (1..=6).contains(&a.kind) { shared.lock().unwrap().navigation_input(); }
                         let mut s=shared.lock().unwrap();let body=s.body(&a.blob_id).map(Vec::from);let (mut result,dispatch)=err(s.authority.action(&mut peer,&a,now,body.as_deref()))?;
                         match dispatch{
                             Some(Dispatch::Decision{session,request,decision})=>{s.keep_terminal(&session);if s.decide(&request,decision){pending.push_back((a.clone(),now));}else{result=s.authority.finish(&mut peer,&a,false);s.keep_terminal(&session);}},

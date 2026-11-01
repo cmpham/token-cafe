@@ -981,13 +981,15 @@ impl Client {
                 Ok(())
             }
             4 | 9 => {
-                if v.page == 2 {
-                    if self.replica.model.sessions.get(&v.selected_session_id).is_some_and(|s| s.navigation_available) {
-                        self.issue(Action { kind: 6, session_id: v.selected_session_id, ..Default::default() }, now)?;
-                    }
-                } else {
-                    self.keyboard_review(v.selected_session_id, now)?;
+                if self.replica.model.sessions.get(&v.selected_session_id).is_some_and(|s| s.navigation_available) {
+                    self.issue(
+                        Action { kind: 6, session_id: v.selected_session_id.clone(), ..Default::default() },
+                        now,
+                    )?;
                 }
+                // Navigation closes the old review; reopen details in the same
+                // ordered action stream so one press does both operations.
+                self.keyboard_review(v.selected_session_id, now)?;
                 Ok(())
             }
             10 | 11 => {
