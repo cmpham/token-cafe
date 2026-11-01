@@ -135,7 +135,9 @@ def run(device, qmp, process):
         session.ClearField('approval')
     publish()
     resolved = capture('09-resolved')
-    assert pixel(resolved, 14, 53) != pixel(steady, 14, 53), 'desk marker survived resolution'
+    assert pixel(resolved, 14, 53) == pixel(steady, 14, 53), 'selection outline disappeared on resolution'
+    assert any(pixel(resolved, x, y) != pixel(steady, x, y)
+               for y in range(46, 59) for x in range(49, 63)), 'attention badge survived resolution'
 
     host.advance(4100)
     capture('09b-last-request')

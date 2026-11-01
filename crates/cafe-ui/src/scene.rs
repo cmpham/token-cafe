@@ -1684,31 +1684,20 @@ impl Scene {
                 continue;
             }
             let geo = seat_geom(ag.seat);
-            if self.attention.contains_key(&ag.id) {
+            // Focus has one shape regardless of activity or pending requests.
+            // Attention belongs to the badge, never to another seat outline.
+            if focused == Some(k) {
                 let (x, y, w, h) = (geo.sx - 6, geo.sy + 5, 92, 57);
-                if focused == Some(k) {
-                    g.rect(x, y, w + 1, 2, c::GOLD);
-                    g.rect(x, y + h - 1, w + 1, 2, c::GOLD);
-                    g.rect(x, y, 2, h + 1, c::GOLD);
-                    g.rect(x + w - 1, y, 2, h + 1, c::GOLD);
-                } else {
-                    for (cx, cy, dx, dy) in [(x, y, 1, 1), (x + w, y, -1, 1), (x, y + h, 1, -1), (x + w, y + h, -1, -1)]
-                    {
-                        g.rect(cx - if dx < 0 { 6 } else { 0 }, cy, 7, 1, c::CHALK_DIM);
-                        g.rect(cx, cy - if dy < 0 { 6 } else { 0 }, 1, 7, c::CHALK_DIM);
-                    }
-                }
+                g.rect(x, y, w + 1, 2, c::GOLD);
+                g.rect(x, y + h - 1, w + 1, 2, c::GOLD);
+                g.rect(x, y, 2, h + 1, c::GOLD);
+                g.rect(x + w - 1, y, 2, h + 1, c::GOLD);
             }
-            match pose_of(t, ag) {
-                Pose::Raise => {
-                    let b = if ag.why == Why::Ask { &a::BUBBLE_ASK } else { &a::BUBBLE_BANG };
-                    g.blit(b, geo.sx + 29, geo.sy + SIT_Y - 14, None, false);
-                }
-                Pose::Think => g.blit(&a::BUBBLE_THINK, geo.sx + 45, geo.sy + SIT_Y - 11, None, false),
-                _ => {}
-            }
-            if focused == Some(k) && ag.state != State::Wait {
-                g.blit(&a::CURSOR, geo.sx + 7, geo.sy + SIT_Y + 6, None, false);
+            if self.attention.contains_key(&ag.id) || matches!(pose_of(t, ag), Pose::Raise) {
+                let b = if ag.why == Why::Ask { &a::BUBBLE_ASK } else { &a::BUBBLE_BANG };
+                g.blit(b, geo.sx + 29, geo.sy + SIT_Y - 14, None, false);
+            } else if matches!(pose_of(t, ag), Pose::Think) {
+                g.blit(&a::BUBBLE_THINK, geo.sx + 45, geo.sy + SIT_Y - 11, None, false);
             }
         }
         for p in &self.particles {
@@ -2277,6 +2266,51 @@ mod tests {
                     &cafe[(a::WIN_Y as usize + 15 + y) * a::W + 8..(a::WIN_Y as usize + 15 + y) * a::W + 42],
                     &review[(9 + y) * a::W + 104..(9 + y) * a::W + 138]
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn navigation_focus_is_one_outline_for_every_state_and_detail_scale() {
+        for scale in [1, 2] {
+            let mut scene = Scene::new();
+            scene.set_sessions(&[
+                session("working", State::Work),
+                session("idle", State::Idle),
+                session("waiting", State::Wait),
+            ]);
+            for _ in 0..300 {
+                scene.tick(33);
+            }
+            assert!(scene.agents.iter().all(|ag| ag.mode == Mode::Seated));
+            // Suppress automatic focus only in the baseline so that all remaining
+            // pixels are status badges. Selection must add only one outline.
+            scene.automatic_attention = None;
+            let mut baseline = vec![0; a::W * a::H * scale * scale];
+            scene.draw_overlays(&mut Gfx::new(&mut baseline));
+            for id in ["working", "idle", "waiting"] {
+                scene.select_patron(true);
+                assert_eq!(scene.selected_id(), Some(id));
+                assert_eq!(scene.attention_id(), (id == "waiting").then_some(id));
+                let ag = scene.agents.iter().find(|ag| ag.id == id).unwrap();
+                let geo = seat_geom(ag.seat);
+                let (left, top) = (geo.sx - 6, geo.sy + 5);
+                let mut actual = vec![0; baseline.len()];
+                scene.draw_overlays(&mut Gfx::new(&mut actual));
+                for y in 0..a::H * scale {
+                    for x in 0..a::W * scale {
+                        let (lx, ly) = (x as i32 / scale as i32 - left, y as i32 / scale as i32 - top);
+                        let border = (0..=92).contains(&lx)
+                            && (0..=57).contains(&ly)
+                            && (!(2..91).contains(&lx) || !(2..56).contains(&ly));
+                        let index = y * a::W * scale + x;
+                        assert_eq!(
+                            actual[index],
+                            if border && baseline[index] == 0 { c::GOLD } else { baseline[index] },
+                            "{id}, scale {scale}, pixel {x},{y}"
+                        );
+                    }
+                }
             }
         }
     }
