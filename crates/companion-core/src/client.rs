@@ -926,7 +926,7 @@ impl Client {
             return [row("CAFE OFFLINE"), row("START TOKEN CAFE"), row("ON YOUR MAC"), row("")];
         }
         let v = self.view();
-        let mut sessions: Vec<_> = self.replica.model.sessions.values().collect();
+        let mut sessions: Vec<_> = self.replica.model.sessions.values().filter(|s| s.seat < 8).collect();
         sessions.sort_by(|a, b| (a.seat, &a.id).cmp(&(b.seat, &b.id)));
         let position = sessions.iter().position(|s| s.id == v.selected_session_id);
         let reading = v.page == 2;
@@ -993,7 +993,7 @@ impl Client {
                 Ok(())
             }
             10 | 11 => {
-                let mut sessions: Vec<_> = self.replica.model.sessions.values().collect();
+                let mut sessions: Vec<_> = self.replica.model.sessions.values().filter(|s| s.seat < 8).collect();
                 sessions.sort_by(|a, b| (a.seat, &a.id).cmp(&(b.seat, &b.id)));
                 if sessions.is_empty() {
                     return Ok(());

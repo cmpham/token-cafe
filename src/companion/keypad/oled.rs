@@ -53,15 +53,15 @@ impl Oled {
                 };
             }
         }
-        if mask != 0 {
-            return [row(&format!("@TC2A{mask}")), row(&self.alert_generation.to_string()), row(""), row("")];
-        }
         if self.last_input.is_some_and(|at| now.saturating_sub(at) < IDLE_MS)
             && let Some(s) = model.sessions.get(&model.view.selected_session_id)
         {
             let name = if s.display_name.is_empty() { &s.title } else { &s.display_name };
             let second: String = name.chars().skip(16).take(16).collect();
             return [row("@TC2N"), row(if s.provider == 1 { "CLAUDE" } else { "CODEX" }), row(name), row(&second)];
+        }
+        if mask != 0 {
+            return [row(&format!("@TC2A{mask}")), row(&self.alert_generation.to_string()), row(""), row("")];
         }
         let count =
             |provider| model.sessions.values().filter(|s| s.provider == provider && matches!(s.status, 1 | 3)).count();
@@ -105,6 +105,19 @@ mod tests {
         assert_eq!(o.rows(&m, 5100)[0], row("@TC2I"));
     }
     #[test]
+    fn new_alert_cannot_hide_selection_while_navigating() {
+        let mut m = model();
+        let mut oled = Oled::default();
+        oled.input(&m, 100);
+        m.sessions.get_mut("b").unwrap().status = 3;
+        assert_eq!(oled.rows(&m, 101)[0], row("@TC2N"));
+        assert_eq!(oled.rows(&m, 5099)[2], row("abcdefghijklmnop"));
+        assert_eq!(oled.rows(&m, 5100)[0], row("@TC2A2"));
+        oled.input(&m, 5101);
+        assert_eq!(oled.rows(&m, 5102)[0], row("@TC2N"));
+    }
+
+    #[test]
     fn counts_working_and_waiting_for_each_provider_including_unseated() {
         let mut m = Model::default();
         for provider in [1, 2] {
@@ -147,6 +160,7 @@ mod tests {
         assert_eq!(o.rows(&m, 6004)[0], row("@TC2A1"));
         o.input(&m, 6004);
         m.sessions.get_mut("a").unwrap().waiting_reason = 1;
-        assert_eq!(o.rows(&m, 6005)[0], row("@TC2A1"));
+        assert_eq!(o.rows(&m, 6005)[0], row("@TC2N"));
+        assert_eq!(o.rows(&m, 11004)[0], row("@TC2A1"));
     }
 }

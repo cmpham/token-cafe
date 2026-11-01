@@ -1680,9 +1680,6 @@ impl Scene {
             .or_else(|| self.attention_id())
             .and_then(|id| self.agents.iter().position(|ag| ag.id == id && ag.seen));
         for (k, ag) in self.agents.iter().enumerate() {
-            if ag.mode != Mode::Seated {
-                continue;
-            }
             let geo = seat_geom(ag.seat);
             // Focus has one shape regardless of activity or pending requests.
             // Attention belongs to the badge, never to another seat outline.
@@ -1692,6 +1689,9 @@ impl Scene {
                 g.rect(x, y + h - 1, w + 1, 2, c::GOLD);
                 g.rect(x, y, 2, h + 1, c::GOLD);
                 g.rect(x + w - 1, y, 2, h + 1, c::GOLD);
+            }
+            if ag.mode != Mode::Seated {
+                continue;
             }
             if self.attention.contains_key(&ag.id) || matches!(pose_of(t, ag), Pose::Raise) {
                 let b = if ag.why == Why::Ask { &a::BUBBLE_ASK } else { &a::BUBBLE_BANG };
@@ -2312,6 +2312,20 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn focus_outline_remains_visible_while_patron_walks_to_its_seat() {
+        let mut scene = Scene::new();
+        scene.set_sessions(&[session("moving", State::Work)]);
+        scene.focus_patron("moving".into());
+        for mode in [Mode::Arriving, Mode::Swapping] {
+            scene.agents[0].mode = mode;
+            let geo = seat_geom(scene.agents[0].seat);
+            let mut frame = vec![0; a::W * a::H];
+            scene.draw_overlays(&mut Gfx::new(&mut frame));
+            assert_eq!(frame[(geo.sy + 5) as usize * a::W + (geo.sx - 6) as usize], c::GOLD);
         }
     }
 

@@ -1465,3 +1465,42 @@ fn mac_keypad_activity_wakes_board_once_without_replaying_input() {
     c.tick(1_200_100).unwrap();
     assert!(c.sleeping, "a repeated heartbeat must not extend the idle timer");
 }
+
+#[test]
+fn knob_cycles_only_visible_seats_and_recovers_from_outside_selection() {
+    for command in [10, 11] {
+        let (mut client, mut host, mut peer) = setup();
+        let template = host.model.sessions["claude:test"].clone();
+        host.model.sessions.clear();
+        for i in 0..16 {
+            let id = format!("agent:{i:02}");
+            let seat = if i < 8 { i } else { 255 };
+            host.model.sessions.insert(
+                id.clone(),
+                Session { id, seat, provider: if i % 4 < 2 { 1 } else { 2 }, approval: None, ..template.clone() },
+            );
+        }
+        host.model.view.selected_session_id = "agent:12".into();
+        host.model.revision += 1;
+        for step in 0..17 {
+            let now = 11000 + step * 100;
+            for e in sync::snapshot(&host.model, &[1; 16], &[2; 16]).unwrap() {
+                let raw = codec::encode(&e).unwrap();
+                client.receive(e, &raw, now).unwrap();
+            }
+            actions(&mut client);
+            client.keyboard(command, now + 1).unwrap();
+            let expected_seat = if command == 11 { step % 8 } else { 7 - step % 8 };
+            let expected_id = format!("agent:{expected_seat:02}");
+            assert_eq!(client.view().selected_session_id, expected_id);
+            assert!(String::from_utf8_lossy(&client.keyboard_display()[0]).contains("/8"));
+            let selected = actions(&mut client);
+            assert_eq!(selected.len(), 1);
+            assert_eq!(selected[0].kind, 1);
+            let (result, dispatch) = host.action(&mut peer, &selected[0], now + 2, None).unwrap();
+            assert!(dispatch.is_none());
+            receive(&mut client, Payload::ActionResult(result), now + 3);
+            assert_eq!(host.model.view.selected_session_id, expected_id);
+        }
+    }
+}
