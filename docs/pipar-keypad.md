@@ -89,13 +89,21 @@ Seller UF2 SHA-256: `c599e7d0be2210e49a4d75a4f45140c137871ee73288cdb02e912b6d911
 
 ## OLED and wire protocol
 
-The Mac supplies four 16-character printable ASCII rows: BROWSE/READ and position, agent name, status, press hint/feedback. READ describes the open page; turns still browse. Firmware overlays battery percentage in the last four columns of row one. The 8×8 font fits 16 characters, not the earlier proposed 21-character mockup.
+The OLED has three views, driven by `src/companion/keypad/oled.rs` and drawn locally in `firmware/keypad/module/src/display.c`:
+
+- **Idle** (five seconds without keypad input): Claude icon and active-session count on the left; Codex icon and count on the right. Only working sessions and sessions waiting for input count as active; idle and disconnected sessions do not. Counts include sessions outside the eight board seats.
+- **Navigating**: selected session's provider icon/name above two rows of session name (up to 32 characters). Any mapped key or knob input extends this view for five seconds. Turns still browse; selection and scrolling semantics are unchanged. Non-ASCII characters use `?` with the 8×8 font.
+- **Pending approval** takes precedence: blink the requesting provider's icon on black, 500 ms on / 500 ms off. If both providers have pending approvals, show both icons. Any mapped key press or knob turn silences all current requests and returns to the navigation view; it does not approve anything. Removing the pending request stops its alert. A new request ID/digest can alert again. Unlinked permission waits also alert; ordinary questions do not. A companion restart resets the acknowledged set and may alert for still-pending requests again.
+
+The keypad cancels blinking locally on input, without waiting for a round trip. The Mac tracks request identities so repeated model refreshes and the idle timeout cannot restart an acknowledged alert. Firmware owns blink timing; it does not require alternating Bluetooth frames. Provider artwork is the same monochrome spark/knot used on the board. Normal views use the whole screen; battery percentage remains on offline/legacy text screens.
+
+The transport still supplies four printable 16-character rows atomically. A versioned presentation marker in row 0 selects the layout: `@TC2I` (counts in rows 1/2), `@TC2N` (provider in row 1, name in rows 2/3), or `@TC2A1/2/3` (Claude/Codex/both, alert generation in row 1). Firmware retains plain text rendering for connection/offline messages and older hosts. Install the matching new keypad firmware before running a host that sends these markers; old firmware would display the marker as plain text.
 
 USB reserved reports are 32 bytes: `FE 54 43 4F 01` (`FE TCO`, version 1), command byte, then data. Command 0 probes capabilities; 1 carries a 20-byte display row; input command 2 carries action 1–11 and an 8-bit sequence followed by zero padding. Successful probe/row replies have byte 6 = 1 and byte 7 = 1. Command 3 explicitly clears the active Bluetooth profile over physical USB; normal operation never calls it. It destroys that profile's bond, so use only for intentional repair/migration.
 
 Bluetooth service: `f6cafe10-7f67-4cd9-9b7d-58381d8de601`. Characteristics use first components `f6cafe11` (identity read), `f6cafe12` (OLED write with response), and `f6cafe13` (input notify), with the same suffix. Identity is `TCM2651A6626B5AE5931`. The active bonded profile must have encryption level L2. BLE input is the first eight bytes of the USB input report. Duplicate sequences are discarded per transport.
 
-A display row is `[version=1, sequence, row, 16 ASCII bytes, reserved=0]`. Four ordered rows with one sequence within two seconds publish atomically. USB/BLE have separate frames and activity clocks. Valid host traffic expires after five seconds; stale display content clears after eight seconds. Mac refreshes unchanged frames every two seconds and changes on its 200 ms timer; keypad LVGL refresh is 250 ms. These timers mean OLED updates are not instantaneous. Do not shorten safety timeouts to disguise a delivery problem.
+A display row is `[version=1, sequence, row, 16 ASCII bytes, reserved=0]`. Four ordered rows with one sequence within two seconds publish atomically. USB/BLE have separate frames and activity clocks. Valid host traffic expires after five seconds; stale display content clears after eight seconds. Mac refreshes unchanged frames every two seconds and changes on its 200 ms timer; keypad LVGL refresh is 100 ms. These timers mean OLED updates are not instantaneous. Do not shorten safety timeouts to disguise a delivery problem.
 
 The stock-looking display after a successful flash was traced to a **2,048-byte LVGL heap**, not a failed transfer. The custom screen now reserves **8,192 bytes**, has an opaque background, and uses a dedicated display work queue. The user subsequently confirmed live rendering. Temporary health characteristics and raw USB diagnostics were removed; current firmware has only the Mac service and normal VIA support.
 
@@ -140,7 +148,13 @@ Require **`Device programmed.`**, then application enumeration with the same ser
 
 Re-read all 18 keys, four encoder bindings and 1,024 macro bytes; compare against the backup. Restore only confirmed differences (notably knob F13). Test USB, unplugged Bluetooth, OLED, shortcuts, and USB reconnect priority. A successful upload alone does not prove display rendering or correct bindings.
 
-The installed pre-cleanup Mac-only application SHA-256 is `ce60c5d86e1ec2b8a1a533bf00f57bc2410829f3c4aebe64a9efbb028372ac02`; package `target/keypad-mac-bluetooth/pipar-mac-only.zip`. The modular cleanup firmware was built successfully but has not been flashed; do not label a newly built image with the installed hash.
+The earlier pre-cleanup Mac-only application SHA-256 is `ce60c5d86e1ec2b8a1a533bf00f57bc2410829f3c4aebe64a9efbb028372ac02`; package `target/keypad-mac-bluetooth/pipar-mac-only.zip`. The OLED redesign supersedes that image; its deployment evidence is recorded below. Do not label a new image with an older installed hash.
+
+### OLED redesign deployment — 2026-11-01
+
+Installed through USB serial DFU at approximately 11:39 (Asia/Ho_Chi_Minh): application SHA-256 `3236c690fc563abb6070a0a4b627c9403697bc85315bc4fbce23a2a37cba90ea`, 277,928 bytes. Package: `target/keypad-oled-redesign/pipar-oled.zip`. The manifest contains application + DFU metadata only; packaged bytes matched the built BIN. Uploader reported `Device programmed.`; post-flash USB enumeration and readback verified 18 keys, four encoder mappings, version fields, and all 1,024 macro bytes unchanged. Backups and transfer log are under `target/keypad-oled-redesign/` (ignored/private).
+
+The matching app was rebuilt at the stable release path and restarted with the existing board registry. Native app title confirmed `USB + OLED ready; Bluetooth standby` and `TokenCafe-6336 synced v2`. Validation: 200 Rust workspace tests, 50 native keypad checks, 18 native desktop checks, sanitized C frame-parser test, and pinned firmware build passed. Physical OLED layout/blink and post-update unplugged Bluetooth acceptance still require user confirmation; transfer success alone is not visual proof.
 
 ## Historical direct-board operation
 

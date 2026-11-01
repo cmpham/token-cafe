@@ -6,17 +6,18 @@ Reviewed 2026-11-01 against the current working tree (including the accumulated,
 
 | Module | Owns | Must not own |
 | --- | --- | --- |
-| `crates/companion-core` | Authority, validated protocol, replica, navigation, approval rules, OLED text, activity semantics | macOS accessibility, Bluetooth platform calls, LVGL |
+| `crates/companion-core` | Authority, validated protocol, replica, navigation, approval rules, legacy OLED text, activity semantics | macOS accessibility, Bluetooth platform calls, LVGL |
 | `src/companion/state.rs` | Collector-to-authority state and shared view reconciliation | Device HID parsing |
 | `src/companion/keypad.rs` | Local non-decision peer, helper lifecycle, command dispatch and OLED rows | Another copy of navigation/approval policy |
 | `src/companion/semantic.rs` | Mac-to-board authentication, ordered transfers, reconnects, model/blob scheduling | Physical keypad calibration or discovery |
 | `native/keypad/Protocol.swift` | Input validation, transport preference, line output | Device discovery or app activation |
+| `src/companion/keypad/oled.rs` | Idle counts, navigation presentation, per-request alert acknowledgement | Input dispatch, approval decisions, pixel drawing |
 | `native/keypad/BluetoothLink.swift` | Encrypted identity verification, notification subscription, serialized OLED writes, reconnects | Session choice or desktop actions |
 | `native/keypad/main.swift` | USB vendor interface, USB/BLE arbitration, bounded stdin frames, process ownership | Global keyboard capture |
 | `native/desktop/Controls.swift` | Session/route/control matching and bounded native accessibility helpers | Bluetooth or keypad mapping |
 | `native/desktop/main.swift` | Explicit app toggle/native recording invocation | Approval decisions, prompt submission, global-voice fallback |
 | `firmware/keypad/module/src/transport.c` | USB/GATT protocol, heartbeat selection, input mapping, frame storage | LVGL widgets |
-| `firmware/keypad/module/src/display.c` | LVGL layout, battery overlay and rendering | Pairing and host commands |
+| `firmware/keypad/module/src/display.c` | LVGL layout, provider icons, local blink/input cancellation and offline battery overlay | Pairing and host commands |
 | `firmware/shared/keypad_display.h` | Portable bounded, ordered frame parser | Hardware or desktop state |
 | `firmware/engine` | Rust board adapter around the shared client and renderer | Keypad Bluetooth connection |
 | `firmware/semantic/main/main.c` | ESP32 lifecycle, peripheral GATT, queued receipt, NVS, touchscreen/GPIO/LCD loop | Keypad central/scanner/HID/calibration |

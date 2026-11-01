@@ -17,6 +17,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod oled;
+
 struct Local {
     client: Client,
     peer: Peer,
@@ -153,6 +155,7 @@ fn run(shared: Arc<Mutex<Store>>, status: Arc<Mutex<String>>) -> std::result::Re
         let mut local = Local::new(&shared.lock().unwrap().epoch, 0).map_err(protocol)?;
         let mut pending: Option<(Action, mpsc::Receiver<bool>, Instant)> = None;
         let mut display = None;
+        let mut oled = oled::Oled::default();
         loop {
             if child.try_wait()?.is_some() {
                 return Err("keypad helper exited".into());
@@ -173,6 +176,7 @@ fn run(shared: Arc<Mutex<Store>>, status: Arc<Mutex<String>>) -> std::result::Re
                 if at.elapsed() > Duration::from_millis(500) {
                     continue;
                 }
+                oled.input(&store.authority.model, now);
                 store.keypad_activity = store.keypad_activity.wrapping_add(1);
                 local.client.keyboard(cmd, now).map_err(protocol)?;
             }
@@ -205,7 +209,7 @@ fn run(shared: Arc<Mutex<Store>>, status: Arc<Mutex<String>>) -> std::result::Re
                 });
                 pending = Some((a, rx, Instant::now()));
             }
-            let rows = local.client.keyboard_display();
+            let rows = oled.rows(&store.authority.model, now);
             drop(store);
             if display != Some(rows) {
                 let strings: Vec<_> = rows.iter().map(|r| String::from_utf8_lossy(r).into_owned()).collect();

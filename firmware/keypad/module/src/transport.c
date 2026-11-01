@@ -19,6 +19,8 @@ static KdFrame usb_frame, ble_frame;
 K_MUTEX_DEFINE(frame_lock);
 static atomic_t usb_seen, usb_active, ble_seen, ble_active;
 static uint8_t input_sequence;
+static atomic_t input_generation;
+uint32_t token_cafe_input_generation(void) { return (uint32_t)atomic_get(&input_generation); }
 static bool recent(atomic_t *active, atomic_t *seen) {
     return atomic_get(active) && (uint32_t)(k_uptime_get_32()-(uint32_t)atomic_get(seen))<5000;
 }
@@ -107,6 +109,7 @@ bool token_cafe_usb_keycode(const struct zmk_keycode_state_changed *ev) {
     }
     if(!command) return false;
     if(!ev->state) return true;
+    atomic_inc(&input_generation);
     uint8_t report[32]={0xfe,'T','C','O',1,2,command,++input_sequence};
     if(usb_preferred()) {
         raise_raw_hid_sent_event((struct raw_hid_sent_event){
