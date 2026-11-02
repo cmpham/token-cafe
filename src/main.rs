@@ -176,6 +176,7 @@ fn print_session_info(watch: bool) {
 
 fn usage_text() -> &'static str {
     "usage: token-cafe [--demo | --print | --usage-json | --session-info [--watch]] [--scale N] [--always-on-top]\n\
+     \n  --weekly-limits  diagnose keypad quota sources without opening the app\
      \n  --usage-json  print monthly usage by saved app and organization as JSON\
      \n  --session-info  print local session tasks and observed activity as JSON\
      \n  --watch    with --session-info, emit snapshots when they change\
@@ -207,6 +208,8 @@ fn main() {
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
+            #[cfg(feature = "bluetooth")]
+            "--weekly-limits" => return token_cafe::companion::diagnose_weekly_limits(),
             "--list-patrons" => return println!("{}", NAMES.join("\n")),
             "--patrons" => match args.next().filter(|v| ROSTERS.contains(&v.as_str())) {
                 Some(v) => roster = v,

@@ -68,3 +68,7 @@ All 15 existing top-level documentation PNG/GIF files were byte-identical after 
 The macOS bundle is rebuilt at the stable release path. This pass does not flash devices or restart the running app. Changes to renderer source change the compatibility digest: deploy the matching semantic board firmware and desktop app together before restarting into this build. Keypad firmware is unchanged. Physical LCD/touch/Bluetooth soak testing remains separate from simulator/build results.
 
 Local evidence (ignored): `target/cleanup-{tests,no-default-tests,clippy,native,board-native,macos-build,qemu-tests,board-build}.log`, `target/cleanup-ui-{before,after}.txt`, `target/cleanup-board-{before,after}.json`, and `target/cleanup-board-before-frames/`.
+
+## Subsequent paired rollout
+
+The matching desktop and physical semantic board were deployed on 2026-11-02 while restoring weekly keypad quotas. Application-only board flashing, private rollback backup, unchanged pairing/NVS readback and live v2 synchronization are recorded in [the quota recovery report](weekly-quota-recovery-2026-11-02.md).

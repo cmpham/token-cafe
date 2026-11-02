@@ -15,6 +15,8 @@ swiftc -O native/desktop/*.swift -o "$app_dir/Contents/MacOS/keypad-desktop.new"
 mv "$app_dir/Contents/MacOS/keypad-desktop.new" "$app_dir/Contents/MacOS/keypad-desktop"
 swiftc -O native/keypad/*.swift -o "$app_dir/Contents/MacOS/keypad-hid.new"
 mv "$app_dir/Contents/MacOS/keypad-hid.new" "$app_dir/Contents/MacOS/keypad-hid"
+swiftc -O native/quota/*.swift -o "$app_dir/Contents/MacOS/keypad-quota.new"
+mv "$app_dir/Contents/MacOS/keypad-quota.new" "$app_dir/Contents/MacOS/keypad-quota"
 cp assets/TokenCafe.icns "$app_dir/Contents/Resources/TokenCafe.icns"
 # Replace the executable inode so macOS does not reuse cached code-signing pages.
 cp "$build_dir/token-cafe" "$app_dir/Contents/MacOS/token-cafe.new"
@@ -40,6 +42,7 @@ PLIST
 # linker-generated executable identity. Sign nested helpers before the app.
 codesign --force --sign - --identifier local.token-cafe.desktop.keypad-desktop "$app_dir/Contents/MacOS/keypad-desktop"
 codesign --force --sign - --identifier local.token-cafe.desktop.keypad-hid "$app_dir/Contents/MacOS/keypad-hid"
+codesign --force --sign - --identifier local.token-cafe.desktop.keypad-quota "$app_dir/Contents/MacOS/keypad-quota"
 codesign --force --sign - --identifier local.token-cafe.desktop "$app_dir"
 codesign --verify --deep --strict "$app_dir"
 printf 'Built %s\n' "$app_dir"

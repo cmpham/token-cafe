@@ -760,6 +760,7 @@ mod tests {
 pub mod state;
 
 mod keypad;
+pub use keypad::diagnose as diagnose_weekly_limits;
 pub mod semantic;
 
 /// Only fixed application destinations are accepted from a paired keypad.

@@ -36,7 +36,13 @@ impl Oled {
         self.last_input = Some(now);
         self.acknowledged = model.sessions.values().filter_map(alert).collect();
     }
-    pub(super) fn rows(&mut self, model: &Model, now: u64, remaining: [Option<u8>; 3]) -> [[u8; 16]; 4] {
+    pub(super) fn rows(
+        &mut self,
+        model: &Model,
+        now: u64,
+        remaining: [Option<u8>; 3],
+        dual_claude: bool,
+    ) -> [[u8; 16]; 4] {
         let current: BTreeSet<_> = model.sessions.values().filter_map(alert).collect();
         self.acknowledged.retain(|a| current.contains(a));
         if current != self.observed {
@@ -67,7 +73,7 @@ impl Oled {
             |provider| model.sessions.values().filter(|s| s.provider == provider && matches!(s.status, 1 | 3)).count();
         {
             let percent = |value: Option<u8>| value.map_or_else(|| "--".into(), |v| format!("{v}%"));
-            if remaining[1].is_some() {
+            if dual_claude || remaining[1].is_some() {
                 return [
                     row("@TC4I"),
                     row(&count(1).to_string()),
@@ -114,32 +120,39 @@ mod tests {
     fn idle_counts_navigation_and_timeout() {
         let m = model();
         let mut o = Oled::default();
-        let r = o.rows(&m, 0, [None; 3]);
+        let r = o.rows(&m, 0, [None; 3], false);
         assert_eq!(r[0], row("@TC3I"));
         assert_eq!(r[1], row("1"));
         assert_eq!(r[2], row("0"));
         o.input(&m, 100);
-        let r = o.rows(&m, 101, [None; 3]);
+        let r = o.rows(&m, 101, [None; 3], false);
         assert_eq!(r[0], row("@TC2N"));
         assert_eq!(r[2], row("abcdefghijklmnop"));
         assert_eq!(r[3], row("SECOND"));
-        assert_eq!(o.rows(&m, 5100, [None; 3])[0], row("@TC3I"));
+        assert_eq!(o.rows(&m, 5100, [None; 3], false)[0], row("@TC3I"));
     }
     #[test]
     fn idle_weekly_values_fit_both_columns() {
         let mut o = Oled::default();
-        let rows = o.rows(&model(), 0, [Some(100), None, Some(29)]);
+        let rows = o.rows(&model(), 0, [Some(100), None, Some(29)], false);
         assert_eq!(rows[3], row("100%    29%     "));
-        assert_eq!(o.rows(&model(), 0, [None, None, Some(0)])[3], row("--      0%      "));
+        assert_eq!(o.rows(&model(), 0, [None, None, Some(0)], false)[3], row("--      0%      "));
     }
     #[test]
     fn separate_claude_percentages_have_fixed_slots() {
         let mut oled = Oled::default();
-        let rows = oled.rows(&model(), 0, [Some(95), Some(100), Some(29)]);
+        let rows = oled.rows(&model(), 0, [Some(95), Some(100), Some(29)], false);
         assert_eq!(rows[0], row("@TC4I"));
         assert_eq!(rows[3], row("95% 100%29% "));
-        assert_eq!(oled.rows(&model(), 0, [None, Some(0), None])[3], row("--  0%  --  "));
-        assert_eq!(oled.rows(&model(), 0, [Some(95), None, Some(29)])[0], row("@TC3I"));
+        assert_eq!(oled.rows(&model(), 0, [None, Some(0), None], false)[3], row("--  0%  --  "));
+        assert_eq!(oled.rows(&model(), 0, [Some(95), None, Some(29)], false)[0], row("@TC3I"));
+    }
+    #[test]
+    fn known_dual_account_layout_survives_unavailable_percentages() {
+        let mut oled = Oled::default();
+        let rows = oled.rows(&model(), 0, [None, None, Some(29)], true);
+        assert_eq!(rows[0], row("@TC4I"));
+        assert_eq!(rows[3], row("--  --  29% "));
     }
     #[test]
     fn new_alert_cannot_hide_selection_while_navigating() {
@@ -147,11 +160,11 @@ mod tests {
         let mut oled = Oled::default();
         oled.input(&m, 100);
         m.sessions.get_mut("b").unwrap().status = 3;
-        assert_eq!(oled.rows(&m, 101, [None; 3])[0], row("@TC2N"));
-        assert_eq!(oled.rows(&m, 5099, [None; 3])[2], row("abcdefghijklmnop"));
-        assert_eq!(oled.rows(&m, 5100, [None; 3])[0], row("@TC2A2"));
+        assert_eq!(oled.rows(&m, 101, [None; 3], false)[0], row("@TC2N"));
+        assert_eq!(oled.rows(&m, 5099, [None; 3], false)[2], row("abcdefghijklmnop"));
+        assert_eq!(oled.rows(&m, 5100, [None; 3], false)[0], row("@TC2A2"));
         oled.input(&m, 5101);
-        assert_eq!(oled.rows(&m, 5102, [None; 3])[0], row("@TC2N"));
+        assert_eq!(oled.rows(&m, 5102, [None; 3], false)[0], row("@TC2N"));
     }
 
     #[test]
@@ -165,11 +178,11 @@ mod tests {
         }
         let mut o = Oled::default();
         o.input(&m, 0); // Silence waiting alerts before checking idle totals.
-        assert_eq!(o.rows(&m, 6000, [None; 3])[1], row("2"));
-        assert_eq!(o.rows(&m, 6000, [None; 3])[2], row("2"));
+        assert_eq!(o.rows(&m, 6000, [None; 3], false)[1], row("2"));
+        assert_eq!(o.rows(&m, 6000, [None; 3], false)[2], row("2"));
         m.sessions.get_mut("1:1").unwrap().status = 2;
         m.sessions.get_mut("2:3").unwrap().status = 2;
-        let rows = o.rows(&m, 6001, [None; 3]);
+        let rows = o.rows(&m, 6001, [None; 3], false);
         assert_eq!(rows[1], row("1"));
         assert_eq!(rows[2], row("1"));
     }
@@ -181,23 +194,23 @@ mod tests {
             m.sessions.get_mut(id).unwrap().approval =
                 Some(Request { id: id.into(), state: 1, digest: vec![1], ..Default::default() });
         }
-        assert_eq!(o.rows(&m, 0, [None; 3])[0], row("@TC2A3"));
+        assert_eq!(o.rows(&m, 0, [None; 3], false)[0], row("@TC2A3"));
         o.input(&m, 10);
-        assert_eq!(o.rows(&m, 11, [None; 3])[0], row("@TC2N"));
-        assert_eq!(o.rows(&m, 6000, [None; 3])[0], row("@TC3I"));
+        assert_eq!(o.rows(&m, 11, [None; 3], false)[0], row("@TC2N"));
+        assert_eq!(o.rows(&m, 6000, [None; 3], false)[0], row("@TC3I"));
         m.sessions.get_mut("b").unwrap().approval.as_mut().unwrap().digest = vec![2];
-        assert_eq!(o.rows(&m, 6001, [None; 3])[0], row("@TC2A2"));
+        assert_eq!(o.rows(&m, 6001, [None; 3], false)[0], row("@TC2A2"));
         m.sessions.get_mut("b").unwrap().approval.as_mut().unwrap().state = 3;
-        assert_eq!(o.rows(&m, 6002, [None; 3])[0], row("@TC3I"));
+        assert_eq!(o.rows(&m, 6002, [None; 3], false)[0], row("@TC3I"));
         m.sessions.get_mut("a").unwrap().approval = None;
-        o.rows(&m, 6003, [None; 3]);
+        o.rows(&m, 6003, [None; 3], false);
         let a = m.sessions.get_mut("a").unwrap();
         a.status = 3;
         a.waiting_reason = 2;
-        assert_eq!(o.rows(&m, 6004, [None; 3])[0], row("@TC2A1"));
+        assert_eq!(o.rows(&m, 6004, [None; 3], false)[0], row("@TC2A1"));
         o.input(&m, 6004);
         m.sessions.get_mut("a").unwrap().waiting_reason = 1;
-        assert_eq!(o.rows(&m, 6005, [None; 3])[0], row("@TC2N"));
-        assert_eq!(o.rows(&m, 11004, [None; 3])[0], row("@TC2A1"));
+        assert_eq!(o.rows(&m, 6005, [None; 3], false)[0], row("@TC2N"));
+        assert_eq!(o.rows(&m, 11004, [None; 3], false)[0], row("@TC2A1"));
     }
 }

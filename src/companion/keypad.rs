@@ -19,6 +19,7 @@ use std::{
 
 mod oled;
 mod weekly;
+pub use weekly::diagnose;
 
 struct Local {
     client: Client,
@@ -214,7 +215,9 @@ fn run(
                 });
                 pending = Some((a, rx, Instant::now()));
             }
-            let rows = oled.rows(&store.authority.model, now, weekly.lock().unwrap().remaining());
+            let weekly = weekly.lock().unwrap();
+            let rows = oled.rows(&store.authority.model, now, weekly.remaining(), weekly.dual_claude());
+            drop(weekly);
             drop(store);
             if display != Some(rows) {
                 let strings: Vec<_> = rows.iter().map(|r| String::from_utf8_lossy(r).into_owned()).collect();

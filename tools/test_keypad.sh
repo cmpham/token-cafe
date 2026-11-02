@@ -12,4 +12,6 @@ if [[ $(uname -s) == Darwin ]]; then
   "$out/keypad-test"
   swiftc -O native/desktop/Controls.swift native/tests/desktop/main.swift -o "$out/desktop-test"
   "$out/desktop-test"
+  swiftc -O -warnings-as-errors native/quota/Storage.swift native/tests/quota/main.swift -o "$out/quota-test"
+  "$out/quota-test"
 fi
