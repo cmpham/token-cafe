@@ -16,6 +16,9 @@ They type while they work, nap while you're away, and raise a hand when they nee
 
 </div>
 
+> [!NOTE]
+> Token Café is a fun project for personal use. Development is driven by AI, using Codex and Claude Code.
+
 > [!TIP]
 > **Linux and macOS supported.** Windows contributors are welcome; see [porting notes](#windows-porting-notes).
 
