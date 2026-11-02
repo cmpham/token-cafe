@@ -82,10 +82,8 @@ fn main() {
     let now = chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap();
     for roster in ["humans", "mixed"] {
         scene.patrons = Patrons::roster(roster).unwrap();
-        for scale in [1, 2] {
-            let mut frame = vec![0; 480 * 272 * scale * scale];
-            measure(&format!("render-{roster}-{scale}x"), 200, || scene.render(black_box(&mut frame), now));
-        }
+        let mut frame = vec![0; 480 * 272];
+        measure(&format!("render-{roster}-native"), 200, || scene.render(black_box(&mut frame), now));
     }
     #[cfg(feature = "bluetooth")]
     for count in [8, 64] {

@@ -1,4 +1,4 @@
-//! Software drawing in 480x272 room coordinates with a 1x or 2x framebuffer (0x00RRGGBB pixels): rectangles,
+//! Software drawing in 480x272 room coordinates with one native framebuffer (0x00RRGGBB pixels): rectangles,
 //! shadows, palette sprites and the 5x7 font, the primitives design/cafe.js
 //! draws with. Every call clips to the screen and to the current clip
 //! rectangle.
@@ -18,7 +18,6 @@ impl Pal {
 
 pub struct Gfx<'a> {
     fb: &'a mut [u32],
-    pub scale: usize,
     cx0: i32,
     cy0: i32,
     cx1: i32,
@@ -40,9 +39,8 @@ fn glyph(ch: u8) -> &'static [u8; 7] {
 
 impl<'a> Gfx<'a> {
     pub fn new(fb: &'a mut [u32]) -> Self {
-        let scale = if fb.len() == W * H * 4 { 2 } else { 1 };
-        assert_eq!(fb.len(), W * H * scale * scale);
-        Gfx { fb, scale, cx0: 0, cy0: 0, cx1: W as i32, cy1: H as i32 }
+        assert_eq!(fb.len(), W * H);
+        Gfx { fb, cx0: 0, cy0: 0, cx1: W as i32, cy1: H as i32 }
     }
 
     /// Half-open box.
@@ -64,11 +62,19 @@ impl<'a> Gfx<'a> {
         self.rect(x, y, 1, 1, c);
     }
 
-    /// A physical pixel in the high-detail layer; clip remains in room coordinates.
-    pub fn detail_px(&mut self, x: i32, y: i32, c: u32) {
-        let k = self.scale as i32;
-        if x >= self.cx0 * k && y >= self.cy0 * k && x < self.cx1 * k && y < self.cy1 * k {
-            self.fb[y as usize * W * self.scale + x as usize] = c;
+    /// Composite antialiased artwork over the existing room at a physical pixel.
+    pub fn blend_px(&mut self, x: i32, y: i32, color: u32, alpha: u8) {
+        if alpha == 0 || x < self.cx0 || y < self.cy0 || x >= self.cx1 || y >= self.cy1 {
+            return;
+        }
+        let pixel = &mut self.fb[y as usize * W + x as usize];
+        if alpha == 255 {
+            *pixel = color;
+        } else {
+            let a = alpha as u32;
+            let channel =
+                |shift: u32| (((color >> shift) & 255) * a + ((*pixel >> shift) & 255) * (255 - a) + 127) / 255;
+            *pixel = channel(16) << 16 | channel(8) << 8 | channel(0);
         }
     }
 
@@ -78,10 +84,8 @@ impl<'a> Gfx<'a> {
         if x0 >= x1 || y0 >= y1 {
             return;
         }
-        let stride = W * self.scale;
-        let (x0, x1) = (x0 as usize * self.scale, x1 as usize * self.scale);
-        for j in y0 * self.scale as i32..y1 * self.scale as i32 {
-            self.fb[j as usize * stride + x0..j as usize * stride + x1].fill(c);
+        for j in y0..y1 {
+            self.fb[j as usize * W + x0 as usize..j as usize * W + x1 as usize].fill(c);
         }
     }
 
@@ -110,9 +114,9 @@ impl<'a> Gfx<'a> {
             &custom
         };
         let scale = |v: u32| channels[(v & 255) as usize];
-        for j in y0 * self.scale as i32..y1 * self.scale as i32 {
-            for i in x0 * self.scale as i32..x1 * self.scale as i32 {
-                let p = &mut self.fb[j as usize * W * self.scale + i as usize];
+        for j in y0..y1 {
+            for i in x0..x1 {
+                let p = &mut self.fb[j as usize * W + i as usize];
                 *p = (scale(*p >> 16) << 16) | (scale(*p >> 8) << 8) | scale(*p);
             }
         }
@@ -243,43 +247,72 @@ impl<'a> Gfx<'a> {
 mod tests {
     use super::*;
     #[test]
-    fn rectangles_match_independent_clipped_pixel_oracle_at_both_scales() {
-        for scale in [1, 2] {
-            for [cx0, cy0, cx1, cy1] in [
-                [0, 0, W as i32, H as i32],
-                [5, 7, 105, 150],
-                [-9, -8, 13, 11],
-                [40, 50, 20, 30],
-                [600, 700, 800, 900],
-                [-100, -100, -10, -10],
+    #[should_panic(expected = "assertion `left == right` failed")]
+    fn only_native_framebuffers_are_accepted() {
+        Gfx::new(&mut alloc::vec![0; W * H * 4]);
+    }
+
+    #[test]
+    fn alpha_compositing_preserves_coverage_and_room_clipping() {
+        let mut fb = alloc::vec![0x123456; W * H];
+        for alpha in 0..=255 {
+            for color in [0, 0xffffff, 0xaa5511, 0x7f80fe] {
+                let index = 11 * W + 7;
+                fb[index] = 0x123456;
+                Gfx::new(&mut fb).blend_px(7, 11, color, alpha);
+                let channel = |shift: u32| {
+                    let src = (color >> shift) & 255;
+                    let dst = (0x123456u32 >> shift) & 255;
+                    ((src as f64 * alpha as f64 + dst as f64 * (255 - alpha) as f64) / 255.).round() as u32
+                };
+                assert_eq!(fb[index], channel(16) << 16 | channel(8) << 8 | channel(0));
+            }
+        }
+        let before = fb.clone();
+        let mut gfx = Gfx::new(&mut fb);
+        gfx.clip(5, 7, 10, 12);
+        for (x, y) in [(-1, 8), (4, 8), (10, 8), (7, 6), (7, 12), (480, 272)] {
+            gfx.blend_px(x, y, 0xffffff, 128);
+        }
+        assert_eq!(fb, before, "clipped alpha must never touch a pixel");
+    }
+
+    #[test]
+    fn rectangles_match_independent_clipped_pixel_oracle_at_native_resolution() {
+        for [cx0, cy0, cx1, cy1] in [
+            [0, 0, W as i32, H as i32],
+            [5, 7, 105, 150],
+            [-9, -8, 13, 11],
+            [40, 50, 20, 30],
+            [600, 700, 800, 900],
+            [-100, -100, -10, -10],
+        ] {
+            for [x, y, w, h] in [
+                [-12, -13, 30, 31],
+                [0, 0, 480, 272],
+                [474, 267, 20, 20],
+                [8, 9, 33, 42],
+                [10, 11, -3, 5],
+                [10, 11, 3, -5],
+                [5, 5, 0, 0],
+                [600, 700, 10, 10],
             ] {
-                for [x, y, w, h] in [
-                    [-12, -13, 30, 31],
-                    [0, 0, 480, 272],
-                    [474, 267, 20, 20],
-                    [8, 9, 33, 42],
-                    [10, 11, -3, 5],
-                    [10, 11, 3, -5],
-                    [5, 5, 0, 0],
-                    [600, 700, 10, 10],
-                ] {
-                    let mut actual = alloc::vec![0x123456;W*H*scale*scale];
-                    let mut gfx = Gfx::new(&mut actual);
-                    gfx.clip(cx0, cy0, cx1, cy1);
-                    gfx.rect(x, y, w, h, 0xabcdef);
-                    for py in 0..H * scale {
-                        for px in 0..W * scale {
-                            let (lx, ly) = ((px / scale) as i32, (py / scale) as i32);
-                            let inside = lx >= x
-                                && lx < x + w
-                                && ly >= y
-                                && ly < y + h
-                                && lx >= cx0
-                                && lx < cx1
-                                && ly >= cy0
-                                && ly < cy1;
-                            assert_eq!(actual[py * W * scale + px], if inside { 0xabcdef } else { 0x123456 });
-                        }
+                let mut actual = alloc::vec![0x123456;W*H];
+                let mut gfx = Gfx::new(&mut actual);
+                gfx.clip(cx0, cy0, cx1, cy1);
+                gfx.rect(x, y, w, h, 0xabcdef);
+                for py in 0..H {
+                    for px in 0..W {
+                        let (lx, ly) = (px as i32, py as i32);
+                        let inside = lx >= x
+                            && lx < x + w
+                            && ly >= y
+                            && ly < y + h
+                            && lx >= cx0
+                            && lx < cx1
+                            && ly >= cy0
+                            && ly < cy1;
+                        assert_eq!(actual[py * W + px], if inside { 0xabcdef } else { 0x123456 });
                     }
                 }
             }

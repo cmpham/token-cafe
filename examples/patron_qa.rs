@@ -11,10 +11,10 @@ use token_cafe::{
     scene::{ForcedPose, Kind, Scene, Session, State, Usage, Why},
 };
 fn save(scene: &Scene, path: &str) {
-    let mut fb = vec![0; W * H * 4];
+    let mut fb = vec![0; W * H];
     scene.render(&mut fb, NaiveTime::from_hms_opt(21, 47, 0).unwrap());
     let rgb: Vec<u8> = fb.iter().flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, *p as u8]).collect();
-    let mut enc = png::Encoder::new(BufWriter::new(File::create(path).unwrap()), W as u32 * 2, H as u32 * 2);
+    let mut enc = png::Encoder::new(BufWriter::new(File::create(path).unwrap()), W as u32, H as u32);
     enc.set_color(png::ColorType::Rgb);
     enc.set_depth(png::BitDepth::Eight);
     enc.write_header().unwrap().write_image_data(&rgb).unwrap();

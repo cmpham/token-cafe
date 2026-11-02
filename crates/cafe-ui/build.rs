@@ -8,33 +8,41 @@ fn main() {
         println!("cargo:rerun-if-changed={path}");
     }
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    let mut data = Vec::new();
-    let mut rows = Vec::new();
-    for file in ["src/patrons.rs", "../../assets/patrons/poses.rgba", "../../assets/patrons/cup-anchors.bin"] {
+    for file in [
+        "src/patrons.rs",
+        "../../assets/patrons/poses.rgba",
+        "../../assets/patrons/portraits.rgba",
+        "../../assets/patrons/cup-anchors.bin",
+    ] {
         println!("cargo:rerun-if-changed={file}");
         hash.update(file.as_bytes());
         hash.update(std::fs::read(file).unwrap());
     }
-    let pixels = std::fs::read("../../assets/patrons/poses.rgba").unwrap();
-    for row in pixels.as_chunks::<{ 48 * 4 }>().0 {
-        rows.push(data.len() as u32);
-        let mut x = 0;
-        while x < 48 {
-            let canonical = |i: usize| -> [u8; 4] {
-                if row[i * 4 + 3] < 128 { [0; 4] } else { row[i * 4..i * 4 + 4].try_into().unwrap() }
-            };
-            let pixel = canonical(x);
-            let mut end = x + 1;
-            while end < 48 && canonical(end) == pixel {
-                end += 1;
+    for (file, width, name) in [("poses.rgba", 48, "patron"), ("portraits.rgba", 32, "portrait")] {
+        let pixels = std::fs::read(format!("../../assets/patrons/{file}")).unwrap();
+        assert!(pixels.len().is_multiple_of(width * width * 4));
+        let mut data = Vec::new();
+        let mut rows = Vec::new();
+        for row in pixels.chunks_exact(width * 4) {
+            rows.push(data.len() as u32);
+            let mut x = 0;
+            while x < width {
+                let canonical = |i: usize| -> [u8; 4] {
+                    if row[i * 4 + 3] == 0 { [0; 4] } else { row[i * 4..i * 4 + 4].try_into().unwrap() }
+                };
+                let pixel = canonical(x);
+                let mut end = x + 1;
+                while end < width && canonical(end) == pixel {
+                    end += 1;
+                }
+                data.push((end - x) as u8);
+                data.extend_from_slice(&pixel);
+                x = end;
             }
-            data.push((end - x) as u8);
-            data.extend_from_slice(&pixel);
-            x = end;
         }
+        std::fs::write(out.join(format!("{name}-runs.bin")), data).unwrap();
+        std::fs::write(out.join(format!("{name}-rows.rs")), format!("{rows:?}")).unwrap();
     }
-    std::fs::write(out.join("patron-runs.bin"), data).unwrap();
-    std::fs::write(out.join("patron-rows.rs"), format!("{rows:?}")).unwrap();
     // RGB24 plus an eight-bit run length: one aligned flash read per run,
     // followed by contiguous framebuffer writes. No decoded background heap.
     let background = std::fs::read("src/bg.rgb").unwrap();

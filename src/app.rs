@@ -51,8 +51,9 @@ impl Area {
 
 /// The pixels that differ between two frames, or None.
 fn diff(a: &[u32], b: &[u32]) -> Option<Area> {
-    let k = if a.len() == W * H * 4 { 2 } else { 1 };
-    let stride = W * k;
+    assert_eq!(a.len(), b.len());
+    assert_eq!(a.len(), W * H);
+    let stride = W;
     let mut area: Option<Area> = None;
     for (y, (ra, rb)) in a.chunks_exact(stride).zip(b.chunks_exact(stride)).enumerate() {
         // Fast bulk comparison for unchanged rows, without an extra scan of
@@ -66,7 +67,7 @@ fn diff(a: &[u32], b: &[u32]) -> Option<Area> {
             ra.iter().zip(rb).position(|(p, q)| p != q).unwrap()
         };
         let x1 = stride - ra.iter().zip(rb).rev().position(|(p, q)| p != q).unwrap();
-        let row = Area { x0: x0 / k, y0: y / k, x1: x1.div_ceil(k), y1: y / k + 1 };
+        let row = Area { x0, y0: y, x1, y1: y + 1 };
         area = Some(area.map_or(row, |a| a.union(row)));
     }
     area
@@ -96,7 +97,7 @@ fn frame_point(x: f64, y: f64, width: usize, height: usize) -> Option<(i32, i32)
 /// touched, or None when the area falls outside the window.
 fn paint(fb: &[u32], out: &mut [u32], w: usize, h: usize, area: Area, full: bool) -> Option<Rect> {
     let f = fit(w, h);
-    let detail = if fb.len() == W * H * 4 { 2 } else { 1 };
+    assert_eq!(fb.len(), W * H);
     if full {
         out.fill(0);
     }
@@ -107,24 +108,18 @@ fn paint(fb: &[u32], out: &mut [u32], w: usize, h: usize, area: Area, full: bool
     }
     let mut row_of = usize::MAX;
     for y in y0..y1 {
-        let sy = (y - f.oy) * detail / f.k;
+        let sy = (y - f.oy) / f.k;
         let start = y * w + x0;
         let end = y * w + x1;
         if sy != row_of {
-            let src = &fb[sy * W * detail..(sy + 1) * W * detail];
+            let src = &fb[sy * W..(sy + 1) * W];
             let row = &mut out[start..end];
-            let sx = (x0 - f.ox) * detail / f.k;
-            if f.k == detail {
+            let sx = (x0 - f.ox) / f.k;
+            if f.k == 1 {
                 row.copy_from_slice(&src[sx..sx + row.len()]);
-            } else if f.k.is_multiple_of(detail) {
-                for (pixels, &color) in row.chunks_mut(f.k / detail).zip(&src[sx..]) {
-                    pixels.fill(color);
-                }
             } else {
-                // Odd window scales and 2x-to-1x downsampling retain the exact
-                // nearest-neighbor mapping of the high-detail framebuffer.
-                for (i, px) in row.iter_mut().enumerate() {
-                    *px = src[(x0 + i - f.ox) * detail / f.k];
+                for (pixels, &color) in row.chunks_mut(f.k).zip(&src[sx..]) {
+                    pixels.fill(color);
                 }
             }
             row_of = sy;
@@ -286,8 +281,6 @@ struct App {
     shown: Option<Shown>,
     scene: Scene,
     fb: Vec<u32>,
-    #[cfg(feature = "bluetooth")]
-    board_fb: Vec<u32>,
     on_screen: Vec<u32>,
     /// What each recent present changed, newest last; None = everything.
     history: VecDeque<Option<Area>>,
@@ -361,10 +354,8 @@ pub fn run(
             scene.patrons = patrons;
             scene
         },
-        fb: vec![0; W * H * 4],
-        #[cfg(feature = "bluetooth")]
-        board_fb: vec![0; W * H],
-        on_screen: vec![0; W * H * 4],
+        fb: vec![0; W * H],
+        on_screen: vec![0; W * H],
         history: VecDeque::new(),
         size: (0, 0),
         last: now,
@@ -529,13 +520,18 @@ impl App {
         }
         #[cfg(feature = "bluetooth")]
         if let Some(companion) = &mut self.companion {
-            for (input, presented) in companion.drain_verified_input() {
+            let inputs = companion.drain_verified_input();
+            // Keep the last rendered frame as the immutable visual baseline for
+            // this entire input batch, even when earlier inputs change the review.
+            let expected = if inputs.iter().any(|(input, _)| matches!(input, token_cafe::companion::Input::Tap(_, _))) {
+                token_cafe::companion::frame_fingerprint(&token_cafe::companion::encode_frame(&self.fb))
+            } else {
+                0
+            };
+            for (input, presented) in inputs {
                 input.trace(&self.scene);
                 let url = if let token_cafe::companion::Input::Tap(x, y) = input {
                     if self.scene.review.is_some() {
-                        let expected = token_cafe::companion::frame_fingerprint(&token_cafe::companion::encode_frame(
-                            &self.board_fb,
-                        ));
                         self.scene.review_input(false, x, y, presented == Some(expected) && expected != 0)
                     } else {
                         input.apply(&mut self.scene)
@@ -546,7 +542,6 @@ impl App {
                 if let Some(url) = url {
                     open_session(url);
                 }
-                self.scene.render(&mut self.fb, chrono::Local::now().time());
             }
         }
         if let Some(id) = self.scene.handoff_request.take()
@@ -590,9 +585,7 @@ impl App {
         self.scene.render(&mut self.fb, chrono::Local::now().time());
         #[cfg(feature = "bluetooth")]
         if let Some(companion) = &mut self.companion {
-            // The legacy board protocol retains its native logical frame size.
-            self.scene.render(&mut self.board_fb, chrono::Local::now().time());
-            companion.publish(&self.board_fb);
+            companion.publish(&self.fb);
         }
         if let Some(s) = &self.shown
             && !self.occluded
@@ -882,28 +875,6 @@ impl ApplicationHandler for App {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn high_detail_damage_and_downscaling_match_full_repaints() {
-        let old = vec![0; W * H * 4];
-        let mut new = old.clone();
-        new[20 * W * 2 + 41] = 0xffffff;
-        new[21 * W * 2 + 40] = 0x123456;
-        let area = diff(&old, &new).unwrap();
-        assert_eq!(area, Area { x0: 20, y0: 10, x1: 21, y1: 11 });
-        for k in 1..=6 {
-            let (w, h) = (W * k + 20, H * k + 20);
-            let mut full = vec![0; w * h];
-            let mut partial = full.clone();
-            paint(&new, &mut full, w, h, Area::ALL, true);
-            paint(&old, &mut partial, w, h, Area::ALL, true);
-            paint(&new, &mut partial, w, h, area, false);
-            assert_eq!(full, partial);
-        }
-        let mut native = vec![0; W * H * 4];
-        paint(&new, &mut native, W * 2, H * 2, Area::ALL, true);
-        assert_eq!(native, new, "native presentation must retain every detail pixel");
-    }
-
     use super::*;
 
     #[test]
@@ -1039,75 +1010,69 @@ mod tests {
     }
 
     #[test]
-    fn damage_matches_pixel_oracle_at_both_detail_levels() {
-        for detail in [1, 2] {
-            let stride = W * detail;
-            let old = vec![0; W * H * detail * detail];
-            assert_eq!(diff(&old, &old), None);
-            for step in [1, 3, stride - 1, stride, stride + 1, old.len() - 1, old.len(), old.len() + 1] {
-                for offset in [0, stride - 1, stride * (H * detail - 1), old.len() - 1] {
-                    let mut new = old.clone();
-                    for i in (offset..new.len()).step_by(step) {
-                        new[i] = 0xabcdef;
-                    }
-                    let expected = old.iter().zip(&new).enumerate().filter(|(_, (a, b))| a != b).fold(
-                        None::<Area>,
-                        |area, (i, _)| {
-                            let (x, y) = (i % stride / detail, i / stride / detail);
-                            let pixel = Area { x0: x, y0: y, x1: x + 1, y1: y + 1 };
-                            Some(area.map_or(pixel, |a| a.union(pixel)))
-                        },
-                    );
-                    assert_eq!(diff(&old, &new), expected, "detail={detail} step={step} offset={offset}");
+    fn damage_matches_pixel_oracle_at_native_resolution() {
+        let stride = W;
+        let old = vec![0; W * H];
+        assert_eq!(diff(&old, &old), None);
+        for step in [1, 3, stride - 1, stride, stride + 1, old.len() - 1, old.len(), old.len() + 1] {
+            for offset in [0, stride - 1, stride * (H - 1), old.len() - 1] {
+                let mut new = old.clone();
+                for i in (offset..new.len()).step_by(step) {
+                    new[i] = 0xabcdef;
                 }
+                let expected =
+                    old.iter().zip(&new).enumerate().filter(|(_, (a, b))| a != b).fold(None::<Area>, |area, (i, _)| {
+                        let (x, y) = (i % stride, i / stride);
+                        let pixel = Area { x0: x, y0: y, x1: x + 1, y1: y + 1 };
+                        Some(area.map_or(pixel, |a| a.union(pixel)))
+                    });
+                assert_eq!(diff(&old, &new), expected, "step={step} offset={offset}");
             }
         }
     }
 
     #[test]
-    fn paint_matches_pixel_oracle_for_detail_scaling_clipping_and_buffer_age() {
-        for detail in [1, 2] {
-            // Every physical pixel is distinct: duplicated/lost HD subpixels cannot hide.
-            let fb: Vec<u32> = (0..W * H * detail * detail).map(|i| i as u32 + 1).collect();
-            let areas = [
-                Area::ALL,
-                Area { x0: 7, y0: 11, x1: 18, y1: 17 },
-                Area { x0: W - 1, y0: H - 1, x1: W, y1: H },
-                Area { x0: 2, y0: 3, x1: 2, y1: 8 },
-            ];
-            let sizes = (1..=7).flat_map(|k| [(W * k, H * k), (W * k + 17, H * k + 29)]).chain([
-                (0, 0),
-                (1, 1),
-                (200, 100),
-                (W + 11, H - 1),
-                (W - 1, H + 13),
-            ]);
-            for (w, h) in sizes {
-                let f = fit(w, h);
-                for area in areas {
-                    for full in [false, true] {
-                        let mut got = vec![0xabcdef; w * h];
-                        let damage = paint(&fb, &mut got, w, h, area, full);
-                        let mut touched = 0;
-                        for y in 0..h {
-                            for x in 0..w {
-                                let inside = x >= f.ox + area.x0 * f.k
-                                    && x < f.ox + area.x1 * f.k
-                                    && y >= f.oy + area.y0 * f.k
-                                    && y < f.oy + area.y1 * f.k;
-                                let expected = if inside {
-                                    touched += 1;
-                                    fb[(y - f.oy) * detail / f.k * W * detail + (x - f.ox) * detail / f.k]
-                                } else if full {
-                                    0
-                                } else {
-                                    0xabcdef
-                                };
-                                assert_eq!(got[y * w + x], expected, "detail={detail}, {w}x{h}, {area:?}, ({x},{y})");
-                            }
+    fn paint_matches_pixel_oracle_for_window_scaling_clipping_and_buffer_age() {
+        // Every source pixel is distinct: duplicated or lost pixels cannot hide.
+        let fb: Vec<u32> = (0..W * H).map(|i| i as u32 + 1).collect();
+        let areas = [
+            Area::ALL,
+            Area { x0: 7, y0: 11, x1: 18, y1: 17 },
+            Area { x0: W - 1, y0: H - 1, x1: W, y1: H },
+            Area { x0: 2, y0: 3, x1: 2, y1: 8 },
+        ];
+        let sizes = (1..=7).flat_map(|k| [(W * k, H * k), (W * k + 17, H * k + 29)]).chain([
+            (0, 0),
+            (1, 1),
+            (200, 100),
+            (W + 11, H - 1),
+            (W - 1, H + 13),
+        ]);
+        for (w, h) in sizes {
+            let f = fit(w, h);
+            for area in areas {
+                for full in [false, true] {
+                    let mut got = vec![0xabcdef; w * h];
+                    let damage = paint(&fb, &mut got, w, h, area, full);
+                    let mut touched = 0;
+                    for y in 0..h {
+                        for x in 0..w {
+                            let inside = x >= f.ox + area.x0 * f.k
+                                && x < f.ox + area.x1 * f.k
+                                && y >= f.oy + area.y0 * f.k
+                                && y < f.oy + area.y1 * f.k;
+                            let expected = if inside {
+                                touched += 1;
+                                fb[(y - f.oy) / f.k * W + (x - f.ox) / f.k]
+                            } else if full {
+                                0
+                            } else {
+                                0xabcdef
+                            };
+                            assert_eq!(got[y * w + x], expected, "{w}x{h}, {area:?}, ({x},{y})");
                         }
-                        assert_eq!(damage.map_or(0, |r| r.width.get() as usize * r.height.get() as usize), touched);
                     }
+                    assert_eq!(damage.map_or(0, |r| r.width.get() as usize * r.height.get() as usize), touched);
                 }
             }
         }

@@ -14,6 +14,7 @@ NAMES = ['clay', 'tsunami', 'glory', 'starflight', 'sunny', 'peril', 'winter', '
 CLIPS = ['type', 'think', 'wave', 'sip', 'sleep', 'stretch', 'down', 'up', 'left', 'right']
 FRAMES = 28
 CELL = 48
+SOURCE_DETAIL = 3
 
 
 def bounds(im):
@@ -132,16 +133,31 @@ def normalize(images, resolution=1, pixel_art=False):
     return cells, transforms
 
 
+def native_frame(hd, side=CELL):
+    """Resolve 3x source artwork into the shared native runtime pixels.
+
+    Apply the source visibility cutoff before area sampling. Filtering premultiplied
+    colors keeps transparent source RGB out of fine contours; partial coverage is
+    retained for compositing over the actual cafe, never a fixed matte color.
+    """
+    assert hd.size == (CELL * SOURCE_DETAIL, CELL * SOURCE_DETAIL)
+    visible = hd.copy()
+    visible.putalpha(hd.getchannel('A').point(lambda a: 255 if a >= 128 else 0))
+    return visible.resize((side, side), Image.Resampling.BOX)
+
+
 def main():
     all_frames = []
-    hd_frames = []
+    portraits = []
     cup_anchors = bytearray()
     contact = Image.new('RGBA', (CELL * FRAMES, (CELL + 8) * len(NAMES)), (38, 29, 48, 255))
     draw = ImageDraw.Draw(contact)
     for row, name in enumerate(NAMES):
         source = authored(name) if row < 8 or name == 'dragonite' else pmd(name)
-        cells, transforms = normalize(source)
-        hd_frames.extend(normalize(source, 2, pixel_art=8 <= row < 15)[0])
+        _, transforms = normalize(source)
+        hd_cells, _ = normalize(source, SOURCE_DETAIL, pixel_art=8 <= row < 15)
+        cells = [native_frame(hd) for hd in hd_cells]
+        portraits.extend(native_frame(hd, 32) for hd in hd_cells[4:6])
         if 8 <= row < 15:
             root = SOURCE / 'pmd' / name
             anim = next(a for a in ET.parse(root / 'AnimData.xml').findall('.//Anim') if a.findtext('Name') == 'Eat')
@@ -163,7 +179,7 @@ def main():
             contact.alpha_composite(cell, (i * CELL, row * (CELL + 8) + 8))
         draw.text((0, row * (CELL + 8)), name, fill='white')
         all_frames.extend(cells)
-    (ROOT / 'assets/patrons/poses-hd.rgba').write_bytes(b''.join(im.tobytes() for im in hd_frames))
+    (ROOT / 'assets/patrons/portraits.rgba').write_bytes(b''.join(im.tobytes() for im in portraits))
     (ROOT / 'assets/patrons/cup-anchors.bin').write_bytes(cup_anchors)
     (ROOT / 'assets/patrons/poses.rgba').write_bytes(b''.join(im.tobytes() for im in all_frames))
     contact.resize((CELL * FRAMES * 2, (CELL + 8) * len(NAMES) * 2), Image.Resampling.NEAREST).save(ROOT / 'docs/patron-poses.png')

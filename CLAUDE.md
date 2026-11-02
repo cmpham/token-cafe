@@ -33,6 +33,7 @@ Every worktree publishes to the primary repository's `release/Token Café.app`. 
 
 - Eight seats, Claude on the left and Codex on the right. Active/waiting patrons have seating priority over idle patrons on their own side. Extra sessions wait outside. Selection follows session identity through swaps and refreshes.
 - One gold outline marks focus, including during walking. Attention uses badges/footer, not a second focus style. No timer rotates the selected patron or footer. New waiting prompts pulse for 30 seconds, then keep a reminder until resolved; acknowledgement does not approve.
+- Desktop and board use one native 480×272 rendering path with shared 48×48 patron cells and 32×32 portraits. Supersampling at 3× is an asset-generation step only; keep alpha coverage in the shared compressed assets. Do not add a desktop HD atlas, scaled scene framebuffer, or separate legacy mirroring render. Desktop window resizing scales the finished native frame.
 - Idle patrons stretch/sip, fetch coffee after two minutes, sleep after ten. Session state age survives app restarts. Initial sessions seat immediately; subsequent arrivals/departures walk.
 - Keypad knob browses **only the eight visible patrons**, in seat order, including when leaving a details page. Press once for details and to focus the identified desktop session. Details return to the café after 30 seconds without navigation input. The OLED keeps navigation visible for five seconds after input.
 - Bottom-left mic starts native recording in the **currently focused Codex or Claude window/session**, independent of café selection. It must not activate an app, open a session, use a global voice shortcut, or submit text. Switching app/window/exposed session context cancels a pending request.
@@ -44,7 +45,7 @@ Every worktree publishes to the primary repository's `release/Token Café.app`. 
 | Location | Responsibility |
 | --- | --- |
 | `design/cafe.js`, `tools/gen_assets.mjs` | Sprite/background source and generated `crates/cafe-ui/src/assets.rs`, `bg.rgb` |
-| `crates/cafe-ui` | Shared renderer, 480×272 logical canvas, desktop detail rendering, scene/input/attention |
+| `crates/cafe-ui` | Shared native 480×272 framebuffer, patrons, scene/input/attention |
 | `src/app.rs`, `src/main.rs` | winit/softbuffer window, integer scaling, damage tracking, collectors |
 | `src/collect/` | Linux procfs/macOS libproc + sysctl discovery; bounded task evidence in `info.rs` |
 | `src/usage.rs` | Monthly local transcript accounting, API list-price estimates, versioned cache |
@@ -95,3 +96,7 @@ For measured renderer/host changes, run `cargo run --release --locked --example 
 The [2026-11-02 quota recovery](docs/qa/weekly-quota-recovery-2026-11-02.md) records expired-credential handling, Desktop Keychain authorization, native crypto/identity tests and the paired app/board reload.
 
 Keep macOS keypad runtime code behind platform cfg gates while compiling portable routing/OLED/identity tests on Linux. Linux prerequisites and validated scope are in [the Linux support report](docs/qa/linux-support-2026-11-02.md).
+
+The [board patron detail review](docs/qa/board-patron-detail-2026-11-02.md) records 3× source filtering at unchanged native size, alpha-aware compression/compositing, direct native portraits, simulator timing and the paired deployment.
+
+The [shared framebuffer review](docs/qa/shared-framebuffer-2026-11-02.md) is the current rendering reference: native desktop/board parity, removed HD paths, allocation/size results, Linux/macOS tests and paired deployment.

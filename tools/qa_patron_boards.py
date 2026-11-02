@@ -27,14 +27,16 @@ for roster in ['dragons','pokemon']:
 # Both gait phases in every direction, reviewed against the motion heading.
 names=['clay','tsunami','glory','starflight','sunny','peril','winter','moonwatcher',
        'pikachu','eevee','bulbasaur','charmander','squirtle','jigglypuff','gengar','dragonite']
-data=(root.parents[1]/'assets/patrons/poses-hd.rgba').read_bytes()
+data=(root.parents[1]/'assets/patrons/poses.rgba').read_bytes()
+cell=48
+row_height=cell+24
 for half in [0,1]:
- board=Image.new('RGB',(768,960),(38,29,48));d=ImageDraw.Draw(board)
+ board=Image.new('RGB',(cell*8,row_height*8),(38,29,48));d=ImageDraw.Draw(board)
  for row in range(8):
-  i=row+half*8;d.text((0,row*120),names[i],fill='white')
+  i=row+half*8;d.text((0,row*row_height),names[i],fill='white')
   for col,f in enumerate([12,13,16,17,20,21,24,25]):
-   off=(i*28+f)*96*96*4
-   im=Image.frombytes('RGBA',(96,96),data[off:off+96*96*4])
-   board.paste(im,(96*col,120*row+24),im)
-   d.text((96*col,120*row+12),['down A','down B','up A','up B','left A','left B','right A','right B'][col],fill='white')
+   off=(i*28+f)*cell*cell*4
+   im=Image.frombytes('RGBA',(cell,cell),data[off:off+cell*cell*4])
+   board.paste(im,(cell*col,row_height*row+24),im)
+   d.text((cell*col,row_height*row+12),['down A','down B','up A','up B','left A','left B','right A','right B'][col],fill='white')
  board.save(root/f'walk-directions-{half}.png')

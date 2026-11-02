@@ -25,22 +25,7 @@ use crate::patrons::Animation;
 // avoiding both a 510 KiB heap copy and a full-frame flash read every draw.
 static BACKGROUND_RUNS: &[u32] = &include!(concat!(env!("OUT_DIR"), "/background_runs.rs"));
 fn paint_background(mut frame: &mut [u32]) {
-    if frame.len() == a::W * a::H * 4 {
-        let mut offset = 0;
-        for &run in BACKGROUND_RUNS {
-            for _ in 0..(run >> 24) {
-                let x = offset % a::W * 2;
-                let y = offset / a::W * 2;
-                for dy in 0..2 {
-                    for dx in 0..2 {
-                        frame[(y + dy) * a::W * 2 + x + dx] = run & 0xffffff;
-                    }
-                }
-                offset += 1;
-            }
-        }
-        return;
-    }
+    assert_eq!(frame.len(), a::W * a::H);
     for &run in BACKGROUND_RUNS {
         let (pixels, rest) = frame.split_at_mut((run >> 24) as usize);
         pixels.fill(run & 0xffffff);
@@ -1971,6 +1956,16 @@ impl Scene {
 mod tests {
     use super::*;
     #[test]
+    fn background_matches_native_source_pixels() {
+        let mut frame = vec![0; a::W * a::H];
+        paint_background(&mut frame);
+        let source = include_bytes!("bg.rgb");
+        for (pixel, rgb) in frame.iter().zip(source.as_chunks::<3>().0) {
+            assert_eq!(*pixel, (rgb[0] as u32) << 16 | (rgb[1] as u32) << 8 | rgb[2] as u32);
+        }
+    }
+
+    #[test]
     fn cached_task_anchors_match_escaped_layout_after_replacement_and_removal() {
         let mut scene = Scene::new();
         scene.set_sessions(&[patron("task")]);
@@ -2043,9 +2038,9 @@ mod tests {
                         // Compare actual walker rendering against the clip for its movement.
                         // Once per path segment keeps this a compact real-path regression.
                         if checked & (1 << segment) == 0 {
-                            let mut actual = vec![0; a::W * a::H * 4];
+                            let mut actual = vec![0; a::W * a::H];
                             scene.draw_walker(&mut Gfx::new(&mut actual), ag);
-                            let mut wanted = vec![0; a::W * a::H * 4];
+                            let mut wanted = vec![0; a::W * a::H];
                             scene.patrons.draw(
                                 &mut Gfx::new(&mut wanted),
                                 seat,
@@ -2170,22 +2165,16 @@ mod tests {
         let geo = seat_geom(0);
         for name in &crate::patrons::NAMES[1..] {
             scene.patrons.assign(&format!("1={name}")).unwrap();
-            for k in [1, 2] {
-                for t in [0, 280, 650, 1100] {
-                    scene.t = t;
-                    let mut expected = vec![0; a::W * a::H * k * k];
-                    scene.draw_laptop(&mut Gfx::new(&mut expected), &scene.agents[0], geo.sx + LID_X, geo.sy + LID_Y);
-                    let mut actual = vec![0; a::W * a::H * k * k];
-                    scene.draw_desk(&mut Gfx::new(&mut actual), 0);
-                    for y in (geo.sy + LID_Y)..(geo.sy + LID_Y + 11) {
-                        for x in (geo.sx + LID_X)..(geo.sx + LID_X + 13) {
-                            for dy in 0..k {
-                                for dx in 0..k {
-                                    let i = (y as usize * k + dy) * a::W * k + x as usize * k + dx;
-                                    assert_eq!(actual[i], expected[i], "{name} at {t}, scale {k}, pixel {x},{y}");
-                                }
-                            }
-                        }
+            for t in [0, 280, 650, 1100] {
+                scene.t = t;
+                let mut expected = vec![0; a::W * a::H];
+                scene.draw_laptop(&mut Gfx::new(&mut expected), &scene.agents[0], geo.sx + LID_X, geo.sy + LID_Y);
+                let mut actual = vec![0; a::W * a::H];
+                scene.draw_desk(&mut Gfx::new(&mut actual), 0);
+                for y in (geo.sy + LID_Y)..(geo.sy + LID_Y + 11) {
+                    for x in (geo.sx + LID_X)..(geo.sx + LID_X + 13) {
+                        let i = y as usize * a::W + x as usize;
+                        assert_eq!(actual[i], expected[i], "{name} at {t}, pixel {x},{y}");
                     }
                 }
             }
@@ -2300,45 +2289,43 @@ mod tests {
     }
 
     #[test]
-    fn navigation_focus_is_one_outline_for_every_state_and_detail_scale() {
-        for scale in [1, 2] {
-            let mut scene = Scene::new();
-            scene.set_sessions(&[
-                session("working", State::Work),
-                session("idle", State::Idle),
-                session("waiting", State::Wait),
-            ]);
-            for _ in 0..300 {
-                scene.tick(33);
-            }
-            assert!(scene.agents.iter().all(|ag| ag.mode == Mode::Seated));
-            // Suppress automatic focus only in the baseline so that all remaining
-            // pixels are status badges. Selection must add only one outline.
-            scene.automatic_attention = None;
-            let mut baseline = vec![0; a::W * a::H * scale * scale];
-            scene.draw_overlays(&mut Gfx::new(&mut baseline));
-            for id in ["working", "idle", "waiting"] {
-                scene.select_patron(true);
-                assert_eq!(scene.selected_id(), Some(id));
-                assert_eq!(scene.attention_id(), (id == "waiting").then_some(id));
-                let ag = scene.agents.iter().find(|ag| ag.id == id).unwrap();
-                let geo = seat_geom(ag.seat);
-                let (left, top) = (geo.sx - 6, geo.sy + 5);
-                let mut actual = vec![0; baseline.len()];
-                scene.draw_overlays(&mut Gfx::new(&mut actual));
-                for y in 0..a::H * scale {
-                    for x in 0..a::W * scale {
-                        let (lx, ly) = (x as i32 / scale as i32 - left, y as i32 / scale as i32 - top);
-                        let border = (0..=92).contains(&lx)
-                            && (0..=57).contains(&ly)
-                            && (!(2..91).contains(&lx) || !(2..56).contains(&ly));
-                        let index = y * a::W * scale + x;
-                        assert_eq!(
-                            actual[index],
-                            if border && baseline[index] == 0 { c::GOLD } else { baseline[index] },
-                            "{id}, scale {scale}, pixel {x},{y}"
-                        );
-                    }
+    fn navigation_focus_is_one_outline_for_every_state() {
+        let mut scene = Scene::new();
+        scene.set_sessions(&[
+            session("working", State::Work),
+            session("idle", State::Idle),
+            session("waiting", State::Wait),
+        ]);
+        for _ in 0..300 {
+            scene.tick(33);
+        }
+        assert!(scene.agents.iter().all(|ag| ag.mode == Mode::Seated));
+        // Suppress automatic focus only in the baseline so that all remaining
+        // pixels are status badges. Selection must add only one outline.
+        scene.automatic_attention = None;
+        let mut baseline = vec![0; a::W * a::H];
+        scene.draw_overlays(&mut Gfx::new(&mut baseline));
+        for id in ["working", "idle", "waiting"] {
+            scene.select_patron(true);
+            assert_eq!(scene.selected_id(), Some(id));
+            assert_eq!(scene.attention_id(), (id == "waiting").then_some(id));
+            let ag = scene.agents.iter().find(|ag| ag.id == id).unwrap();
+            let geo = seat_geom(ag.seat);
+            let (left, top) = (geo.sx - 6, geo.sy + 5);
+            let mut actual = vec![0; baseline.len()];
+            scene.draw_overlays(&mut Gfx::new(&mut actual));
+            for y in 0..a::H {
+                for x in 0..a::W {
+                    let (lx, ly) = (x as i32 - left, y as i32 - top);
+                    let border = (0..=92).contains(&lx)
+                        && (0..=57).contains(&ly)
+                        && (!(2..91).contains(&lx) || !(2..56).contains(&ly));
+                    let index = y * a::W + x;
+                    assert_eq!(
+                        actual[index],
+                        if border && baseline[index] == 0 { c::GOLD } else { baseline[index] },
+                        "{id}, pixel {x},{y}"
+                    );
                 }
             }
         }

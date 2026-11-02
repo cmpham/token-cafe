@@ -24,12 +24,12 @@ pub const NAMES: [&str; 17] = [
 ];
 const FRAMES: usize = 28;
 const CELL: usize = 48;
-#[cfg(feature = "std")]
+#[cfg(test)]
 const CELL_BYTES: usize = CELL * CELL * 4;
-#[cfg(feature = "std")]
-const HD_PIXELS: &[u8; 16 * FRAMES * CELL_BYTES * 4] = include_bytes!("../../../assets/patrons/poses-hd.rgba");
 const RUNS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/patron-runs.bin"));
 const ROWS: &[u32] = &include!(concat!(env!("OUT_DIR"), "/patron-rows.rs"));
+const PORTRAIT_RUNS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/portrait-runs.bin"));
+const PORTRAIT_ROWS: &[u32] = &include!(concat!(env!("OUT_DIR"), "/portrait-rows.rs"));
 
 /// Each seated action has actual articulated artwork. Walk clips have four
 /// gait frames and use distance rather than time, so a stopped patron stays still.
@@ -98,12 +98,16 @@ impl Patrons {
     }
 
     fn row(frame: usize, y: usize) -> [[u8; 4]; CELL] {
+        Self::decode_row(RUNS, ROWS, CELL, frame, y)
+    }
+
+    fn decode_row(runs: &[u8], rows: &[u32], width: usize, frame: usize, y: usize) -> [[u8; 4]; CELL] {
         let mut result = [[0; 4]; CELL];
-        let mut offset = ROWS[frame * CELL + y] as usize;
+        let mut offset = rows[frame * width + y] as usize;
         let mut x = 0;
-        while x < CELL {
-            let count = RUNS[offset] as usize;
-            let pixel = RUNS[offset + 1..offset + 5].try_into().unwrap();
+        while x < width {
+            let count = runs[offset] as usize;
+            let pixel = runs[offset + 1..offset + 5].try_into().unwrap();
             result[x..x + count].fill(pixel);
             x += count;
             offset += 5;
@@ -211,22 +215,18 @@ impl Patrons {
         }
         let (animation, clock) = clip;
         let frame = (id - 1) * FRAMES + animation.frame(clock);
-        let k = g.scale;
-        #[cfg(feature = "std")]
-        let side = CELL * k;
-        for y in 0..output * k {
-            let row = Self::row(frame, y * CELL / (output * k));
-            for x in 0..output * k {
-                let p = &row[x * CELL / (output * k)];
-                #[cfg(feature = "std")]
-                let p = if k == 2 {
-                    let offset = (frame * side * side + (y * CELL / output) * side + x * CELL / output) * 4;
-                    &HD_PIXELS[offset..offset + 4]
-                } else {
-                    p
-                };
-
-                if p[3] >= 128 {
+        let portrait = output == 32;
+        for y in 0..output {
+            let row = if portrait {
+                let pose = animation.frame(clock);
+                debug_assert!((4..6).contains(&pose));
+                Self::decode_row(PORTRAIT_RUNS, PORTRAIT_ROWS, 32, (id - 1) * 2 + pose - 4, y)
+            } else {
+                Self::row(frame, y)
+            };
+            for (x, p) in row[..output].iter().enumerate() {
+                let alpha = p[3];
+                if alpha > 0 {
                     // Soft cafe fill light reveals dark NightWing scales while
                     // preserving black outlines and their purple palette.
                     let lit = (id == 4 || id == 8) && p[..3].iter().copied().max().unwrap() >= 35;
@@ -235,10 +235,11 @@ impl Patrons {
                     } else {
                         [p[0], p[1], p[2]]
                     };
-                    g.detail_px(
-                        (feet.0 - output as i32 / 2) * k as i32 + x as i32,
-                        (feet.1 - output as i32) * k as i32 + y as i32,
+                    g.blend_px(
+                        feet.0 - output as i32 / 2 + x as i32,
+                        feet.1 - output as i32 + y as i32,
                         (rgb[0] as u32) << 16 | (rgb[1] as u32) << 8 | rgb[2] as u32,
+                        alpha,
                     );
                 }
             }
@@ -259,13 +260,38 @@ mod tests {
                 for (x, decoded) in row.iter().enumerate() {
                     let offset = ((frame * CELL + y) * CELL + x) * 4;
                     let source = &PIXELS[offset..offset + 4];
-                    if source[3] >= 128 {
+                    if source[3] > 0 {
                         assert_eq!(decoded, source);
                     } else {
                         assert_eq!(*decoded, [0; 4]);
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn native_portraits_preserve_filtered_detail_in_both_wave_frames() {
+        use crate::assets::{H, W};
+        const SOURCE: &[u8] = include_bytes!("../../../assets/patrons/portraits.rgba");
+        let patrons = Patrons { seats: [9; SEATS] }; // No runtime NightWing fill light.
+        for phase in 0..2 {
+            let mut actual = alloc::vec![0x162332; W * H];
+            patrons.portrait(&mut Gfx::new(&mut actual), 0, (24, 48), phase * 280);
+            let mut expected = alloc::vec![0x162332; W * H];
+            let mut gfx = Gfx::new(&mut expected);
+            let frame = 8 * 2 + phase as usize;
+            for y in 0..32 {
+                let decoded = Patrons::decode_row(PORTRAIT_RUNS, PORTRAIT_ROWS, 32, frame, y);
+                for (x, p) in decoded[..32].iter().enumerate() {
+                    let offset = ((frame * 32 + y) * 32 + x) * 4;
+                    let source = &SOURCE[offset..offset + 4];
+                    assert_eq!(*p, if source[3] == 0 { [0; 4] } else { source.try_into().unwrap() });
+                    let color = (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32;
+                    gfx.blend_px(8 + x as i32, 16 + y as i32, color, p[3]);
+                }
+            }
+            assert_eq!(actual, expected, "portrait frame {phase} must use its own filtered atlas");
         }
     }
 

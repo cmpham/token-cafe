@@ -104,50 +104,48 @@ fn main() {
     scene.set_sessions(&sessions);
     scene.set_usage(Usage { tokens: 12345678.0, usd: 123.45 });
     for roster in ["humans", "dragons", "pokemon", "mixed"] {
-        for detail in [1, 2] {
-            for (name, text) in [
-                ("cafe", "".to_owned()),
-                ("32k-approval-preview", "\t".repeat(32768)),
-                ("escaped-preview", "Read C:\\tmp\twith café 🚀\rcontrols\0 and a long question that wraps".into()),
-                ("empty-preview", String::new()),
-            ] {
-                let mut scene = Scene::new();
-                scene.patrons = cafe_ui::patrons::Patrons::roster(roster).unwrap();
-                scene.set_sessions(&sessions);
-                scene.set_usage(Usage { tokens: 12345678.0, usd: 123.45 });
-                let mut fb = vec![0; W * H * detail * detail];
-                let preview = name != "cafe";
-                if preview {
-                    scene.set_requests(vec![Request {
-                        choices: 0,
-                        id: "profile-request".into(),
-                        session: "profile-1".into(),
-                        title: "Synthetic approval preview".into(),
-                        tool_name: "fixture".into(),
-                        text,
-                    }]);
-                    scene.focus_patron("profile-1".into());
-                }
-                let base = LIVE.load(Relaxed);
-                PEAK.store(base, Relaxed);
-                CALLS.store(0, Relaxed);
-                let start = Instant::now();
-                let mut sequence_hash = 0u64;
-                for _ in 0..300 {
-                    scene.tick(33);
-                    scene.render(black_box(&mut fb), now);
-                    // Include every animated frame so optimization comparisons cover
-                    // all poses, flashing alerts, particle motion and depth ordering.
-                    sequence_hash = fb.iter().fold(sequence_hash, |h, p| h.wrapping_mul(31).wrapping_add(*p as u64));
-                    black_box(&fb);
-                }
-                println!(
-                    "{roster}/{detail}x/{name}: us/frame={} allocations/frame={} transient_peak_bytes={} sequence_hash={sequence_hash:016x}",
-                    start.elapsed().as_micros() / 300,
-                    CALLS.load(Relaxed) / 300,
-                    PEAK.load(Relaxed) - base,
-                );
+        for (name, text) in [
+            ("cafe", "".to_owned()),
+            ("32k-approval-preview", "\t".repeat(32768)),
+            ("escaped-preview", "Read C:\\tmp\twith café 🚀\rcontrols\0 and a long question that wraps".into()),
+            ("empty-preview", String::new()),
+        ] {
+            let mut scene = Scene::new();
+            scene.patrons = cafe_ui::patrons::Patrons::roster(roster).unwrap();
+            scene.set_sessions(&sessions);
+            scene.set_usage(Usage { tokens: 12345678.0, usd: 123.45 });
+            let mut fb = vec![0; W * H];
+            let preview = name != "cafe";
+            if preview {
+                scene.set_requests(vec![Request {
+                    choices: 0,
+                    id: "profile-request".into(),
+                    session: "profile-1".into(),
+                    title: "Synthetic approval preview".into(),
+                    tool_name: "fixture".into(),
+                    text,
+                }]);
+                scene.focus_patron("profile-1".into());
             }
+            let base = LIVE.load(Relaxed);
+            PEAK.store(base, Relaxed);
+            CALLS.store(0, Relaxed);
+            let start = Instant::now();
+            let mut sequence_hash = 0u64;
+            for _ in 0..300 {
+                scene.tick(33);
+                scene.render(black_box(&mut fb), now);
+                // Include every animated frame so optimization comparisons cover
+                // all poses, flashing alerts, particle motion and depth ordering.
+                sequence_hash = fb.iter().fold(sequence_hash, |h, p| h.wrapping_mul(31).wrapping_add(*p as u64));
+                black_box(&fb);
+            }
+            println!(
+                "{roster}/native/{name}: us/frame={} allocations/frame={} transient_peak_bytes={} sequence_hash={sequence_hash:016x}",
+                start.elapsed().as_micros() / 300,
+                CALLS.load(Relaxed) / 300,
+                PEAK.load(Relaxed) - base,
+            );
         }
     }
 }
