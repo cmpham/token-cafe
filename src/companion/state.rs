@@ -119,7 +119,9 @@ impl Store {
     }
     pub fn ingest(&mut self, scene: &mut Scene, broker: Option<&Broker>) {
         self.broker = broker.cloned();
-        let old = self.authority.model.clone();
+        // The caller holds the store lock. Move the committed model aside while
+        // building its replacement, restoring it below if validation fails.
+        let old = std::mem::take(&mut self.authority.model);
         // Sessions are rebuilt below; cloning the previous map a second time
         // would allocate every request and session just to discard them.
         let mut next = Model {
@@ -360,7 +362,10 @@ impl Store {
                 self.authority.model = next;
             } else {
                 eprintln!("BLE v2: model rejected; retaining previous state");
+                self.authority.model = old;
             }
+        } else {
+            self.authority.model = old;
         }
         self.expire_details(Instant::now());
         self.apply(scene);
@@ -496,6 +501,35 @@ impl Store {
 mod tests {
     use super::*;
     use companion_core::authority::Peer;
+    #[test]
+    fn invalid_replacement_restores_the_committed_model() {
+        let mut scene = scene();
+        let mut store = Store::new([1; 16]);
+        store.ingest(&mut scene, None);
+        let committed = store.authority.model.clone();
+        let mut sessions = scene.sessions().to_vec();
+        let mut other = sessions[0].clone();
+        other.id = "claude:other".into();
+        sessions.push(other);
+        scene.set_sessions(&sessions);
+        // Duplicate request identities across sessions fail model validation.
+        scene.set_requests(
+            sessions
+                .iter()
+                .map(|session| crate::approval::Request {
+                    id: "duplicate".into(),
+                    session: session.id.clone(),
+                    title: "Run tests?".into(),
+                    tool_name: "Bash".into(),
+                    text: "cargo test".into(),
+                    choices: 0,
+                })
+                .collect(),
+        );
+        store.ingest(&mut scene, None);
+        assert_eq!(store.authority.model, committed);
+        assert!(companion_core::model::validate(&store.authority.model).is_ok());
+    }
     #[test]
     fn details_timeout_returns_both_views_to_cafe_and_preserves_selection() {
         let mut scene = scene();

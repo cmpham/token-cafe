@@ -280,10 +280,6 @@ impl Replica {
         self.stage = None;
         self.resync = true;
     }
-    pub fn new_authority(&mut self) {
-        self.disconnect();
-        self.model = Model::default();
-    }
     pub fn check_timeout(&mut self, now: u64) -> Result<()> {
         if self.stage.as_ref().is_some_and(|s| now.saturating_sub(s.started) > 60000) {
             self.disconnect();
@@ -377,8 +373,10 @@ pub fn allocate(old: &Model, sessions: &mut [Session], arrival_order: &[String])
             .filter(|(_, s)| s.provider == provider && s.seat == 255)
             .map(|(i, _)| i)
             .collect();
-        outside
-            .sort_by_key(|i| (!matches!(sessions[*i].status, 1 | 3), rank(&sessions[*i].id), sessions[*i].id.clone()));
+        outside.sort_by(|&a, &b| {
+            let key = |i: usize| (!matches!(sessions[i].status, 1 | 3), rank(&sessions[i].id), &sessions[i].id);
+            key(a).cmp(&key(b))
+        });
         for i in outside {
             if let Some(seat) = side.iter().find(|seat| !sessions.iter().any(|s| s.seat == **seat)) {
                 sessions[i].seat = *seat;

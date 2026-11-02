@@ -174,26 +174,6 @@ fn main() {
         gif("docs/attention.gif", &frames, 2, 60);
         return;
     }
-    if std::env::args().any(|arg| arg == "--monologues") {
-        let now = NaiveTime::from_hms_opt(21, 47, 0).unwrap();
-        let mut scene = Scene::new();
-        let mut moon = s("moon", "moon-cafe", Codex, Work, Why::None, P::Auto, 0);
-        moon.branch = Some("feature/a-long-branch-name-that-wraps-onto-the-second-line".into());
-        scene.set_sessions(&[moon, s("stars", "star-charts", Claude, Work, Why::None, P::Auto, 0)]);
-        let mut frames = Vec::new();
-        for i in 0..300 {
-            run(&mut scene, 100);
-            frames.push(rgb(&scene, now, 3));
-            if i == 110 {
-                png("target/monologue-branch.png", frames.last().unwrap(), 3);
-            }
-            if i == 210 {
-                png("target/monologue-agents.png", frames.last().unwrap(), 3);
-            }
-        }
-        gif("target/monologues.gif", &frames, 3, 10);
-        return;
-    }
     std::fs::create_dir_all("docs").unwrap();
     let late = NaiveTime::from_hms_opt(21, 47, 0).unwrap();
     let usage = Usage { tokens: 1_624_000_000.0, usd: 693.70 };

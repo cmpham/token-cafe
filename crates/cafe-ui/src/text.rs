@@ -84,11 +84,10 @@ pub fn layout_prefix(text: &str, width: usize, max_lines: usize) -> Vec<Line> {
     result
 }
 pub fn index(lines: &[Line], anchor: usize) -> usize {
-    {
-        let offset = lines.iter().filter(|l| l.offset <= anchor).map(|l| l.offset).max().unwrap_or(0);
-        lines.iter().position(|l| l.offset == offset).unwrap_or(0)
-    }
+    let i = lines.partition_point(|line| line.offset <= anchor).saturating_sub(1);
+    lines.get(i).map_or(0, |line| lines.partition_point(|candidate| candidate.offset < line.offset))
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,6 +106,21 @@ mod tests {
         for line in &l {
             assert!("123éx".is_char_boundary(line.offset));
         }
+    }
+    #[test]
+    fn binary_anchor_lookup_matches_first_duplicate_offset_and_boundaries() {
+        for text in ["", "abc\n\n", "é中🚀\t\r\u{0}\\"] {
+            for width in [1, 2, 4, 32, 54] {
+                let lines = layout(text, width);
+                for anchor in 0..=text.len() + 5 {
+                    let offset =
+                        lines.iter().filter(|line| line.offset <= anchor).map(|line| line.offset).max().unwrap_or(0);
+                    let expected = lines.iter().position(|line| line.offset == offset).unwrap_or(0);
+                    assert_eq!(index(&lines, anchor), expected, "{text:?} width={width} anchor={anchor}");
+                }
+            }
+        }
+        assert_eq!(index(&[], 100), 0);
     }
 }
 

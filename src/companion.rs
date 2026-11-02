@@ -494,9 +494,6 @@ impl Mirror {
         });
         Self { input: inputs, pending, input_generation: 0, status, last: Instant::now() - Duration::from_secs(1) }
     }
-    pub fn drain_input(&mut self) -> Vec<Input> {
-        self.drain_verified_input().into_iter().map(|(event, _)| event).collect()
-    }
     pub fn drain_verified_input(&mut self) -> Vec<(Input, Option<u64>)> {
         let events: Vec<_> = self.input.lock().unwrap().drain(..).collect();
         if !events.is_empty() {

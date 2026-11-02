@@ -88,3 +88,5 @@ cargo run --release --locked --example screenshots -- --attention
 ```
 
 Inspect generated PNGs and representative GIF frames before publishing. Keep real session names out of tracked media. See [visual QA](docs/qa/REVIEW.md), [protocol](docs/protocol/companion-v2.md), and [hardware recreation](docs/hardware/recreate-approval-controller.md) for detailed evidence and procedures.
+
+For measured renderer/host changes, run `cargo run --release --locked --example ui_performance` with fictional fixtures and compare allocation counts before/after. The [2026-11-01 cleanup review](docs/qa/performance-cleanup-2026-11-01.md) records scope, retained compatibility paths, memory tradeoffs and simulator validation.

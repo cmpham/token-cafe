@@ -209,8 +209,6 @@ struct Agent {
     name: String,
     plate_name: String,
     codex: bool,
-    branch: Option<String>,
-    active_subagents: Option<usize>,
     state: State,
     why: Why,
     force: ForcedPose,
@@ -282,7 +280,6 @@ pub struct Scene {
     /// In arrival order.
     agents: Vec<Agent>,
     particles: Vec<Particle>,
-    focus: usize,
     attention: HashMap<String, Option<i64>>,
     automatic_attention: Option<String>,
     resolved_attention: HashMap<String, (i64, Option<String>)>,
@@ -300,7 +297,7 @@ pub struct Scene {
     usage_open: bool,
     sessions: Vec<Session>,
     details: Vec<SessionDetail>,
-    pages: HashMap<String, Vec<String>>,
+    pages: HashMap<String, TaskPages>,
     unavailable: [String; 1],
     selected: Option<String>,
     task_page: usize,
@@ -507,13 +504,34 @@ fn ellipsize(text: &str, width: usize) -> String {
     }
 }
 
-/// Word-wrap in character cells; never scroll or cut a multi-byte UTF-8 character.
-fn task_pages(text: &str) -> Vec<String> {
-    if text.is_empty() {
-        return vec!["TASK UNAVAILABLE".into()];
-    }
-    let lines: Vec<_> = crate::text::layout(text, TASK_LINE_LEN).into_iter().map(|line| line.text).collect();
-    lines.chunks(2).map(|lines| lines.join("\n")).collect()
+struct TaskPages {
+    text: Vec<String>,
+    // Keep byte anchors from the same escaped layout as the visible pages.
+    offsets: Vec<usize>,
+}
+
+/// Word-wrap once when task evidence changes, including its byte anchors.
+fn task_pages(text: &str) -> TaskPages {
+    let lines = crate::text::layout(text, TASK_LINE_LEN);
+    let offsets = lines.iter().map(|line| line.offset).collect();
+    let text = if text.is_empty() {
+        vec!["TASK UNAVAILABLE".into()]
+    } else {
+        lines
+            .chunks(2)
+            .map(|lines| {
+                let mut page =
+                    String::with_capacity(lines.iter().map(|line| line.text.len()).sum::<usize>() + lines.len() - 1);
+                page.push_str(&lines[0].text);
+                if let Some(second) = lines.get(1) {
+                    page.push('\n');
+                    page.push_str(&second.text);
+                }
+                page
+            })
+            .collect()
+    };
+    TaskPages { text, offsets }
 }
 
 impl Scene {
@@ -526,7 +544,6 @@ impl Scene {
             t: 0,
             agents: Vec::new(),
             particles: Vec::new(),
-            focus: 0,
             attention: HashMap::new(),
             automatic_attention: None,
             resolved_attention: HashMap::new(),
@@ -623,8 +640,6 @@ impl Scene {
                         name: String::new(),
                         plate_name: String::new(),
                         codex: false,
-                        branch: None,
-                        active_subagents: None,
                         state: State::Work,
                         why: Why::None,
                         force: ForcedPose::Auto,
@@ -670,8 +685,6 @@ impl Scene {
                 a.name.clone_from(&s.name);
                 a.plate_name = shorten(&s.name, PLATE_LEN).to_ascii_uppercase();
             }
-            a.branch = s.branch.clone();
-            a.active_subagents = s.active_subagents;
             a.codex = s.kind == Kind::Codex;
             a.state = s.state;
             a.why = s.why;
@@ -703,17 +716,15 @@ impl Scene {
         if self.external_seats.is_some() {
             return;
         }
-        let mut resumed: Vec<_> = self
-            .agents
-            .iter()
-            .filter(|a| a.state != State::Idle && a.seen && a.mode == Mode::Seated)
-            .map(|a| a.id.clone())
-            .collect();
-        // Maintain the invariant even on startup, after arrival, or after another
-        // swap finishes: no seated active patron trails a seated idle patron.
-        resumed.sort_by_key(|id| self.agents.iter().find(|a| &a.id == id).map(|a| a.seat));
-        for id in resumed {
-            let Some(k) = self.agents.iter().position(|a| a.id == id && a.mode == Mode::Seated) else { continue };
+        // Seats are bounded and unique; indices remain stable during swaps.
+        // Visit active patrons in seat order without allocating IDs every tick.
+        let mut resumed = [None; SEATS];
+        for (i, agent) in self.agents.iter().enumerate() {
+            if agent.state != State::Idle && agent.seen && agent.mode == Mode::Seated {
+                resumed[agent.seat] = Some(i);
+            }
+        }
+        for k in resumed.into_iter().flatten() {
             let from = self.agents[k].seat;
             let right = self.agents[k].codex;
             let candidate = self
@@ -798,9 +809,6 @@ impl Scene {
     pub fn selected_id(&self) -> Option<&str> {
         self.selected.as_deref()
     }
-    pub fn footer_id(&self) -> Option<&str> {
-        self.footer_origin.as_deref().or(self.selected.as_deref())
-    }
     pub fn sessions(&self) -> &[Session] {
         &self.sessions
     }
@@ -814,14 +822,21 @@ impl Scene {
         self.usage
     }
     pub fn task_anchor(&self) -> usize {
-        let text =
-            self.details.iter().find(|d| Some(d.id.as_str()) == self.selected_id()).map_or("", |d| d.task.as_str());
-        crate::text::layout(text, TASK_LINE_LEN).get(self.task_page * 2).map_or(0, |l| l.offset)
+        self.selected
+            .as_ref()
+            .and_then(|id| self.pages.get(id))
+            .and_then(|pages| pages.offsets.get(self.task_page * 2))
+            .copied()
+            .unwrap_or(0)
     }
     pub fn set_task_anchor(&mut self, anchor: usize) {
-        let text =
-            self.details.iter().find(|d| Some(d.id.as_str()) == self.selected_id()).map_or("", |d| d.task.as_str());
-        self.task_page = crate::text::index(&crate::text::layout(text, TASK_LINE_LEN), anchor) / 2;
+        self.task_page = self.selected.as_ref().and_then(|id| self.pages.get(id)).map_or(0, |pages| {
+            let offsets = &pages.offsets;
+            let i = offsets.partition_point(|&offset| offset <= anchor).saturating_sub(1);
+            // Escaping one source character can span several lines with the
+            // same byte offset. Preserve the first matching line's page.
+            offsets.partition_point(|&offset| offset < offsets[i]) / 2
+        });
     }
     pub fn visible_patron_at(&self, x: i32, y: i32) -> Option<&str> {
         if self.review.is_some() {
@@ -882,13 +897,18 @@ impl Scene {
     }
 
     pub fn next_attention_id(&self) -> Option<&str> {
-        let ids: Vec<_> = self.attention.keys().collect();
-        if ids.len() < 2 {
+        if self.attention.len() < 2 {
             return None;
         }
-        let current = self.attention_id();
-        let next = ids.iter().position(|id| Some(id.as_str()) == current).map_or(0, |i| (i + 1) % ids.len());
-        Some(ids[next].as_str())
+        let mut ids = self.attention.keys();
+        if let Some(current) = self.attention_id() {
+            while let Some(id) = ids.next() {
+                if id == current {
+                    return ids.next().or_else(|| self.attention.keys().next()).map(String::as_str);
+                }
+            }
+        }
+        self.attention.keys().next().map(String::as_str)
     }
 
     fn attention_bright(&self) -> bool {
@@ -1096,7 +1116,10 @@ impl Scene {
     }
 
     fn selected_task_pages(&self) -> &[String] {
-        self.selected.as_ref().and_then(|id| self.pages.get(id)).map_or(&self.unavailable, Vec::as_slice)
+        self.selected
+            .as_ref()
+            .and_then(|id| self.pages.get(id))
+            .map_or(&self.unavailable, |pages| pages.text.as_slice())
     }
 
     pub fn scrollbar_hit(&self, x: i32, y: i32) -> bool {
@@ -1248,30 +1271,18 @@ impl Scene {
         self.usage = Some(usage);
     }
 
-    /// Seated agents waiting for the human, longest wait first.
-    fn waiting_list(&self) -> Vec<usize> {
-        let mut w: Vec<usize> = (0..self.agents.len())
-            .filter(|&i| self.agents[i].mode == Mode::Seated && self.agents[i].state == State::Wait)
-            .collect();
-        w.sort_by_key(|&i| self.agents[i].since);
-        w
-    }
-
     pub fn tick(&mut self, dt: u32) {
         self.t += dt as i64;
         let t = self.t;
-        let blocked: Vec<usize> = self
-            .agents
-            .iter()
-            .filter(|ag| ag.mode == Mode::Leaving)
-            .filter(|ag| {
-                let geo = seat_geom(ag.seat);
-                (ag.x - (geo.sx + 40) as f64).abs() < 30.0 && (ag.y - (geo.sy + 42) as f64).abs() < 30.0
-            })
-            .map(|ag| ag.seat)
-            .collect();
+        let mut blocked = [false; SEATS];
+        for ag in self.agents.iter().filter(|ag| ag.mode == Mode::Leaving).filter(|ag| {
+            let geo = seat_geom(ag.seat);
+            (ag.x - (geo.sx + 40) as f64).abs() < 30.0 && (ag.y - (geo.sy + 42) as f64).abs() < 30.0
+        }) {
+            blocked[ag.seat] = true;
+        }
         for a in &mut self.agents {
-            if self.external_seats.is_some() && a.mode == Mode::Arriving && a.path_i == 0 && blocked.contains(&a.seat) {
+            if self.external_seats.is_some() && a.mode == Mode::Arriving && a.path_i == 0 && blocked[a.seat] {
                 continue;
             }
             if a.mode == Mode::Seated {
@@ -1350,10 +1361,6 @@ impl Scene {
                 p.color = a::LAPTOP[a.codex as usize][3];
                 self.particles.push(p);
             }
-        }
-        let nw = self.waiting_list().len();
-        if self.focus >= nw {
-            self.focus = 0;
         }
     }
 
@@ -1963,6 +1970,28 @@ impl Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cached_task_anchors_match_escaped_layout_after_replacement_and_removal() {
+        let mut scene = Scene::new();
+        scene.set_sessions(&[patron("task")]);
+        scene.focus_patron("task".into());
+        for text in ["é中🚀\t\r\u{0}\\\n".repeat(40), "short".into(), String::new()] {
+            let lines = crate::text::layout(&text, TASK_LINE_LEN);
+            scene.set_details(vec![SessionDetail { id: "task".into(), task: text.clone(), target: None }]);
+            for anchor in 0..=text.len() + 5 {
+                let offset =
+                    lines.iter().filter(|line| line.offset <= anchor).map(|line| line.offset).max().unwrap_or(0);
+                let expected_page = lines.iter().position(|line| line.offset == offset).unwrap_or(0) / 2;
+                scene.set_task_anchor(anchor);
+                assert_eq!(scene.task_page, expected_page);
+                assert_eq!(scene.task_anchor(), lines[expected_page * 2].offset);
+            }
+        }
+        scene.set_details(vec![]);
+        scene.set_task_anchor(100);
+        assert_eq!(scene.task_anchor(), 0);
+        assert_eq!(scene.selected_task_pages(), ["TASK UNAVAILABLE"]);
+    }
     #[cfg(feature = "std")]
     #[test]
     fn creature_walk_frames_follow_motion_for_every_seat() {
@@ -2838,9 +2867,9 @@ mod tests {
         scene.select_next();
         scene.scroll_task_to(999);
         assert_eq!(scene.task_page, scene.selected_task_pages().len() - 1);
-        let allocation = scene.pages["a"].as_ptr();
+        let allocation = scene.pages["a"].text.as_ptr();
         scene.set_details(details);
-        assert_eq!(scene.pages["a"].as_ptr(), allocation);
+        assert_eq!(scene.pages["a"].text.as_ptr(), allocation);
         scene.scroll_task_to(-999);
         assert_eq!(scene.task_page, 0);
         scene.set_details(vec![SessionDetail { target: None, id: "a".into(), task: "Short".into() }]);
@@ -2983,7 +3012,7 @@ mod tests {
         assert_eq!(scene.selected.as_deref(), Some("9"));
         scene.select_next();
         assert_eq!(scene.selected.as_deref(), Some("0"));
-        let pages = task_pages(&format!("{} other words", "é".repeat(49)));
+        let pages = task_pages(&format!("{} other words", "é".repeat(49))).text;
         assert!(
             pages.iter().all(|p| p.lines().count() <= 2 && p.lines().all(|line| line.chars().count() <= TASK_LINE_LEN))
         );
@@ -3067,11 +3096,11 @@ mod tests {
             s.why = Why::Ask;
         }
         scene.set_sessions(&list);
-        let first = scene.waiting_list()[scene.focus];
+        let first = scene.attention_id().map(String::from);
         for _ in 0..600 {
             scene.tick(100);
         }
-        assert_eq!(scene.waiting_list()[scene.focus], first);
+        assert_eq!(scene.attention_id(), first.as_deref());
         scene.focus_patron("two".into());
         scene.tick(60000);
         assert_eq!(scene.selected_id(), Some("two"));
