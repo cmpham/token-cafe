@@ -1,6 +1,7 @@
 //! A local, non-decision protocol peer: the Mac owns the keypad independently
 //! of any BLE board. The shared client keeps navigation/OLED semantics identical.
 use super::state::Store;
+#[cfg(any(target_os = "macos", test))]
 use companion_core::{
     authority::{Dispatch, Peer},
     client::Client,
@@ -10,22 +11,29 @@ use companion_core::{
     sync,
     wire::{envelope::Payload, *},
 };
+#[cfg(any(target_os = "macos", test))]
+use std::io::Read;
+use std::sync::{Arc, Mutex};
+#[cfg(target_os = "macos")]
 use std::{
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Write},
     process::{Command, Stdio},
-    sync::{Arc, Mutex, mpsc},
+    sync::mpsc,
     time::{Duration, Instant},
 };
 
+#[cfg(any(target_os = "macos", test))]
 mod oled;
 mod weekly;
 pub use weekly::diagnose;
 
+#[cfg(any(target_os = "macos", test))]
 struct Local {
     client: Client,
     peer: Peer,
     previous: Option<Model>,
 }
+#[cfg(any(target_os = "macos", test))]
 impl Local {
     fn new(epoch: &[u8], now: u64) -> Result<Self> {
         let mut connection = vec![0; 16];
@@ -118,6 +126,7 @@ pub fn start(store: Arc<Mutex<Store>>, status: Arc<Mutex<String>>) {
     #[cfg(not(target_os = "macos"))]
     let _ = (store, status);
 }
+#[cfg(target_os = "macos")]
 fn run(
     shared: Arc<Mutex<Store>>,
     status: Arc<Mutex<String>>,

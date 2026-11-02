@@ -1,6 +1,6 @@
 # Token Café contributor guide
 
-Token Café shows live Claude Code and Codex sessions as patrons of a pixel-art café. Linux and macOS are supported; Windows process discovery is not implemented. The Mac is the authority for the optional Pipar Flake keypad and ESP32-S3 display.
+Token Café shows live Claude Code and Codex sessions as patrons of a pixel-art café. The desktop visualizer supports Linux X11/Wayland and macOS; keypad/OLED, native dictation and desktop-session focusing are macOS-only. Linux physical board/Bluetooth operation is unverified. Windows process discovery is not implemented. The Mac is the authority for the optional Pipar Flake keypad and ESP32-S3 display.
 
 ## Build and validate
 
@@ -93,3 +93,5 @@ Inspect generated PNGs and representative GIF frames before publishing. Keep rea
 For measured renderer/host changes, run `cargo run --release --locked --example ui_performance` with fictional fixtures and compare allocation counts before/after. The [2026-11-01 cleanup review](docs/qa/performance-cleanup-2026-11-01.md) records scope, retained compatibility paths, memory tradeoffs and simulator validation.
 
 The [2026-11-02 quota recovery](docs/qa/weekly-quota-recovery-2026-11-02.md) records expired-credential handling, Desktop Keychain authorization, native crypto/identity tests and the paired app/board reload.
+
+Keep macOS keypad runtime code behind platform cfg gates while compiling portable routing/OLED/identity tests on Linux. Linux prerequisites and validated scope are in [the Linux support report](docs/qa/linux-support-2026-11-02.md).
