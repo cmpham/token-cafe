@@ -20,7 +20,7 @@ They type while they work, nap while you're away, and raise a hand when they nee
 > Token Café is a fun project for personal use. Development is driven by AI, using Codex and Claude Code.
 
 > [!TIP]
-> **Linux and macOS supported.** Windows contributors are welcome; see [porting notes](#windows-porting-notes).
+> **Linux and macOS desktop visualizer supported.** Keypad/OLED integration, native dictation and session focusing are macOS-only. Windows contributors are welcome; see [porting notes](#windows-porting-notes).
 
 ## What you're looking at
 
@@ -59,7 +59,20 @@ These screenshots and GIFs are rendered from the current scene with fictional se
 
 ## Getting started
 
-You need [Rust](https://rustup.rs) 1.88 or newer and a C compiler (SQLite is built in), on macOS or a Linux Wayland/X11 desktop. On macOS, install Apple’s Command Line Tools (`xcode-select --install`) for the C compiler. From a clone of this repository:
+You need [Rust](https://rustup.rs) 1.88 or newer and a C compiler (SQLite is built in), on macOS or a Linux Wayland/X11 desktop. The default build also includes Bluetooth support and needs the Linux native dependencies below. On macOS, install Apple’s Command Line Tools (`xcode-select --install`) for the C compiler.
+
+On Debian/Ubuntu, install the native build and window dependencies:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y build-essential pkg-config libdbus-1-dev \
+  libwayland-dev libxkbcommon-dev libx11-dev libxrandr-dev libxi-dev \
+  libxcursor1 libxkbcommon-x11-0
+```
+
+On other distributions, install the equivalent packages. A running X11 or Wayland desktop is required for the window. The default build links D-Bus for the optional board connection; physical Linux board/Bluetooth operation has not been verified. The Pipar keypad and its automatic OLED updates are macOS-only. You can build the desktop without companion support using `cargo build --release --no-default-features`.
+
+From a clone of this repository:
 
 ```sh
 cargo build --release
@@ -259,8 +272,11 @@ The macOS title bar hides while the café is unfocused and returns when you clic
 | Double-click to open a desktop session | Yes, with a known desktop session | Regular selection only | Regular selection only |
 | Single-click Claude CLI to reveal its iTerm pane | Yes, with a known iTerm session ID | Regular selection only | Regular selection only |
 | Patron app-bundle icon | Yes | macOS bundle asset only | macOS bundle asset only |
+| Pipar keypad USB/Bluetooth and automatic OLED updates | Yes | Not implemented | Not implemented |
+| Focused-app native dictation | Yes | Not implemented | Not implemented |
+| Optional ESP32 board Bluetooth connection | Verified on the provisioned board | Compiles; physical operation unverified | Compiles; physical operation unverified |
 
-Wayland does not expose the window-level API used for pinning. The title shows “Pin via compositor” and `T` does not claim to enable pinning there. Use the `token-cafe` app ID for compositor rules. macOS AppKit dependencies and native navigation code are compiled only on macOS.
+Wayland does not expose the window-level API used for pinning. The title shows “Pin via compositor” and `T` does not claim to enable pinning there. Use the `token-cafe` app ID for compositor rules. macOS AppKit dependencies and native navigation code are compiled only on macOS. Linux uses `/proc` for live CLI discovery. Linux ARM64 build/tests, synthetic provider discovery, X11 rendering/keyboard input and headless Wayland rendering were verified with Rust 1.88; this does not establish physical touch or Bluetooth hardware support. See the [Linux support verification](docs/qa/linux-support-2026-11-02.md).
 
 ## ESP32-S3 display prototype
 

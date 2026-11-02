@@ -83,7 +83,8 @@ impl SemanticMirror {
         std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut epoch)).expect("OS entropy");
         let shared = Arc::new(Mutex::new(Store::new(epoch)));
         let status = Arc::new(Mutex::new(vec!["starting v2".into()]));
-        let keypad_status = Arc::new(Mutex::new("connect USB".into()));
+        let keypad_status =
+            Arc::new(Mutex::new(if cfg!(target_os = "macos") { "connect USB" } else { "macOS only" }.into()));
         let mirror = Self { shared: shared.clone(), status: status.clone(), keypad_status: keypad_status.clone() };
         super::keypad::start(shared.clone(), keypad_status);
         if !connect_board {
@@ -521,6 +522,13 @@ fn next_model_or_blob<T>(model: &mut VecDeque<T>, blobs: &mut VecDeque<T>) -> Op
 #[cfg(test)]
 mod scheduling_tests {
     use super::*;
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn unsupported_keypad_status_does_not_request_usb_connection() {
+        let mirror = SemanticMirror::start_with_board(false);
+        assert_eq!(mirror.status(), "Keypad: macOS only — Board: optional");
+    }
 
     #[test]
     fn navigation_precedes_remaining_request_text_and_preserves_snapshot_order() {

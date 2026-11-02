@@ -3,10 +3,13 @@ use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Read, Write},
     process::{Command, Stdio},
-    sync::{Arc, Mutex, mpsc},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
+
+#[cfg(target_os = "macos")]
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Copy)]
 struct Window {
@@ -26,11 +29,13 @@ impl Window {
         (now < self.reset && (0..600).contains(&(now - self.fetched))).then_some(self.remaining)
     }
 }
+#[cfg(target_os = "macos")]
 #[derive(Default)]
 pub(super) struct Weekly {
     claude: [ClaudeUsage; 2],
     codex: Option<Window>,
 }
+#[cfg(target_os = "macos")]
 impl Weekly {
     pub(super) fn remaining(&self) -> [Option<u8>; 3] {
         let now = chrono::Utc::now().timestamp();
@@ -41,6 +46,7 @@ impl Weekly {
         separate_claude(&self.claude[0], &self.claude[1])
     }
 }
+#[cfg(target_os = "macos")]
 pub(super) fn start() -> Arc<Mutex<Weekly>> {
     let shared = Arc::new(Mutex::new(Weekly::default()));
     for slot in 0..2 {
@@ -260,9 +266,11 @@ fn claude_identity(value: &Value) -> Option<(String, String)> {
     let org = value["organization"]["uuid"].as_str()?.trim();
     (!account.is_empty() && !org.is_empty()).then(|| (account.into(), org.into()))
 }
+#[cfg(any(target_os = "macos", test))]
 fn separate_claude(cli: &ClaudeUsage, desktop: &ClaudeUsage) -> bool {
     desktop.identity.as_ref().is_some_and(|id| cli.identity.as_ref() != Some(id))
 }
+#[cfg(any(target_os = "macos", test))]
 fn claude_windows(cli: &ClaudeUsage, desktop: &ClaudeUsage) -> [Option<Window>; 2] {
     if separate_claude(cli, desktop) {
         [cli.window, desktop.window]
