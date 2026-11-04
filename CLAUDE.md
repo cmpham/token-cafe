@@ -104,3 +104,5 @@ Keep macOS keypad runtime code behind platform cfg gates while compiling portabl
 The [board patron detail review](docs/qa/board-patron-detail-2026-11-02.md) records 3× source filtering at unchanged native size, alpha-aware compression/compositing, direct native portraits, simulator timing and the paired deployment.
 
 The [shared framebuffer review](docs/qa/shared-framebuffer-2026-11-02.md) is the current rendering reference: native desktop/board parity, removed HD paths, allocation/size results, Linux/macOS tests and paired deployment.
+
+Controller UI changes must follow [the design system](docs/controller-design-system.md) and use `controller_design` tokens/components. Share layout rectangles between rendering and hit-testing; preserve Café styling and bottom-row keypad actions. Update the component reference with intentional visual changes. Controls use 13px text; preserve disabled hit states, measured text wrapping and global-count labeling from design-system v2.

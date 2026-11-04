@@ -5,15 +5,37 @@ const DATA: &[u8] = include_bytes!("../../../assets/fonts/controller-alpha.bin")
 const STRIDE: usize = 1 + 24 * 22;
 fn glyph(ch: char, k: i32) -> usize {
     let code = if ch.is_ascii() && (32..127).contains(&(ch as u32)) { ch as usize } else { b'?' as usize };
-    ((if k == 1 { 0 } else { 95 }) + code - 32) * STRIDE
+    ((match k {
+        1 => 0,
+        3 => 190,
+        _ => 95,
+    }) + code
+        - 32)
+        * STRIDE
+}
+pub(crate) fn advance(ch: char, k: i32) -> i32 {
+    i32::from(DATA[glyph(ch, k)])
+}
+pub fn width(text: &str, k: i32) -> i32 {
+    text.chars().map(|c| i32::from(DATA[glyph(c, k)])).sum()
 }
 pub fn fit(text: &str, width: i32, k: i32) -> String {
+    if width <= 0 {
+        return String::new();
+    }
     let mut out = String::new();
     let mut used = 0;
-    if text.chars().map(|c| i32::from(DATA[glyph(c, k)])).sum::<i32>() <= width {
+    if self::width(text, k) <= width {
         return text.into();
     }
-    let dots = 3 * i32::from(DATA[glyph('.', k)]);
+    let dot = i32::from(DATA[glyph('.', k)]);
+    let dots = 3 * dot;
+    if dots > width {
+        for _ in 0..width / dot {
+            out.push('.');
+        }
+        return out;
+    }
     for ch in text.chars() {
         let next = i32::from(DATA[glyph(ch, k)]);
         if used + next + dots > width {

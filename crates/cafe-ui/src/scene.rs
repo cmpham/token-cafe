@@ -1278,7 +1278,16 @@ impl Scene {
         self.usage = Some(usage);
     }
 
+    pub(crate) fn animation_ms(&self) -> u64 {
+        self.t.max(0) as u64
+    }
     pub fn tick(&mut self, dt: u32) {
+        if !self.controller.notice.is_empty() && !self.controller.notice_is_error() {
+            self.controller.notice_age = self.controller.notice_age.saturating_add(dt);
+            if self.controller.notice_age >= 5000 {
+                self.controller.notice.clear();
+            }
+        }
         if self.controller.details {
             self.controller.detail_age = self.controller.detail_age.saturating_add(dt);
             if self.controller.detail_age >= 30000 {

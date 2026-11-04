@@ -310,8 +310,9 @@ impl Client {
                 }
                 if self.controller_navigation == Some(r.action_id) && r.status != 2 {
                     self.controller_navigation = None;
-                    self.scene.controller.notice =
-                        if r.status == 1 { "OPEN REQUESTED" } else { "COULD NOT OPEN - RETRY" }.into();
+                    self.scene
+                        .controller
+                        .set_notice(if r.status == 1 { "OPEN REQUESTED" } else { "COULD NOT OPEN - RETRY" }.into());
                 }
                 if self.voice_action == Some(r.action_id) && r.status != 2 {
                     self.voice_action = None;
@@ -752,7 +753,8 @@ impl Client {
             return Target::None;
         }
         if self.scene.controller.enabled {
-            return Target::Controller(self.scene.controller_hit(x, y));
+            let hit = self.scene.controller_hit(x, y);
+            return if hit == cafe_ui::controller::Hit::None { Target::None } else { Target::Controller(hit) };
         }
         if let Some(r) = &self.scene.review {
             if y < 48 {
@@ -987,7 +989,7 @@ impl Client {
             if self.scene.controller_available(&id) {
                 self.controller_navigation = Some(self.next_action);
                 self.issue(Action { kind: 6, session_id: id, ..Default::default() }, now)?;
-                self.scene.controller.notice = "OPENING SESSION".into();
+                self.scene.controller.set_notice("OPENING SESSION".into());
                 self.keyboard_notice = Some(("OPEN REQUESTED", now + 5000));
             } else {
                 self.keyboard_notice = Some(("DETAILS ONLY", now + 5000));
@@ -1114,6 +1116,7 @@ impl Client {
                         return self.controller_select(id, matches!(command, 1 | 2), now);
                     }
                     self.keyboard_notice = Some(("NO DESKTOP TARGET", now + 5000));
+                    self.scene.controller.set_notice("NO DESKTOP TARGET".into());
                 }
                 3 => return self.controller_input(Hit::Details, now),
                 5 => return self.controller_input(Hit::Filter((v.controller_filter + 1) % 4), now),

@@ -43,31 +43,6 @@ impl Oled {
         remaining: [Option<u8>; 3],
         dual_claude: bool,
     ) -> [[u8; 16]; 4] {
-        if model.view.controller_mode {
-            let filter =
-                ["ALL", "CLAUDE", "CODEX", "WAIT"].get(model.view.controller_filter as usize).unwrap_or(&"ALL");
-            let header = format!("CTRL {}{}", filter, if model.view.controller_status_order { "*" } else { "" });
-            if self.last_input.is_some_and(|at| now.saturating_sub(at) < IDLE_MS)
-                && let Some(s) = model.sessions.get(&model.view.selected_session_id)
-            {
-                let label = match (s.status, s.waiting_reason) {
-                    (1, _) => "WORKING",
-                    (3, 1) => "APPROVAL NEEDED",
-                    (3, _) => "WAITING INPUT",
-                    (4, _) => "DISCONNECTED",
-                    _ => "IDLE",
-                };
-                return [row(&header), row(&s.title), row(s.branch.as_deref().unwrap_or("")), row(label)];
-            }
-            let count = |p| model.sessions.values().filter(|s| s.provider == p && matches!(s.status, 1 | 3)).count();
-            let pct = |p: Option<u8>| p.map_or_else(|| "--".into(), |p| format!("{p}%"));
-            return [
-                row(&header),
-                row(&format!("CLAUDE {} CODEX {}", count(1), count(2))),
-                row(&format!("{} / {}", pct(remaining[0]), pct(remaining[1]))),
-                row(&format!("CODEX {}", pct(remaining[2]))),
-            ];
-        }
         let current: BTreeSet<_> = model.sessions.values().filter_map(alert).collect();
         self.acknowledged.retain(|a| current.contains(a));
         if current != self.observed {
@@ -142,20 +117,34 @@ mod tests {
         m
     }
     #[test]
-    fn controller_mode_keeps_filter_and_dual_quotas_visible() {
-        let mut m = model();
-        m.view.controller_mode = true;
-        m.view.controller_filter = 2;
-        let mut o = Oled::default();
-        let rows = o.rows(&m, 100, [Some(29), Some(64), Some(42)], true);
-        assert_eq!(rows[0], row("CTRL CODEX"));
-        assert_eq!(rows[2], row("29% / 64%"));
-        assert_eq!(rows[3], row("CODEX 42%"));
-        o.input(&m, 200);
-        let nav = o.rows(&m, 201, [None; 3], true);
-        assert_eq!(nav[0], row("CTRL CODEX"));
-        let idle = o.rows(&m, 6000, [Some(29), Some(64), Some(42)], true);
-        assert_eq!(idle[2], row("29% / 64%"));
+    fn controller_uses_identical_cafe_idle_navigation_alert_and_quota_rows() {
+        for filter in 0..4 {
+            for sorted in [false, true] {
+                let cafe = model();
+                let mut control = cafe.clone();
+                control.view.controller_mode = true;
+                control.view.controller_filter = filter;
+                control.view.controller_status_order = sorted;
+                let (mut a, mut b) = (Oled::default(), Oled::default());
+                let remaining = [Some(29), Some(64), Some(42)];
+                let idle = a.rows(&cafe, 100, remaining, true);
+                assert_eq!(idle[0], row("@TC4I"));
+                assert_eq!(idle, b.rows(&control, 100, remaining, true));
+                a.input(&cafe, 200);
+                b.input(&control, 200);
+                let nav = a.rows(&cafe, 201, remaining, true);
+                assert_eq!(nav[0], row("@TC2N"));
+                assert_eq!(nav, b.rows(&control, 201, remaining, true));
+                assert_eq!(a.rows(&cafe, 6000, remaining, true), b.rows(&control, 6000, remaining, true));
+                let mut waiting = cafe.clone();
+                waiting.sessions.get_mut("a").unwrap().status = 3;
+                let mut control_waiting = waiting.clone();
+                control_waiting.view = control.view.clone();
+                let alert = a.rows(&waiting, 6001, remaining, true);
+                assert!(alert[0].starts_with(b"@TC2A"));
+                assert_eq!(alert, b.rows(&control_waiting, 6001, remaining, true));
+            }
+        }
     }
     #[test]
     fn idle_counts_navigation_and_timeout() {

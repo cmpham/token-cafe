@@ -1,5 +1,7 @@
 # Controller mode
 
+Visual implementation contract: [Controller design system v2](controller-design-system.md).
+
 Controller mode is a touch-first macro keyboard for supervising local Claude Code and Codex sessions. The existing café remains available. Both modes use the same 480×272 framebuffer on desktop and ESP32-S3.
 
 ## Screen
@@ -33,7 +35,7 @@ Assistant evidence is bounded and excludes private reasoning and tool results. I
 
 Top keys advance from the board cursor in filtered reading order, wrap, and skip details-only sessions. Knob traversal includes details-only sessions and changes only the cursor. Open always acts on the highlighted session. An empty list is inert. The bottom row remains independent of board selection/filter. Café retains its prior pinned-sidebar, theme and app-toggle mappings.
 
-The 128×32 OLED identifies CTRL (Controller) and the active filter even when idle. For five seconds after input it shows the selected title, branch and status. It then displays active counts and remaining weekly allowance, retaining both Claude account percentages. Café's existing OLED formats remain unchanged. The controller text format works with the existing generic four-row renderer; no keypad keymap or bond changes are required.
+The 128×32 OLED uses exactly the same display design in Café and Controller modes: existing provider icons, active counts, weekly allowances (including both Claude accounts), attention alerts, and the five-second session-name navigation overlay. There is no separate Controller OLED display or mode/filter/sort marker. Mode and filter remain visible on the main desktop/board screen. No keypad firmware, VIA keymap or bond changes are required.
 
 ## Dispatch and reconnects
 
@@ -58,11 +60,11 @@ Physical acceptance remains separate: confirm adjacent touch targets, long sessi
 
 Build outputs: `release/Token Café.app` and `firmware/semantic/build/token_cafe_semantic_board.bin`. The app and board were subsequently updated as recorded below. Physical touch/display acceptance remains separate from transfer verification. No keypad firmware or VIA keymap change is needed.
 
-Controller typography uses the bundled DejaVu Sans alpha atlas at 11px and 16px, shared by desktop and board. Regenerate it with `python3 tools/gen_controller_font.py` (Pillow required only for generation). Font notices are in `assets/fonts/LICENSE-DejaVu.txt`. The café has no Controller text or touch target; switch with M.
+Controller typography uses the bundled DejaVu Sans alpha atlas at 11px, 13px and 16px, shared by desktop and board. Regenerate it with `python3 tools/gen_controller_font.py` (Pillow required only for generation). Font notices are in `assets/fonts/LICENSE-DejaVu.txt`. The café has no Controller text or touch target; switch with M.
 
 ## Status ordering
 
-Tap **Stable order / Status order** in the Controller footer, or press **S** in the desktop Controller window. Status order groups sessions as **Needs you → New output → Working → Idle**, followed by disconnected sessions. Waiting takes precedence over unread; unread takes precedence over working. Ties retain deterministic session-ID order. Provider filters apply before ordering. The cursor follows its session ID through reordering and stays visible on its new page. Knob and top-key navigation follow this order. Mode/filter/sort replicate between desktop, board and keypad; the OLED appends `*` to the filter when status ordering is active. Bottom-row actions are unaffected.
+Tap **Stable order / Status order** in the Controller footer, or press **S** in the desktop Controller window. Status order groups sessions as **Needs you → New output → Working → Idle**, followed by disconnected sessions. Waiting takes precedence over unread; unread takes precedence over working. Ties retain deterministic session-ID order. Provider filters apply before ordering. The cursor follows its session ID through reordering and stays visible on its new page. Knob and top-key navigation follow this order. Mode/filter/sort replicate between desktop, board and keypad; the OLED retains the existing Café layout. Bottom-row actions are unaffected.
 
 If status changes move a tile during a board touch, the existing identity check cancels the gesture rather than opening the replacement tile. Status ordering is optional; stable order remains the default.
 

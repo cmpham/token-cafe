@@ -242,3 +242,15 @@ Cleanup validation: `tools/test_keypad.sh` runs 50 native transport checks, 18 n
 Removed CLI/APP captions and used Montserrat 12 for the three percentage values, with Claude CLI above Desktop. Counts retain the compact top row. All allowed percentage glyphs fit in 12-pixel rows; four-character values fit within each 60-pixel column. Font resets preserve navigation and legacy layouts. Firmware build, sanitized transport tests, 50 keypad checks and 18 desktop checks passed.
 
 Installed application-only firmware SHA-256 `f0293f3e02b1022b21581c98d9eb4e26339677118cce77e24b8d9effac7867a7` after recovery from serial bootloader timeouts. The final transfer used the full activation delay and reported `Device programmed.`; the keypad returned to its normal USB interface. Readback confirmed all 18 keys, four encoder bindings, version fields, and 1,024 macro bytes unchanged. Token Café was restarted at the stable release path. Artifacts and logs: `target/deploy-large-weekly/` (successful transfer: `flash-powercycle.log`). Physical OLED appearance remains user-verifiable.
+
+## Controller mode keymap
+
+The OLED keeps the same Café design in both modes, including provider icons, quotas, attention alerts and the temporary session-name overlay.
+
+| Position | Left | Middle | Right |
+| --- | --- | --- | --- |
+| Top | Previous filtered session + open | Next filtered session + open | Knob: rotate to browse; press to open |
+| Middle | Details / Back | Open highlighted session | Cycle All / Claude / Codex / Needs you |
+| Bottom, unchanged | Dictate in focused desktop session | Open Claude app | Open Codex app |
+
+The top keys follow the board cursor and active ordering, wrap, and skip sessions without desktop targets. Knob rotation only changes the cursor. Café retains the keymap documented above. The bottom row is independent of board selection/filter in both modes. No new OLED display mode or keypad firmware change is needed.

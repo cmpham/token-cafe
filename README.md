@@ -343,3 +343,5 @@ See the [implementation review](docs/keypad-architecture-review.md) for module o
 Press **M** to open a six-session touch grid. Tap once to open an identified desktop session; turn the keypad knob to browse, press to open, or use the top keys to switch immediately. Café mode and the bottom-row Dictate / Claude / Codex shortcuts remain available. See the [design and controls](docs/controller-mode.md).
 
 ![Controller mode, native 480×272 rendering](docs/controller.png)
+
+Controller UI foundations and reusable components: [design system](docs/controller-design-system.md).

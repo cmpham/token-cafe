@@ -5,6 +5,7 @@ extern crate alloc;
 pub mod assets;
 pub mod approval;
 pub mod controller;
+pub mod controller_design;
 mod controller_font;
 pub mod gfx;
 pub mod patrons;

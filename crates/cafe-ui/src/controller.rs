@@ -1,7 +1,8 @@
 //! Native 480x272 session controller shared by desktop and board.
+use crate::controller_design::{self as design, Rect, StatusIcon, Text, layout};
 use crate::{
     gfx::Gfx,
-    scene::{Kind, Scene, State, Why, shorten},
+    scene::{Kind, Scene, State},
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
@@ -14,6 +15,7 @@ pub struct Controller {
     pub enabled: bool,
     pub status_order: bool,
     pub notice: String,
+    pub notice_age: u32,
     pub outputs: BTreeMap<String, String>,
     pub unread: BTreeSet<String>,
     pub filter: u32,
@@ -21,6 +23,17 @@ pub struct Controller {
     pub detail_age: u32,
     pub available: BTreeMap<String, bool>,
     pub disconnected: Vec<String>,
+}
+impl Controller {
+    pub fn set_notice(&mut self, text: String) {
+        self.notice = text;
+        self.notice_age = 0;
+    }
+    pub fn notice_is_error(&self) -> bool {
+        ["COULD NOT", "NO DESKTOP", "DETAILS ONLY", "OFFLINE", "DESKTOP NAVIGATION"]
+            .iter()
+            .any(|prefix| self.notice.starts_with(prefix))
+    }
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum Hit {
@@ -103,48 +116,52 @@ impl Scene {
         None
     }
     pub fn controller_hit(&self, x: i32, y: i32) -> Hit {
-        if !(0..480).contains(&x) || !(0..272).contains(&y) {
+        if !Rect::new(0, 0, layout::WIDTH, layout::HEIGHT).contains(x, y) || !self.controller.enabled {
             return Hit::None;
         }
-        if !self.controller.enabled {
-            return Hit::None;
+        if layout::MODE.contains(x, y) {
+            return Hit::Mode;
         }
-        if y < 44 {
-            return if x < 88 { Hit::Mode } else { Hit::Filter(((x - 88) / 98).min(3) as u32) };
+        for i in 0..4 {
+            if layout::filter(i).contains(x, y) {
+                return Hit::Filter(i as u32);
+            }
         }
         if self.controller.details {
-            return if y >= 228 { Hit::Details } else { Hit::None };
-        }
-        if y >= 228 {
-            return if x < 56 {
-                Hit::Page(false)
-            } else if x < 112 {
-                Hit::Page(true)
-            } else if x >= 416 {
-                Hit::Details
-            } else if x >= 300 {
-                Hit::Sort
-            } else {
-                Hit::None
-            };
+            return if y >= layout::FOOTER_Y { Hit::Details } else { Hit::None };
         }
         let ids = self.controller_ids();
-        let page = self.selected_id().and_then(|id| ids.iter().position(|s| s == id)).unwrap_or(0) / 6;
-        let col = (x - 4) / 238;
-        let row = (y - 48) / 60;
-        if x < 4 || y < 48 || col > 1 || row > 2 || (x - 4) % 238 >= 234 || (y - 48) % 60 >= 56 {
-            return Hit::None;
+        let page = self.selected_id().and_then(|id| ids.iter().position(|s| s == id)).unwrap_or(0) / layout::PAGE_SIZE;
+        for (rect, hit, enabled) in [
+            (layout::PREV, Hit::Page(false), page > 0),
+            (layout::NEXT, Hit::Page(true), (page + 1) * layout::PAGE_SIZE < ids.len()),
+            (layout::ORDER, Hit::Sort, true),
+            (layout::DETAILS, Hit::Details, self.selected_id().is_some()),
+        ] {
+            if rect.contains(x, y) {
+                return if enabled { hit } else { Hit::None };
+            }
         }
-        ids.get(page * 6 + row as usize * 2 + col as usize).cloned().map_or(Hit::None, Hit::Session)
+        let ids = self.controller_ids();
+        let page = self.selected_id().and_then(|id| ids.iter().position(|s| s == id)).unwrap_or(0) / layout::PAGE_SIZE;
+        for i in 0..layout::PAGE_SIZE {
+            if layout::tile(i).contains(x, y) {
+                return ids.get(page * layout::PAGE_SIZE + i).cloned().map_or(Hit::None, Hit::Session);
+            }
+        }
+        Hit::None
     }
     pub fn controller_page(&mut self, forward: bool) {
         let ids = self.controller_ids();
         if ids.is_empty() {
             return;
         }
-        let page = self.selected_id().and_then(|id| ids.iter().position(|s| s == id)).unwrap_or(0) / 6;
-        let target = if forward { (page + 1).min((ids.len() - 1) / 6) } else { page.saturating_sub(1) };
-        self.focus_patron(ids[target * 6].clone());
+        let page = self.selected_id().and_then(|id| ids.iter().position(|s| s == id)).unwrap_or(0) / layout::PAGE_SIZE;
+        let target = if forward { (page + 1).min((ids.len() - 1) / layout::PAGE_SIZE) } else { page.saturating_sub(1) };
+        if target == page {
+            return;
+        }
+        self.focus_patron(ids[target * layout::PAGE_SIZE].clone());
     }
     pub fn controller_click(&mut self, x: i32, y: i32) -> Option<String> {
         self.controller.notice.clear();
@@ -168,8 +185,9 @@ impl Scene {
                 self.controller.unread.remove(&id);
                 self.focus_patron(id.clone());
                 let url = self.session_target(&id).and_then(|t| t.url());
-                self.controller.notice =
-                    if url.is_some() { "OPEN REQUESTED" } else { "DETAILS ONLY - NO DESKTOP TARGET" }.into();
+                self.controller.set_notice(
+                    if url.is_some() { "OPEN REQUESTED" } else { "DETAILS ONLY - NO DESKTOP TARGET" }.into(),
+                );
                 return url;
             }
             Hit::None => (),
@@ -178,119 +196,115 @@ impl Scene {
     }
     pub fn draw_controller(&self, fb: &mut [u32]) {
         let mut g = Gfx::new(fb);
-        let bg = 0x171c27;
-        let panel = 0x252d3d;
-        let fg = 0xf3f3ed;
-        let muted = 0xb9c5d5;
-        let gold = 0xffd462;
-        g.rect(0, 0, 480, 272, bg);
-        g.ui_text("CAFE", 12, 14, gold, 2, None);
-        for (i, label) in ["ALL", "CLAUDE", "CODEX", "NEEDS YOU"].iter().enumerate() {
-            let x = 88 + i as i32 * 98;
-            g.ui_text(label, x + 4, 17, fg, 1, None);
-            if self.controller.filter == i as u32 {
-                g.rect(x, 41, 98, 3, gold);
-            }
+        let bg = design::color::CANVAS;
+        let fg = design::color::TEXT;
+        let muted = design::color::SECONDARY;
+        let gold = design::color::FOCUS;
+        Rect::new(0, 0, layout::WIDTH, layout::HEIGHT).paint(&mut g, bg);
+        design::button(&mut g, layout::MODE, "< Cafe", true, false);
+        for (i, label) in ["All", "Claude", "Codex", "Needs you"].iter().enumerate() {
+            design::tab(&mut g, layout::filter(i), label, self.controller.filter == i as u32);
         }
         let ids = self.controller_ids();
         let pos = self.selected_id().and_then(|id| ids.iter().position(|s| s == id)).unwrap_or(0);
-        let page = pos / 6;
-        for (i, id) in ids.iter().skip(page * 6).take(6).enumerate() {
-            let x = 4 + (i % 2) as i32 * 238;
-            let y = 48 + (i / 2) as i32 * 60;
-            g.rect(x, y, 234, 56, panel);
-            if self.selected_id() == Some(id.as_str()) {
-                g.rect(x, y, 234, 2, gold);
-                g.rect(x, y + 54, 234, 2, gold);
-                g.rect(x, y, 2, 56, gold);
-                g.rect(x + 232, y, 2, 56, gold);
-            }
+        let page = pos / layout::PAGE_SIZE;
+        for (i, id) in ids.iter().skip(page * layout::PAGE_SIZE).take(layout::PAGE_SIZE).enumerate() {
+            let bounds = layout::tile(i);
+            let (x, y) = (bounds.x, bounds.y);
+            design::tile(&mut g, bounds, self.selected_id() == Some(id.as_str()));
             let Some(s) = self.sessions().iter().find(|s| s.id == *id) else { continue };
-            g.ui_text(&crate::controller_font::fit(&s.name, 202, 2), x + 7, y + 7, fg, 2, None);
+            design::label(&mut g, &s.name, Rect::new(x + 7, y + 7, layout::TITLE_WIDTH, 22), Text::Title, fg);
             let app = if s.kind == Kind::Claude { "CLAUDE" } else { "CODEX" };
-            g.ui_text(
-                &shorten(&format!("{} / {}", app, s.branch.as_deref().unwrap_or("SESSION")), 34),
-                x + 7,
-                y + 30,
+            design::label(
+                &mut g,
+                &format!("{} / {}", app, s.branch.as_deref().unwrap_or("SESSION")),
+                Rect::new(x + 7, y + 30, layout::TITLE_WIDTH, 22),
+                Text::Caption,
                 muted,
-                1,
-                None,
             );
             if !self.controller_available(id) {
-                g.ui_text("DETAILS ONLY", x + 7, y + 43, muted, 1, None);
+                design::label(
+                    &mut g,
+                    "DETAILS ONLY",
+                    Rect::new(x + 7, y + 43, layout::TITLE_WIDTH, 22),
+                    Text::Caption,
+                    muted,
+                );
             }
-            let ix = x + 216;
-            let iy = y + 19;
-            if self.controller.disconnected.contains(id) {
-                g.ui_text("X", ix, iy, muted, 2, None);
-            } else {
-                match s.state {
-                    State::Work => {
-                        for (dx, dy) in [(0, 0), (4, -2), (8, 0), (10, 4), (8, 8), (4, 10), (0, 8), (-2, 4)] {
-                            g.rect(ix + dx, iy + dy, 2, 2, muted);
-                        }
-                    }
-                    State::Wait => {
-                        g.ui_text(if s.why == Why::Perm { "!" } else { "?" }, ix, iy, gold, 2, None);
-                    }
-                    State::Idle => {
-                        if self.controller.unread.contains(id) {
-                            for dy in -3..=3 {
-                                for dx in -3..=3 {
-                                    if dx * dx + dy * dy <= 9 {
-                                        g.px(ix + 5 + dx, iy + 5 + dy, 0x58a6ff);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            StatusIcon::resolve(
+                s.state,
+                s.why,
+                self.controller.unread.contains(id),
+                self.controller.disconnected.iter().any(|offline| offline == id),
+            )
+            .draw_at(&mut g, x + 216, y + 19, self.animation_ms());
         }
         if ids.is_empty() {
-            g.ui_text("NO MATCHING SESSIONS", 40, 120, muted, 2, None);
+            design::label(
+                &mut g,
+                "NO MATCHING SESSIONS",
+                Rect::new(40, 120, layout::WIDTH - (40), 22),
+                Text::Title,
+                muted,
+            );
         }
-        g.ui_text("PREV", 4, 239, fg, 1, None);
-        g.ui_text("PAGE", 4, 252, fg, 1, None);
-        g.ui_text("NEXT", 60, 239, fg, 1, None);
-        g.ui_text("PAGE", 60, 252, fg, 1, None);
+        design::page_button(&mut g, layout::PREV, false, page > 0);
+        design::page_button(&mut g, layout::NEXT, true, (page + 1) * layout::PAGE_SIZE < ids.len());
         let waits = self.sessions().iter().filter(|s| s.state == State::Wait).count();
         let works = self.sessions().iter().filter(|s| s.state == State::Work).count();
-        g.ui_text(&format!("{} need you / {} working", waits, works), 120, 234, fg, 1, None);
-        g.ui_text(&format!("Page {}/{}", page + 1, ids.len().div_ceil(6).max(1)), 120, 251, muted, 1, None);
-        g.rect(300, 228, 116, 44, panel);
-        g.ui_text(if self.controller.status_order { "Status order" } else { "Stable order" }, 306, 241, gold, 1, None);
-        g.ui_text("DETAILS", 420, 244, fg, 1, None);
+        design::label(
+            &mut g,
+            &format!("All: {} need you / {} working", waits, works),
+            Rect::new(120, 234, layout::SUMMARY.w - 12, 22),
+            Text::Caption,
+            fg,
+        );
+        design::label(
+            &mut g,
+            &format!("Page {}/{}", page + 1, ids.len().div_ceil(layout::PAGE_SIZE).max(1)),
+            Rect::new(120, 251, layout::NOTICE_WIDTH, 22),
+            Text::Caption,
+            muted,
+        );
+        design::option(
+            &mut g,
+            layout::ORDER,
+            if self.controller.status_order { "Status order" } else { "Stable order" },
+        );
+        design::button(&mut g, layout::DETAILS, "Details", self.selected_id().is_some(), false);
         if !self.controller.notice.is_empty() {
-            g.rect(116, 247, 180, 25, bg);
-            g.ui_text(&crate::controller_font::fit(&self.controller.notice, 174, 1), 120, 251, gold, 1, None);
+            design::notice(&mut g, &self.controller.notice);
         }
         if self.controller.details {
-            g.rect(0, 44, 480, 228, bg);
+            layout::DETAIL_BODY.paint(&mut g, bg);
             if let Some(id) = self.selected_id() {
                 if let Some(s) = self.sessions().iter().find(|s| s.id == id) {
-                    g.ui_text(&crate::controller_font::fit(&s.name, 450, 2), 12, 56, fg, 2, None);
-                    g.ui_text(
-                        match (s.state, s.why) {
-                            (State::Work, _) => "WORKING",
-                            (State::Wait, Why::Perm) => "WAITING FOR APPROVAL",
-                            (State::Wait, _) => "WAITING FOR INPUT",
-                            _ => "IDLE",
-                        },
-                        12,
-                        82,
+                    design::label(&mut g, &s.name, Rect::new(12, 56, 450, 22), Text::Title, fg);
+                    design::label(
+                        &mut g,
+                        StatusIcon::resolve(
+                            s.state,
+                            s.why,
+                            self.controller.unread.contains(id),
+                            self.controller.disconnected.iter().any(|offline| offline == id),
+                        )
+                        .label(),
+                        Rect::new(12, 82, layout::WIDTH - (12), 22),
+                        Text::Control,
                         gold,
-                        1,
-                        None,
                     );
                 }
                 if let Some(d) = self.details().iter().find(|d| d.id == id) {
-                    for (i, line) in crate::text::layout_prefix(&d.task, 70, 8).iter().enumerate() {
-                        g.ui_text(&line.text, 12, 104 + i as i32 * 12, fg, 1, None);
+                    let wrapped = design::wrap(&d.task, 450, Text::Control, 7);
+                    for (i, line) in wrapped.lines.iter().enumerate() {
+                        design::label(&mut g, line, Rect::new(12, 104 + i as i32 * 16, 450, 22), Text::Control, fg);
+                    }
+                    if wrapped.truncated {
+                        design::label(&mut g, "More in desktop app", Rect::new(280, 82, 188, 22), Text::Caption, muted);
                     }
                 }
             }
-            g.ui_text("BACK", 12, 242, fg, 2, None);
+            design::button(&mut g, Rect::new(0, layout::FOOTER_Y, 480, 44), "Back to sessions", true, false);
         }
     }
 }
@@ -298,7 +312,7 @@ impl Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{ForcedPose, Session, SessionDetail, SessionTarget};
+    use crate::scene::{ForcedPose, Session, SessionDetail, SessionTarget, Why};
     fn scene() -> Scene {
         let mut s = Scene::new();
         let rows = (0..8)
@@ -490,5 +504,34 @@ mod tests {
         s.set_sessions(&rows);
         assert_ne!(before, s.controller_hit(10, 55));
         // Client touch release requires the exact same Hit; such a gesture cancels.
+    }
+    #[test]
+    fn disabled_page_and_details_controls_are_inert() {
+        let mut s = scene();
+        s.focus_patron("s3".into());
+        assert_eq!(s.controller_hit(20, 245), Hit::None);
+        s.controller_page(false);
+        assert_eq!(s.selected_id(), Some("s3"));
+        s.controller_page(true);
+        s.focus_patron("s7".into());
+        assert_eq!(s.controller_hit(75, 245), Hit::None);
+        s.controller_page(true);
+        assert_eq!(s.selected_id(), Some("s7"));
+        s.clear_selection();
+        assert_eq!(s.controller_hit(450, 245), Hit::None);
+    }
+    #[test]
+    fn requested_notices_expire_but_failures_wait_for_navigation() {
+        let mut s = scene();
+        s.controller.set_notice("OPEN REQUESTED".into());
+        s.tick(4999);
+        assert!(!s.controller.notice.is_empty());
+        s.tick(1);
+        assert!(s.controller.notice.is_empty());
+        s.controller.set_notice("COULD NOT OPEN - RETRY".into());
+        s.tick(60000);
+        assert!(!s.controller.notice.is_empty());
+        s.controller_click(320, 245);
+        assert!(s.controller.notice.is_empty());
     }
 }

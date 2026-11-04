@@ -267,7 +267,30 @@ fn main() {
         if let Some(s) = cafe.sessions().iter().find(|s| s.state == State::Idle) {
             cafe.controller.unread.insert(s.id.clone());
         }
-        png("docs/controller.png", &rgb(&cafe, late, 1), 1);
+        if std::env::args().any(|a| a == "--controller-animation") {
+            // One stable palette prevents frame-local quantization from making
+            // antialiased labels shimmer. The runtime framebuffer is unchanged.
+            let mut frames = Vec::new();
+            for _ in 0..8 {
+                let mut pixels = rgb(&cafe, late, 1);
+                for channel in &mut pixels {
+                    *channel = (*channel >> 4) * 17;
+                }
+                frames.push(pixels);
+                cafe.tick(125);
+            }
+            gif("docs/controller-loading.gif", &frames, 1, 13);
+            return;
+        }
+        if std::env::args().any(|a| a == "--controller-details") {
+            cafe.controller.details = true;
+            if let Some(id) = cafe.selected_id().map(str::to_owned) {
+                cafe.set_details(vec![token_cafe::scene::SessionDetail{unread:None,output:None,target:None,id,task:"Controller details preview. Read the full request in the desktop app.\n\nWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW\nLong output remains bounded and explicitly indicates continuation. ".repeat(6)}]);
+            }
+            png("docs/controller-details.png", &rgb(&cafe, late, 1), 1);
+        } else {
+            png("docs/controller.png", &rgb(&cafe, late, 1), 1);
+        }
         return;
     }
     png("docs/cafe.png", &rgb(&cafe, late, 3), 3);

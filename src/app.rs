@@ -409,12 +409,12 @@ impl App {
                 if let Some(url) = self.scene.controller_click(x, y) {
                     #[cfg(target_os = "macos")]
                     if !std::process::Command::new("/usr/bin/open").arg(url).status().is_ok_and(|s| s.success()) {
-                        self.scene.controller.notice = "COULD NOT OPEN - RETRY".into();
+                        self.scene.controller.set_notice("COULD NOT OPEN - RETRY".into());
                     }
                     #[cfg(not(target_os = "macos"))]
                     {
                         let _ = url;
-                        self.scene.controller.notice = "DESKTOP NAVIGATION REQUIRES MACOS".into();
+                        self.scene.controller.set_notice("DESKTOP NAVIGATION REQUIRES MACOS".into());
                     }
                 }
                 return;
