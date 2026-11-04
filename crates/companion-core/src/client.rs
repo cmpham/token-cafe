@@ -35,6 +35,25 @@ pub fn render_desktop_hint(frame: &mut [u32]) {
         g.text(text, (480 - text_width(text, scale)) / 2, y, color, scale, None);
     }
 }
+/// Keep the last synchronized frame through a brief reconnect, including the
+/// new client's authentication/snapshot phase. This owns display policy only;
+/// disconnected clients still reject input and approval actions immediately.
+#[derive(Default)]
+pub struct ReconnectDisplay {
+    last_ready: Option<u64>,
+}
+impl ReconnectDisplay {
+    pub fn render(&mut self, client: Option<&mut Client>, frame: &mut [u32], now: u64) {
+        if let Some(client) = client.filter(|c| c.connected && c.replica.ready) {
+            client.render(frame, now);
+            self.last_ready = Some(now);
+        } else if self.last_ready.is_none_or(|at| now.saturating_sub(at) >= 15_000) {
+            render_desktop_hint(frame);
+            self.last_ready = None;
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Receipt {
     pub authority: Vec<u8>,

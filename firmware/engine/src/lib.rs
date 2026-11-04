@@ -3,7 +3,7 @@
 extern crate alloc;
 use alloc::{boxed::Box, string::String, vec, vec::Vec};
 use companion_core::{
-    client::{Client, Receipt, render_desktop_hint},
+    client::{Client, Receipt, ReconnectDisplay},
     crypto::{self, Keys},
     transport::Transport,
 };
@@ -41,6 +41,7 @@ pub struct Engine {
     link: Option<Transport>,
     frame: Vec<u32>,
     receipts: Vec<Receipt>,
+    display: ReconnectDisplay,
 }
 impl Engine {
     fn fail(&mut self) {
@@ -93,6 +94,7 @@ pub unsafe extern "C" fn cafe_engine_new(
         link: None,
         frame: vec![0; 480 * 272],
         receipts: vec![],
+        display: ReconnectDisplay::default(),
     }))
 }
 #[unsafe(no_mangle)]
@@ -268,11 +270,7 @@ pub unsafe extern "C" fn cafe_engine_approval_button(e: *mut Engine, pressed: bo
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cafe_engine_draw(e: *mut Engine, now: u64) -> bool {
     let e = unsafe { &mut *e };
-    if let Some(c) = &mut e.client {
-        c.render(&mut e.frame, now);
-    } else {
-        render_desktop_hint(&mut e.frame);
-    }
+    e.display.render(e.client.as_mut(), &mut e.frame, now);
     true
 }
 #[unsafe(no_mangle)]

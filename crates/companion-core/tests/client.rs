@@ -1507,3 +1507,35 @@ fn knob_cycles_only_visible_seats_and_recovers_from_outside_selection() {
         }
     }
 }
+
+#[test]
+fn reconnect_retains_pixels_until_ready_or_grace_expires() {
+    use companion_core::client::{ReconnectDisplay, render_desktop_hint};
+    let mut display = ReconnectDisplay::default();
+    let mut frame = vec![0; 480 * 272];
+    let mut hint = frame.clone();
+    render_desktop_hint(&mut hint);
+    display.render(None, &mut frame, 0);
+    assert_eq!(frame, hint, "cold boot still explains how to connect");
+    let (mut client, _, _) = setup();
+    display.render(Some(&mut client), &mut frame, 1000);
+    let cafe = frame.clone();
+    assert_ne!(cafe, hint);
+    client.disconnect();
+    display.render(Some(&mut client), &mut frame, 1001);
+    assert_eq!(frame, cafe);
+    assert!(!client.armed(1001));
+    tap(&mut client, 250, 240, 1002);
+    assert!(actions(&mut client).is_empty(), "retained pixels cannot approve offline");
+    let mut reconnecting = Client::new("qa".into(), vec![2; 16], true, 1003);
+    display.render(Some(&mut reconnecting), &mut frame, 15_999);
+    assert_eq!(frame, cafe, "a new unsynchronized client must not flash the hint");
+    display.render(None, &mut frame, 16_000);
+    assert_eq!(frame, hint, "a prolonged outage shows connection instructions");
+    let (mut resumed, _, _) = setup();
+    display.render(Some(&mut resumed), &mut frame, 16_001);
+    assert_ne!(frame, hint, "a fresh snapshot resumes rendering immediately");
+    let refreshed = frame.clone();
+    display.render(None, &mut frame, 16_002);
+    assert_eq!(frame, refreshed, "a successful sync starts a new grace period");
+}
