@@ -59,7 +59,13 @@ impl SessionInfo {
         } else {
             task
         };
-        crate::scene::SessionDetail { target: None, id: id.to_owned(), task }
+        crate::scene::SessionDetail {
+            unread: None,
+            output: v["progress"]["text"].as_str().map(|text| format!("{}:{}", v["progress"]["timestamp"], text)),
+            target: None,
+            id: id.to_owned(),
+            task,
+        }
     }
 
     pub fn json(&self) -> &Value {
@@ -289,10 +295,16 @@ impl Transcript {
                 (Some("response_item"), Some("message")) if p["role"] == "user" => {
                     self.request(text_blocks(&p["content"]), "user_message", ts);
                 }
-                (Some("response_item"), Some("message")) if p["role"] == "assistant" && p["phase"] == "commentary" => {
+                (Some("response_item"), Some("message"))
+                    if p["role"] == "assistant" && matches!(p["phase"].as_str(), Some("commentary" | "final")) =>
+                {
                     let text = text_blocks(&p["content"]);
                     if !text.is_empty() {
-                        self.progress = Some(evidence(text, "assistant_commentary", ts));
+                        self.progress = Some(evidence(
+                            text,
+                            if p["phase"] == "final" { "assistant_final" } else { "assistant_commentary" },
+                            ts,
+                        ));
                     }
                     self.prompt_pending = false;
                 }

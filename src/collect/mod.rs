@@ -3,6 +3,7 @@
 
 mod claude;
 mod codex;
+mod codex_unread;
 mod info;
 pub use info::SessionInfo;
 #[cfg(target_os = "macos")]
@@ -73,12 +74,16 @@ impl Collector {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
         let mut found = self.found();
         let info = self.info.collect(&mut found);
+        let unread = codex_unread::load(&crate::usage::codex_dir());
         let details = found
             .iter()
             .zip(info.iter())
             .map(|(f, i)| {
                 let mut detail = i.display(&f.id);
                 detail.target = f.target.clone();
+                if f.kind == Kind::Codex {
+                    detail.unread = unread.as_ref().map(|ids| ids.contains(&f.session_id));
+                }
                 detail
             })
             .collect();

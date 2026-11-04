@@ -129,6 +129,7 @@ enum WaitingReason {
 }
 message BlobRef { bytes sha256 = 1; uint32 byte_length = 2; }
 message Session {
+  bool unread_output = 17;
   string id = 1;
   Provider provider = 2;
   string title = 3;
@@ -179,6 +180,11 @@ enum ReviewKind {
   REVIEW_UNLINKED_PERMISSION = 3;
 }
 message View {
+  bool controller_status_order = 16;
+  bool controller_details = 15;
+  bool controller_mode = 13;
+  uint32 controller_filter = 14; // 0 all, 1 Claude, 2 Codex, 3 needs input
+
   string selected_session_id = 1; // empty clears explicit selection
   Page page = 2;
   uint32 task_anchor = 3;
@@ -223,6 +229,8 @@ enum ActionKind {
   ACTION_CYCLE_PATRONS = 10;
   ACTION_TOGGLE_DESKTOP_APP = 11;
   ACTION_START_VOICE = 12;
+  ACTION_SET_CONTROLLER = 13; // anchor = status_order * 16 + details * 8 + enabled * 4 + filter
+
 }
 message Action {
   uint64 id = 1;

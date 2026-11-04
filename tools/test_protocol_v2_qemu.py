@@ -148,8 +148,8 @@ def extra(d,qmp,p):
  # Animations continue with heartbeat traffic only, without new UI state.
  h.present('animation-a',qmp,p);h.advance(333);h.present('animation-b',qmp,p)
  assert (OUT/'animation-a.ppm').read_bytes()!=(OUT/'animation-b.ppm').read_bytes()
- # Ten minutes of no input (host heartbeat does not reset inactivity).
- for _ in range(601):
+ # Sixty minutes of no input (host heartbeat does not reset inactivity).
+ for _ in range(3601):
   h.send('heartbeat',pb.Heartbeat());h.time+=1000;d.request(5,struct.pack('<Q',h.time));h.poll()
  assert struct.unpack('<I',d.request(8))[0]&4
  before=len(h.actions);h.tap(60,90);assert len(h.actions)==before
@@ -167,7 +167,7 @@ def extra(d,qmp,p):
  for f in h.fragments(e):d.request(3,f,ok=False)
  assert not struct.unpack('<I',d.request(8))[0]&1
  d.request(9,struct.pack('<H',64),ok=False)
- print('PASS additional QEMU: eight-seat identity, double-tap routing, autonomous animation, 10min sleep/wake, reconnect, 64 sessions, hash failure, MTU rejection',flush=True)
+ print('PASS additional QEMU: eight-seat identity, double-tap routing, autonomous animation, 60min sleep/wake, reconnect, 64 sessions, hash failure, MTU rejection',flush=True)
  return {'additional_flow':'PASS'}
 
 def test(d,qmp,p,cap):

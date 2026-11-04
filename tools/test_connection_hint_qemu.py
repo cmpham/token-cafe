@@ -24,7 +24,7 @@ def run(device, qmp, process):
     assert capture('04-synced') != boot, 'valid snapshot must replace the instruction'
 
     # Heartbeats keep the connection alive while the existing idle timer sleeps.
-    while host.time < 601_000:
+    while host.time < 3_601_000:
         host.send('heartbeat', pb.Heartbeat())
         host.time += 1000
         device.request(5, struct.pack('<Q', host.time))

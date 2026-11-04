@@ -206,7 +206,13 @@ fn main() {
                 ("01a11478", "Validate the training pipeline"),
             ]
             .into_iter()
-            .map(|(id, task)| token_cafe::scene::SessionDetail { id: id.into(), task: task.into(), target: None })
+            .map(|(id, task)| token_cafe::scene::SessionDetail {
+                unread: None,
+                output: None,
+                id: id.into(),
+                task: task.into(),
+                target: None,
+            })
             .collect(),
         );
         cafe.select_next();
@@ -253,6 +259,15 @@ fn main() {
                 run(&mut cafe, 100);
             }
         }
+        return;
+    }
+    if std::env::args().any(|a| a == "--controller") {
+        cafe.controller_toggle();
+        cafe.controller.available = cafe.sessions().iter().map(|s| (s.id.clone(), true)).collect();
+        if let Some(s) = cafe.sessions().iter().find(|s| s.state == State::Idle) {
+            cafe.controller.unread.insert(s.id.clone());
+        }
+        png("docs/controller.png", &rgb(&cafe, late, 1), 1);
         return;
     }
     png("docs/cafe.png", &rgb(&cafe, late, 3), 3);

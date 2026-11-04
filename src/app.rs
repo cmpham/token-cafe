@@ -405,6 +405,20 @@ impl App {
             self.update_window_appearance(true);
         }
         {
+            if self.scene.controller.enabled {
+                if let Some(url) = self.scene.controller_click(x, y) {
+                    #[cfg(target_os = "macos")]
+                    if !std::process::Command::new("/usr/bin/open").arg(url).status().is_ok_and(|s| s.success()) {
+                        self.scene.controller.notice = "COULD NOT OPEN - RETRY".into();
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        let _ = url;
+                        self.scene.controller.notice = "DESKTOP NAVIGATION REQUIRES MACOS".into();
+                    }
+                }
+                return;
+            }
             if self.scene.usage_is_open() {
                 self.scene.click(x, y);
                 return;
@@ -653,6 +667,12 @@ impl App {
     fn key(&mut self, el: &ActiveEventLoop, key: Key) {
         let Some(s) = &self.shown else { return };
         match key.as_ref() {
+            Key::Character("s" | "S") if self.scene.controller.enabled => {
+                self.scene.controller.status_order = !self.scene.controller.status_order;
+            }
+            Key::Character("m" | "M") => {
+                self.scene.controller_toggle();
+            }
             Key::Character("p" | "P") => {
                 self.roster_index = ROSTERS
                     .iter()

@@ -127,7 +127,13 @@ fn demo_feed(tx: Sender<Update>) {
     let details = list
         .iter()
         .zip(tasks)
-        .map(|(s, task)| SessionDetail { target: None, id: s.id.clone(), task: task.into() })
+        .map(|(s, task)| SessionDetail {
+            unread: None,
+            output: None,
+            target: None,
+            id: s.id.clone(),
+            task: task.into(),
+        })
         .collect();
     let _ = tx.send(Update::Details(details));
     let _ = tx.send(Update::Usage(Usage { tokens: 1_624_000_000.0, usd: 693.70 }));

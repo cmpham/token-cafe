@@ -78,7 +78,7 @@ impl Local {
         self.client.receive(e, &raw, now)
     }
     fn keyboard(&mut self, command: u8, now: u64) -> Result<Option<&'static str>> {
-        if let Some(direction) = pinned_direction(command) {
+        if let Some(direction) = pinned_direction(command).filter(|_| !self.client.controller_mode()) {
             return Ok(Some(direction));
         }
         self.client.keyboard(command, now)?;
@@ -233,7 +233,32 @@ fn run(
                 }
             }
             let dispatches = local.drain(&mut store, now).map_err(protocol)?;
-            for (a, d) in dispatches {
+            let last_navigation = dispatches
+                .iter()
+                .rposition(|(_, d)| matches!(d, Dispatch::Desktop(_) | Dispatch::App { .. } | Dispatch::ToggleApp));
+            for (index, (a, d)) in dispatches.into_iter().enumerate() {
+                if store.authority.model.view.controller_mode
+                    && matches!(d, Dispatch::Desktop(_) | Dispatch::App { .. } | Dispatch::ToggleApp)
+                {
+                    if Some(index) != last_navigation {
+                        let r = store.authority.finish(&mut local.peer, &a, false);
+                        local.receive(Payload::ActionResult(r), now).map_err(protocol)?;
+                        continue;
+                    }
+                    // Dispatch in input order, without a detached opener that can
+                    // steal focus after a newer app shortcut.
+                    let ok = match d {
+                        Dispatch::Desktop(id) => store.targets.get(&id).is_some_and(|url| {
+                            Command::new("/usr/bin/open").arg(url).status().is_ok_and(|s| s.success())
+                        }),
+                        Dispatch::App { codex } => super::open_desktop_app(codex),
+                        Dispatch::ToggleApp => super::keypad_desktop(&["toggle"]),
+                        _ => false,
+                    };
+                    let r = store.authority.finish(&mut local.peer, &a, ok);
+                    local.receive(Payload::ActionResult(r), now).map_err(protocol)?;
+                    continue;
+                }
                 if pending.is_some() {
                     let r = store.authority.finish(&mut local.peer, &a, false);
                     local.receive(Payload::ActionResult(r), now).map_err(protocol)?;

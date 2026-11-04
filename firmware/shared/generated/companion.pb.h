@@ -117,7 +117,8 @@ typedef enum _token_cafe_v2_ActionKind {
     token_cafe_v2_ActionKind_ACTION_OPEN_CODEX_APP = 9,
     token_cafe_v2_ActionKind_ACTION_CYCLE_PATRONS = 10,
     token_cafe_v2_ActionKind_ACTION_TOGGLE_DESKTOP_APP = 11,
-    token_cafe_v2_ActionKind_ACTION_START_VOICE = 12
+    token_cafe_v2_ActionKind_ACTION_START_VOICE = 12,
+    token_cafe_v2_ActionKind_ACTION_SET_CONTROLLER = 13 /* anchor = status_order * 16 + details * 8 + enabled * 4 + filter */
 } token_cafe_v2_ActionKind;
 
 typedef enum _token_cafe_v2_ResultStatus {
@@ -188,7 +189,7 @@ typedef struct _token_cafe_v2_Heartbeat {
     bool has_local_time_ms;
     uint32_t local_time_ms; /* host -> board only; same semantics as HelloAck */
     bool has_keypad_activity;
-    uint64_t keypad_activity;
+    uint64_t keypad_activity; /* host-local input generation; wake without replaying an action */
 } token_cafe_v2_Heartbeat;
 
 typedef struct _token_cafe_v2_Resync {
@@ -250,6 +251,7 @@ typedef struct _token_cafe_v2_Session {
     char display_name[193];
     bool has_unlinked_review_blob;
     token_cafe_v2_BlobRef unlinked_review_blob;
+    bool unread_output;
 } token_cafe_v2_Session;
 
 typedef struct _token_cafe_v2_SnapshotPart {
@@ -275,6 +277,10 @@ typedef struct _token_cafe_v2_View {
     bool has_review_blob;
     token_cafe_v2_BlobRef review_blob;
     token_cafe_v2_View_patron_ids_t patron_ids; /* eight seat character IDs, 0=human, 1..16=creatures; empty=humans */
+    bool controller_mode;
+    uint32_t controller_filter; /* 0 all, 1 Claude, 2 Codex, 3 needs input */
+    bool controller_details;
+    bool controller_status_order;
 } token_cafe_v2_View;
 
 typedef struct _token_cafe_v2_Usage {
@@ -439,8 +445,8 @@ extern "C" {
 #define _token_cafe_v2_BlobUnavailableReason_ARRAYSIZE ((token_cafe_v2_BlobUnavailableReason)(token_cafe_v2_BlobUnavailableReason_BLOB_REASON_LIMIT+1))
 
 #define _token_cafe_v2_ActionKind_MIN token_cafe_v2_ActionKind_ACTION_UNSPECIFIED
-#define _token_cafe_v2_ActionKind_MAX token_cafe_v2_ActionKind_ACTION_START_VOICE
-#define _token_cafe_v2_ActionKind_ARRAYSIZE ((token_cafe_v2_ActionKind)(token_cafe_v2_ActionKind_ACTION_START_VOICE+1))
+#define _token_cafe_v2_ActionKind_MAX token_cafe_v2_ActionKind_ACTION_SET_CONTROLLER
+#define _token_cafe_v2_ActionKind_ARRAYSIZE ((token_cafe_v2_ActionKind)(token_cafe_v2_ActionKind_ACTION_SET_CONTROLLER+1))
 
 #define _token_cafe_v2_ResultStatus_MIN token_cafe_v2_ResultStatus_RESULT_UNSPECIFIED
 #define _token_cafe_v2_ResultStatus_MAX token_cafe_v2_ResultStatus_RESULT_UNKNOWN
@@ -506,9 +512,9 @@ extern "C" {
 #define token_cafe_v2_SnapshotCommit_init_default {0, 0, {0, {0}}}
 #define token_cafe_v2_Delta_init_default         {0, 0, 0, {token_cafe_v2_Session_init_default, token_cafe_v2_Session_init_default}, 0, {"", "", "", "", "", "", "", ""}, false, token_cafe_v2_View_init_default, false, token_cafe_v2_Usage_init_default, false, 0}
 #define token_cafe_v2_BlobRef_init_default       {{0, {0}}, 0}
-#define token_cafe_v2_Session_init_default       {"", _token_cafe_v2_Provider_MIN, "", _token_cafe_v2_SessionStatus_MIN, _token_cafe_v2_WaitingReason_MIN, 0, 0, 0, false, token_cafe_v2_BlobRef_init_default, 0, 0, false, token_cafe_v2_Request_init_default, false, "", false, 0, "", false, token_cafe_v2_BlobRef_init_default}
+#define token_cafe_v2_Session_init_default       {"", _token_cafe_v2_Provider_MIN, "", _token_cafe_v2_SessionStatus_MIN, _token_cafe_v2_WaitingReason_MIN, 0, 0, 0, false, token_cafe_v2_BlobRef_init_default, 0, 0, false, token_cafe_v2_Request_init_default, false, "", false, 0, "", false, token_cafe_v2_BlobRef_init_default, 0}
 #define token_cafe_v2_Request_init_default       {"", {0, {0}}, "", false, token_cafe_v2_BlobRef_init_default, _token_cafe_v2_RequestState_MIN, 0, {_token_cafe_v2_Decision_MIN, _token_cafe_v2_Decision_MIN, _token_cafe_v2_Decision_MIN, _token_cafe_v2_Decision_MIN}, "", _token_cafe_v2_Decision_MIN, ""}
-#define token_cafe_v2_View_init_default          {"", _token_cafe_v2_Page_MIN, 0, "", 0, 0, "", 0, {0, {0}}, _token_cafe_v2_ReviewKind_MIN, false, token_cafe_v2_BlobRef_init_default, {0, {0}}}
+#define token_cafe_v2_View_init_default          {"", _token_cafe_v2_Page_MIN, 0, "", 0, 0, "", 0, {0, {0}}, _token_cafe_v2_ReviewKind_MIN, false, token_cafe_v2_BlobRef_init_default, {0, {0}}, 0, 0, 0, 0}
 #define token_cafe_v2_Usage_init_default         {"", ""}
 #define token_cafe_v2_BlobGet_init_default       {{0, {0}}}
 #define token_cafe_v2_BlobCancel_init_default    {{0, {0}}}
@@ -528,9 +534,9 @@ extern "C" {
 #define token_cafe_v2_SnapshotCommit_init_zero   {0, 0, {0, {0}}}
 #define token_cafe_v2_Delta_init_zero            {0, 0, 0, {token_cafe_v2_Session_init_zero, token_cafe_v2_Session_init_zero}, 0, {"", "", "", "", "", "", "", ""}, false, token_cafe_v2_View_init_zero, false, token_cafe_v2_Usage_init_zero, false, 0}
 #define token_cafe_v2_BlobRef_init_zero          {{0, {0}}, 0}
-#define token_cafe_v2_Session_init_zero          {"", _token_cafe_v2_Provider_MIN, "", _token_cafe_v2_SessionStatus_MIN, _token_cafe_v2_WaitingReason_MIN, 0, 0, 0, false, token_cafe_v2_BlobRef_init_zero, 0, 0, false, token_cafe_v2_Request_init_zero, false, "", false, 0, "", false, token_cafe_v2_BlobRef_init_zero}
+#define token_cafe_v2_Session_init_zero          {"", _token_cafe_v2_Provider_MIN, "", _token_cafe_v2_SessionStatus_MIN, _token_cafe_v2_WaitingReason_MIN, 0, 0, 0, false, token_cafe_v2_BlobRef_init_zero, 0, 0, false, token_cafe_v2_Request_init_zero, false, "", false, 0, "", false, token_cafe_v2_BlobRef_init_zero, 0}
 #define token_cafe_v2_Request_init_zero          {"", {0, {0}}, "", false, token_cafe_v2_BlobRef_init_zero, _token_cafe_v2_RequestState_MIN, 0, {_token_cafe_v2_Decision_MIN, _token_cafe_v2_Decision_MIN, _token_cafe_v2_Decision_MIN, _token_cafe_v2_Decision_MIN}, "", _token_cafe_v2_Decision_MIN, ""}
-#define token_cafe_v2_View_init_zero             {"", _token_cafe_v2_Page_MIN, 0, "", 0, 0, "", 0, {0, {0}}, _token_cafe_v2_ReviewKind_MIN, false, token_cafe_v2_BlobRef_init_zero, {0, {0}}}
+#define token_cafe_v2_View_init_zero             {"", _token_cafe_v2_Page_MIN, 0, "", 0, 0, "", 0, {0, {0}}, _token_cafe_v2_ReviewKind_MIN, false, token_cafe_v2_BlobRef_init_zero, {0, {0}}, 0, 0, 0, 0}
 #define token_cafe_v2_Usage_init_zero            {"", ""}
 #define token_cafe_v2_BlobGet_init_zero          {{0, {0}}}
 #define token_cafe_v2_BlobCancel_init_zero       {{0, {0}}}
@@ -597,6 +603,7 @@ extern "C" {
 #define token_cafe_v2_Session_active_subagents_tag 14
 #define token_cafe_v2_Session_display_name_tag   15
 #define token_cafe_v2_Session_unlinked_review_blob_tag 16
+#define token_cafe_v2_Session_unread_output_tag  17
 #define token_cafe_v2_SnapshotPart_revision_tag  1
 #define token_cafe_v2_SnapshotPart_index_tag     2
 #define token_cafe_v2_SnapshotPart_sessions_tag  3
@@ -612,6 +619,10 @@ extern "C" {
 #define token_cafe_v2_View_review_kind_tag       10
 #define token_cafe_v2_View_review_blob_tag       11
 #define token_cafe_v2_View_patron_ids_tag        12
+#define token_cafe_v2_View_controller_mode_tag   13
+#define token_cafe_v2_View_controller_filter_tag 14
+#define token_cafe_v2_View_controller_details_tag 15
+#define token_cafe_v2_View_controller_status_order_tag 16
 #define token_cafe_v2_Usage_tokens_display_tag   1
 #define token_cafe_v2_Usage_cost_display_tag     2
 #define token_cafe_v2_SnapshotBegin_revision_tag 1
@@ -824,7 +835,8 @@ X(a, STATIC,   OPTIONAL, MESSAGE,  approval,         12) \
 X(a, STATIC,   OPTIONAL, STRING,   branch,           13) \
 X(a, STATIC,   OPTIONAL, UINT32,   active_subagents,  14) \
 X(a, STATIC,   SINGULAR, STRING,   display_name,     15) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  unlinked_review_blob,  16)
+X(a, STATIC,   OPTIONAL, MESSAGE,  unlinked_review_blob,  16) \
+X(a, STATIC,   SINGULAR, BOOL,     unread_output,    17)
 #define token_cafe_v2_Session_CALLBACK NULL
 #define token_cafe_v2_Session_DEFAULT NULL
 #define token_cafe_v2_Session_task_blob_MSGTYPE token_cafe_v2_BlobRef
@@ -857,7 +869,11 @@ X(a, STATIC,   SINGULAR, UINT64,   applied_action_id,   8) \
 X(a, STATIC,   SINGULAR, BYTES,    origin_connection_epoch,   9) \
 X(a, STATIC,   SINGULAR, UENUM,    review_kind,      10) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  review_blob,      11) \
-X(a, STATIC,   SINGULAR, BYTES,    patron_ids,       12)
+X(a, STATIC,   SINGULAR, BYTES,    patron_ids,       12) \
+X(a, STATIC,   SINGULAR, BOOL,     controller_mode,  13) \
+X(a, STATIC,   SINGULAR, UINT32,   controller_filter,  14) \
+X(a, STATIC,   SINGULAR, BOOL,     controller_details,  15) \
+X(a, STATIC,   SINGULAR, BOOL,     controller_status_order,  16)
 #define token_cafe_v2_View_CALLBACK NULL
 #define token_cafe_v2_View_DEFAULT NULL
 #define token_cafe_v2_View_review_blob_MSGTYPE token_cafe_v2_BlobRef
@@ -974,20 +990,20 @@ extern const pb_msgdesc_t token_cafe_v2_ActionResult_msg;
 #define token_cafe_v2_BlobGet_size               34
 #define token_cafe_v2_BlobRef_size               40
 #define token_cafe_v2_BlobUnavailable_size       36
-#define token_cafe_v2_Delta_size                 4867
-#define token_cafe_v2_Envelope_size              4913
+#define token_cafe_v2_Delta_size                 4886
+#define token_cafe_v2_Envelope_size              4932
 #define token_cafe_v2_Heartbeat_size             39
 #define token_cafe_v2_HelloAck_size              102
 #define token_cafe_v2_Hello_size                 152
 #define token_cafe_v2_ProtocolError_size         208
 #define token_cafe_v2_Request_size               804
 #define token_cafe_v2_Resync_size                13
-#define token_cafe_v2_Session_size               1646
-#define token_cafe_v2_SnapshotBegin_size         516
+#define token_cafe_v2_Session_size               1649
+#define token_cafe_v2_SnapshotBegin_size         529
 #define token_cafe_v2_SnapshotCommit_size        51
-#define token_cafe_v2_SnapshotPart_size          3315
+#define token_cafe_v2_SnapshotPart_size          3321
 #define token_cafe_v2_Usage_size                 52
-#define token_cafe_v2_View_size                  436
+#define token_cafe_v2_View_size                  449
 
 #ifdef __cplusplus
 } /* extern "C" */

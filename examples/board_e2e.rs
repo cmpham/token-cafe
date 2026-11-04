@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             })
             .collect();
         s.set_sessions(&sessions);
-        s.set_details(sessions.iter().enumerate().map(|(i,p)| SessionDetail {id:p.id.clone(),target: if v["targets"].as_bool()==Some(true) && (i==0 || i==2) {Some(if i==0 {SessionTarget::Claude("local_qa".into())} else {SessionTarget::Codex("qa-codex".into())})} else {None},
+        s.set_details(sessions.iter().enumerate().map(|(i,p)| SessionDetail { unread: None, output: None, id:p.id.clone(),target: if v["targets"].as_bool()==Some(true) && (i==0 || i==2) {Some(if i==0 {SessionTarget::Claude("local_qa".into())} else {SessionTarget::Codex("qa-codex".into())})} else {None},
             task:if i==2 {String::new()} else if i==3 {"Unicode café 日本語 👋 and SupercalifragilisticexpialidociousABCDEFGHIJKLMNOPQRSTUVWXYZ".into()}
             else {format!("Patron {i}: Implement the Bluetooth companion display. Check selection, scrolling, attention, and final page boundaries carefully.")}
         }).collect());
@@ -69,9 +69,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             "next" => s.select_next(),
             "focus" => s.focus_patron(v["id"].as_str().unwrap().into()),
             "clear" => s.clear_selection(),
-            "replace" => {
-                s.set_details(vec![SessionDetail { id: "qa-0".into(), target: None, task: "Replacement task".into() }])
-            }
+            "replace" => s.set_details(vec![SessionDetail {
+                unread: None,
+                output: None,
+                id: "qa-0".into(),
+                target: None,
+                task: "Replacement task".into(),
+            }]),
             "remove" => s.set_sessions(&[]),
             "tick" => {
                 for _ in 0..v["steps"].as_u64().unwrap_or(120) {

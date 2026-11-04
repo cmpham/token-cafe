@@ -258,6 +258,7 @@ impl Store {
                 })
                 .map_or(age, |previous| previous.state_age_ms);
             sessions.push(Session {
+                unread_output: scene.controller.unread.contains(&s.id),
                 id,
                 provider: if s.kind == scene::Kind::Claude { 1 } else { 2 },
                 title: bounded(&s.name, 192),
@@ -291,6 +292,10 @@ impl Store {
         // Desktop interactions become authoritative view updates only if the UI
         // actually changed since the previous synchronization.
         let mut desktop = View {
+            controller_status_order: scene.controller.status_order,
+            controller_details: scene.controller.details,
+            controller_mode: scene.controller.enabled,
+            controller_filter: scene.controller.filter,
             selected_session_id: scene.selected_id().map(wire_id).unwrap_or_default(),
             page: 1,
             task_anchor: scene.task_anchor() as u32,
@@ -324,6 +329,9 @@ impl Store {
             next.view = View {
                 page: 1,
                 generation: old.view.generation + 1,
+                controller_status_order: next.view.controller_status_order,
+                controller_mode: next.view.controller_mode,
+                controller_filter: next.view.controller_filter,
                 patron_ids: next.view.patron_ids.clone(),
                 ..Default::default()
             };
@@ -410,6 +418,10 @@ impl Store {
         v.origin_connection_epoch.clear();
         v.applied_action_id = 0;
         v.selected_session_id = scene.selected_id().map(wire_id).unwrap_or_default();
+        v.controller_status_order = scene.controller.status_order;
+        v.controller_details = scene.controller.details;
+        v.controller_mode = scene.controller.enabled;
+        v.controller_filter = scene.controller.filter;
         v.task_anchor = scene.task_anchor() as u32;
         v.patron_ids = scene.patrons.ids().to_vec();
         if let Some(r) = &scene.review {
@@ -425,6 +437,14 @@ impl Store {
         let seats = m.sessions.values().filter_map(|s| real(&s.id).map(|id| (id, s.seat as usize))).collect::<Vec<_>>();
         scene.set_authoritative_sessions(&ss, &seats);
         let v = &m.view;
+        scene.controller.unread = m.sessions.values().filter(|s| s.unread_output).filter_map(|s| real(&s.id)).collect();
+        if scene.controller.details != v.controller_details {
+            scene.controller.detail_age = 0;
+        }
+        scene.controller.details = v.controller_details;
+        scene.controller.status_order = v.controller_status_order;
+        scene.controller.enabled = v.controller_mode;
+        scene.controller.filter = v.controller_filter;
         if let Some(patrons) = cafe_ui::patrons::Patrons::from_ids(&v.patron_ids) {
             scene.patrons = patrons;
         }
@@ -432,6 +452,13 @@ impl Store {
             scene.focus_patron(id);
         } else {
             scene.clear_selection();
+        }
+        scene.controller.available =
+            m.sessions.values().filter_map(|s| real(&s.id).map(|id| (id, s.navigation_available))).collect();
+        scene.controller.disconnected =
+            m.sessions.values().filter(|s| s.status == 4).filter_map(|s| real(&s.id)).collect();
+        if scene.controller.enabled && scene.selected_id().is_none() {
+            scene.controller_preselect();
         }
         scene.set_task_anchor(v.task_anchor as usize);
         if v.page == 2 {
@@ -588,7 +615,13 @@ mod tests {
             branch: None,
             active_subagents: None,
         }]);
-        scene.set_details(vec![scene::SessionDetail { id: "claude:a".into(), target: None, task: "Full task".into() }]);
+        scene.set_details(vec![scene::SessionDetail {
+            unread: None,
+            output: None,
+            id: "claude:a".into(),
+            target: None,
+            task: "Full task".into(),
+        }]);
         scene
     }
     #[test]
@@ -761,7 +794,13 @@ mod tests {
     fn repeated_large_blobs_reuse_storage_and_changed_text_keeps_old_body_fetchable() {
         let mut scene = scene();
         let text = format!("{}é", "x".repeat(32767));
-        scene.set_details(vec![scene::SessionDetail { id: "claude:a".into(), target: None, task: text }]);
+        scene.set_details(vec![scene::SessionDetail {
+            unread: None,
+            output: None,
+            id: "claude:a".into(),
+            target: None,
+            task: text,
+        }]);
         let mut store = Store::new([1; 16]);
         store.ingest(&mut scene, None);
         let first = store.authority.model.sessions["claude:a"].task_blob.clone().unwrap();
@@ -776,7 +815,13 @@ mod tests {
         }
 
         let changed = "y".repeat(32767);
-        scene.set_details(vec![scene::SessionDetail { id: "claude:a".into(), target: None, task: changed.clone() }]);
+        scene.set_details(vec![scene::SessionDetail {
+            unread: None,
+            output: None,
+            id: "claude:a".into(),
+            target: None,
+            task: changed.clone(),
+        }]);
         store.ingest(&mut scene, None);
         let current = store.authority.model.sessions["claude:a"].task_blob.clone().unwrap();
         assert_ne!(current.sha256, first.sha256);

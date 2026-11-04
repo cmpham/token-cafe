@@ -54,6 +54,9 @@ impl ReconnectDisplay {
     }
 }
 
+/// Physical display inactivity timeout; heartbeats do not restart it.
+pub const DISPLAY_IDLE_MS: u64 = 60 * 60 * 1000;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Receipt {
     pub authority: Vec<u8>,
@@ -64,6 +67,7 @@ pub struct Receipt {
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Target {
+    Controller(cafe_ui::controller::Hit),
     Patron(String),
     Body(String),
     ViewRequest(String),
@@ -113,6 +117,7 @@ pub struct Client {
     last_tap: Option<(Target, u64, i32, i32)>,
     last_touch: u64,
     voice_action: Option<u64>,
+    controller_navigation: Option<u64>,
     keyboard_notice: Option<(&'static str, u64)>,
     attention_identities: BTreeMap<String, Vec<u8>>,
     attention_awake_until: u64,
@@ -156,6 +161,7 @@ impl Client {
             last_tap: None,
             last_touch: now,
             voice_action: None,
+            controller_navigation: None,
             keyboard_notice: None,
             attention_identities: BTreeMap::new(),
             attention_awake_until: 0,
@@ -302,6 +308,11 @@ impl Client {
                 if !(1..=4).contains(&r.status) || !(0..=12).contains(&r.reason) || !self.intents.result(r) {
                     return Err(Error::Limit);
                 }
+                if self.controller_navigation == Some(r.action_id) && r.status != 2 {
+                    self.controller_navigation = None;
+                    self.scene.controller.notice =
+                        if r.status == 1 { "OPEN REQUESTED" } else { "COULD NOT OPEN - RETRY" }.into();
+                }
                 if self.voice_action == Some(r.action_id) && r.status != 2 {
                     self.voice_action = None;
                     self.keyboard_notice =
@@ -379,6 +390,17 @@ impl Client {
             .collect();
         let seats: Vec<_> = m.sessions.values().map(|s| (s.id.clone(), s.seat as usize)).collect();
         self.scene.set_authoritative_sessions(&sessions, &seats);
+        self.scene.controller.unread = m.sessions.values().filter(|s| s.unread_output).map(|s| s.id.clone()).collect();
+        if self.scene.controller.details != v.controller_details {
+            self.scene.controller.detail_age = 0;
+        }
+        self.scene.controller.details = v.controller_details;
+        self.scene.controller.status_order = v.controller_status_order;
+        self.scene.controller.enabled = v.controller_mode;
+        self.scene.controller.filter = v.controller_filter;
+        self.scene.controller.available = m.sessions.values().map(|s| (s.id.clone(), s.navigation_available)).collect();
+        self.scene.controller.disconnected =
+            m.sessions.values().filter(|s| s.status == 4).map(|s| s.id.clone()).collect();
         for s in m.sessions.values() {
             self.scene.set_appearance(&s.id, s.appearance_seed);
         }
@@ -390,6 +412,8 @@ impl Client {
             .get(&v.selected_session_id)
             .into_iter()
             .map(|s| scene::SessionDetail {
+                unread: None,
+                output: None,
                 id: s.id.clone(),
                 target: None,
                 task: {
@@ -467,6 +491,9 @@ impl Client {
             self.scene.focus_patron(v.selected_session_id.clone());
         } else {
             self.scene.clear_selection();
+        }
+        if self.scene.controller.enabled && self.scene.selected_id().is_none() {
+            self.scene.controller_preselect();
         }
         self.scene.set_task_anchor(v.task_anchor as usize);
         let wanted = if v.page == 2 {
@@ -638,7 +665,9 @@ impl Client {
                 self.last_heartbeat = now;
             }
         }
-        if self.contact.is_none() && now >= self.attention_awake_until && now.saturating_sub(self.last_touch) >= 600000
+        if self.contact.is_none()
+            && now >= self.attention_awake_until
+            && now.saturating_sub(self.last_touch) >= DISPLAY_IDLE_MS
         {
             self.sleeping = true;
         }
@@ -721,6 +750,9 @@ impl Client {
     fn target(&self, x: i32, y: i32) -> Target {
         if !(0..480).contains(&x) || !(0..272).contains(&y) {
             return Target::None;
+        }
+        if self.scene.controller.enabled {
+            return Target::Controller(self.scene.controller_hit(x, y));
         }
         if let Some(r) = &self.scene.review {
             if y < 48 {
@@ -933,6 +965,93 @@ impl Client {
 
     /// Four ASCII rows for the 128x32 keypad OLED. Mode comes from the same
     /// selected view; READ describes the page, not a different knob-turn action.
+    pub fn controller_mode(&self) -> bool {
+        self.view().controller_mode
+    }
+    fn controller_select(&mut self, id: String, open: bool, now: u64) -> Result<()> {
+        self.scene.controller.notice.clear();
+        self.scene.focus_patron(id.clone());
+        if self.view().controller_details {
+            let v = self.view();
+            self.issue(
+                Action {
+                    kind: 13,
+                    anchor: Some(4 + v.controller_filter + u32::from(v.controller_status_order) * 16),
+                    ..Default::default()
+                },
+                now,
+            )?;
+        }
+        self.issue(Action { kind: 1, session_id: id.clone(), ..Default::default() }, now)?;
+        if open {
+            if self.scene.controller_available(&id) {
+                self.controller_navigation = Some(self.next_action);
+                self.issue(Action { kind: 6, session_id: id, ..Default::default() }, now)?;
+                self.scene.controller.notice = "OPENING SESSION".into();
+                self.keyboard_notice = Some(("OPEN REQUESTED", now + 5000));
+            } else {
+                self.keyboard_notice = Some(("DETAILS ONLY", now + 5000));
+            }
+        }
+        Ok(())
+    }
+    fn controller_input(&mut self, hit: cafe_ui::controller::Hit, now: u64) -> Result<()> {
+        use cafe_ui::controller::Hit;
+        self.scene.controller.notice.clear();
+        match hit {
+            Hit::Sort => {
+                let v = self.view();
+                self.issue(
+                    Action {
+                        kind: 13,
+                        anchor: Some(4 + v.controller_filter + u32::from(!v.controller_status_order) * 16),
+                        ..Default::default()
+                    },
+                    now,
+                )?;
+            }
+            Hit::Mode | Hit::Filter(_) => {
+                let v = self.view();
+                let (enabled, filter) = match hit {
+                    Hit::Mode => (!v.controller_mode, v.controller_filter),
+                    Hit::Filter(f) => (true, f),
+                    _ => unreachable!(),
+                };
+                self.issue(
+                    Action {
+                        kind: 13,
+                        anchor: Some(u32::from(enabled) * 4 + filter + u32::from(v.controller_status_order) * 16),
+                        ..Default::default()
+                    },
+                    now,
+                )?;
+            }
+            Hit::Session(id) => return self.controller_select(id, true, now),
+            Hit::Page(forward) => {
+                self.scene.controller_page(forward);
+                if let Some(id) = self.scene.selected_id() {
+                    return self.controller_select(id.into(), false, now);
+                }
+            }
+            Hit::Details => {
+                let v = self.view();
+                self.issue(
+                    Action {
+                        kind: 13,
+                        anchor: Some(
+                            4 + v.controller_filter
+                                + u32::from(!v.controller_details) * 8
+                                + u32::from(v.controller_status_order) * 16,
+                        ),
+                        ..Default::default()
+                    },
+                    now,
+                )?;
+            }
+            Hit::None => (),
+        }
+        Ok(())
+    }
     pub fn keyboard_display(&self) -> [[u8; 16]; 4] {
         fn row(s: &str) -> [u8; 16] {
             let mut out = [b' '; 16];
@@ -987,6 +1106,26 @@ impl Client {
             return Ok(());
         }
         let v = self.view();
+        if v.controller_mode && !matches!(command, 6..=8) {
+            use cafe_ui::controller::Hit;
+            match command {
+                1 | 2 | 10 | 11 => {
+                    if let Some(id) = self.scene.controller_move(matches!(command, 2 | 11), matches!(command, 1 | 2)) {
+                        return self.controller_select(id, matches!(command, 1 | 2), now);
+                    }
+                    self.keyboard_notice = Some(("NO DESKTOP TARGET", now + 5000));
+                }
+                3 => return self.controller_input(Hit::Details, now),
+                5 => return self.controller_input(Hit::Filter((v.controller_filter + 1) % 4), now),
+                4 | 9 => {
+                    if let Some(id) = self.scene.selected_id() {
+                        return self.controller_select(id.into(), true, now);
+                    }
+                }
+                _ => (),
+            }
+            return Ok(());
+        }
         match command {
             1 | 2 => self.keyboard_scroll(command == 2, now),
             3 => self.issue(Action { kind: 10, ..Default::default() }, now),
@@ -1183,6 +1322,9 @@ impl Client {
         }
         let view_request = matches!(target, Target::ViewRequest(_));
         match target {
+            Target::Controller(hit) => {
+                self.controller_input(hit, now)?;
+            }
             Target::Patron(id) => {
                 self.scene.acknowledge_attention(&id);
                 if double {

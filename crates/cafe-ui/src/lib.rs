@@ -4,6 +4,8 @@ extern crate alloc;
 #[rustfmt::skip]
 pub mod assets;
 pub mod approval;
+pub mod controller;
+mod controller_font;
 pub mod gfx;
 pub mod patrons;
 pub mod review;

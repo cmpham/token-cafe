@@ -426,7 +426,7 @@ LOADING→UNAVAILABLE for missing/unsupported content. READY/SENDING→STALE if 
 changes, expires or disappears. SENDING→UNCERTAIN on disconnect or ambiguous
 provider result. Neither STALE nor UNCERTAIN shows enabled decision buttons.
 
-Board display: AWAKE → ASLEEP after 600000ms without physical touch; host updates
+Board display: AWAKE → ASLEEP after 3600000ms without physical touch; host updates
 do not reset this timer. New waiting requests do not wake it automatically: this
 preserves the requested no-touch sleep behavior; desktop alerts remain available. First physical touch wakes and is consumed (no selection
 or approval). Incoming state remains synchronized while asleep; render latest state

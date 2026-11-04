@@ -30,6 +30,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         sessions
             .iter()
             .map(|s| SessionDetail {
+                unread: None,
+                output: None,
                 id: s.id.clone(),
                 target: None,
                 task: "Test frame updates and patron selection on the virtual display.".into(),

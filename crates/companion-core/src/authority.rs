@@ -79,7 +79,7 @@ impl Authority {
         let mut status = 1;
         let mut reason = 0;
         let mut dispatch = None;
-        if a.observed_revision > self.model.revision || !(1..=12).contains(&a.kind) {
+        if a.observed_revision > self.model.revision || !(1..=13).contains(&a.kind) {
             status = 3;
             reason = 7;
         } else {
@@ -154,11 +154,16 @@ impl Authority {
                     if !peer.can_navigate || session.as_ref().is_none_or(|s| !s.navigation_available) {
                         status = 3;
                         reason = 4;
-                    } else if peer.last_navigation.is_some_and(|t| now.saturating_sub(t) < 1000) {
+                    } else if !self.model.view.controller_mode
+                        && peer.last_navigation.is_some_and(|t| now.saturating_sub(t) < 1000)
+                    {
                         status = 3;
                         reason = 6;
                     } else {
                         peer.last_navigation = Some(now);
+                        if let Some(s) = self.model.sessions.get_mut(&a.session_id) {
+                            s.unread_output = false;
+                        }
                         self.model.view.selected_session_id = a.session_id.clone();
                         self.model.view.task_anchor = 0;
                         self.close_review();
@@ -181,6 +186,35 @@ impl Authority {
                             11 => Dispatch::ToggleApp,
                             _ => Dispatch::App { codex: a.kind == 9 },
                         });
+                    }
+                }
+                13 => {
+                    if let Some(value) = a.anchor.filter(|v| *v < 32) {
+                        let changed = self.model.view.controller_mode != (value & 4 != 0)
+                            || self.model.view.controller_filter != value % 4;
+                        self.model.view.controller_status_order = value & 16 != 0;
+                        self.model.view.controller_details = value & 8 != 0;
+                        self.model.view.controller_mode = value & 4 != 0;
+                        self.model.view.controller_filter = value % 4;
+                        if changed {
+                            self.model.view.selected_session_id = self
+                                .model
+                                .sessions
+                                .values()
+                                .filter(|s| match value % 4 {
+                                    1 => s.provider == 1,
+                                    2 => s.provider == 2,
+                                    3 => s.status == 3,
+                                    _ => true,
+                                })
+                                .min_by_key(|s| (!s.navigation_available, &s.id))
+                                .map(|s| s.id.clone())
+                                .unwrap_or_default();
+                        }
+                        self.close_review();
+                    } else {
+                        status = 3;
+                        reason = 7;
                     }
                 }
                 10 => {

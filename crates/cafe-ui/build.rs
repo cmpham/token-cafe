@@ -1,7 +1,9 @@
 use sha2::{Digest, Sha256};
 fn main() {
     let mut hash = Sha256::new();
-    for file in ["assets.rs", "bg.rgb", "scene.rs", "gfx.rs", "review.rs", "text.rs"] {
+    for file in
+        ["assets.rs", "bg.rgb", "scene.rs", "gfx.rs", "review.rs", "text.rs", "controller.rs", "controller_font.rs"]
+    {
         let path = format!("src/{file}");
         hash.update(file.as_bytes());
         hash.update(std::fs::read(&path).unwrap());
@@ -10,6 +12,7 @@ fn main() {
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
     for file in [
         "src/patrons.rs",
+        "../../assets/fonts/controller-alpha.bin",
         "../../assets/patrons/poses.rgba",
         "../../assets/patrons/portraits.rgba",
         "../../assets/patrons/cup-anchors.bin",

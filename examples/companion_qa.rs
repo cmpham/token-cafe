@@ -47,8 +47,7 @@ fn main() {
         })
         .collect();
     s.set_sessions(&sessions[..8]);
-    s.set_details(sessions.iter().enumerate().map(|(i,v)| SessionDetail {
-        id:v.id.clone(), target:None,
+    s.set_details(sessions.iter().enumerate().map(|(i,v)| SessionDetail { unread: None, output: None, id:v.id.clone(), target:None,
         task: if i==2 {"".into()} else if i==3 {"Unicode café 日本語 👋 and SupercalifragilisticexpialidociousABCDEFGHIJKLMNOPQRSTUVWXYZ".into()} else {format!("Patron {i}: Implement the Bluetooth companion display. Check selection, scrolling, attention, and final page boundaries carefully.")},
     }).collect());
     for _ in 0..60 {
@@ -116,16 +115,30 @@ fn main() {
     sessions[0].name = "very-long-project-name-with-suffix-1c".into();
     s.set_sessions(&sessions[..1]);
     s.set_usage(Usage { tokens: 987654321.0, usd: 12345.67 });
-    s.set_details(vec![SessionDetail { id: "qa-0".into(), target: None, task: "One short task".into() }]);
+    s.set_details(vec![SessionDetail {
+        unread: None,
+        output: None,
+        id: "qa-0".into(),
+        target: None,
+        task: "One short task".into(),
+    }]);
     s.focus_patron("qa-0".into());
     shot("23-long-name-usage-short-task", &s);
     s.set_details(vec![SessionDetail {
+        unread: None,
+        output: None,
         id: "qa-0".into(),
         target: None,
         task: "Updated task content should reset to its first page and stay on this same patron.".into(),
     }]);
     s.scroll_task_to(271);
-    s.set_details(vec![SessionDetail { id: "qa-0".into(), target: None, task: "Replacement task".into() }]);
+    s.set_details(vec![SessionDetail {
+        unread: None,
+        output: None,
+        id: "qa-0".into(),
+        target: None,
+        task: "Replacement task".into(),
+    }]);
     shot("24-task-replaced", &s);
     // Record the complete swap: Claude 3 -> 1 and Codex 4 -> 1.
     let mut swap = Scene::new();

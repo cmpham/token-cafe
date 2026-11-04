@@ -123,6 +123,9 @@ impl SessionTarget {
 /// Short, evidence-backed display fields, separate from the animated session state.
 #[derive(Clone, Debug)]
 pub struct SessionDetail {
+    /// Provider-reported unread state; None retains observed-output fallback.
+    pub unread: Option<bool>,
+    pub output: Option<String>,
     pub target: Option<SessionTarget>,
     pub id: String,
     pub task: String,
@@ -256,6 +259,7 @@ impl Particle {
 }
 
 pub struct Scene {
+    pub controller: crate::controller::Controller,
     pub patrons: crate::patrons::Patrons,
     #[cfg(feature = "std")]
     pub selected_seat: Option<usize>,
@@ -522,6 +526,7 @@ fn task_pages(text: &str) -> TaskPages {
 impl Scene {
     pub fn new() -> Self {
         Scene {
+            controller: Default::default(),
             external_seats: None,
             patrons: crate::patrons::Patrons::default(),
             #[cfg(feature = "std")]
@@ -1027,6 +1032,23 @@ impl Scene {
     }
 
     pub fn set_details(&mut self, details: Vec<SessionDetail>) {
+        for d in &details {
+            if let Some(output) = &d.output {
+                if self.controller.outputs.get(&d.id).is_some_and(|old| old != output) {
+                    self.controller.unread.insert(d.id.clone());
+                }
+                self.controller.outputs.insert(d.id.clone(), output.clone());
+            }
+            if let Some(unread) = d.unread {
+                if unread {
+                    self.controller.unread.insert(d.id.clone());
+                } else {
+                    self.controller.unread.remove(&d.id);
+                }
+            }
+        }
+        self.controller.outputs.retain(|id, _| self.sessions.iter().any(|s| &s.id == id));
+        self.controller.unread.retain(|id| self.sessions.iter().any(|s| &s.id == id));
         let old = self.details.iter().find(|d| Some(&d.id) == self.selected.as_ref()).map(|d| &d.task);
         let new = details.iter().find(|d| Some(&d.id) == self.selected.as_ref()).map(|d| &d.task);
         if old != new {
@@ -1257,6 +1279,12 @@ impl Scene {
     }
 
     pub fn tick(&mut self, dt: u32) {
+        if self.controller.details {
+            self.controller.detail_age = self.controller.detail_age.saturating_add(dt);
+            if self.controller.detail_age >= 30000 {
+                self.controller.details = false;
+            }
+        }
         self.t += dt as i64;
         let t = self.t;
         let mut blocked = [false; SEATS];
@@ -1898,6 +1926,10 @@ impl Scene {
 
     /// Draw the café as of the last tick, with the clocks at local time `now`.
     pub fn render(&self, fb: &mut [u32], now: NaiveTime) {
+        if self.controller.enabled && self.review.is_none() {
+            self.draw_controller(fb);
+            return;
+        }
         if self.usage_open && self.review.is_none() {
             self.draw_usage(fb);
             return;
@@ -1972,7 +2004,13 @@ mod tests {
         scene.focus_patron("task".into());
         for text in ["é中🚀\t\r\u{0}\\\n".repeat(40), "short".into(), String::new()] {
             let lines = crate::text::layout(&text, TASK_LINE_LEN);
-            scene.set_details(vec![SessionDetail { id: "task".into(), task: text.clone(), target: None }]);
+            scene.set_details(vec![SessionDetail {
+                unread: None,
+                output: None,
+                id: "task".into(),
+                task: text.clone(),
+                target: None,
+            }]);
             for anchor in 0..=text.len() + 5 {
                 let offset =
                     lines.iter().filter(|line| line.offset <= anchor).map(|line| line.offset).max().unwrap_or(0);
@@ -2192,21 +2230,27 @@ mod tests {
         ]);
         scene.set_details(vec![
             SessionDetail {
+                unread: None,
+                output: None,
                 id: "one".into(),
                 task: "same project".into(),
                 target: Some(SessionTarget::ITerm("pane-one".into())),
             },
             SessionDetail {
+                unread: None,
+                output: None,
                 id: "two".into(),
                 task: "same project".into(),
                 target: Some(SessionTarget::ITerm("pane-two".into())),
             },
             SessionDetail {
+                unread: None,
+                output: None,
                 id: "desktop".into(),
                 task: "task".into(),
                 target: Some(SessionTarget::Claude("local_desktop".into())),
             },
-            SessionDetail { id: "unmapped".into(), task: "task".into(), target: None },
+            SessionDetail { unread: None, output: None, id: "unmapped".into(), task: "task".into(), target: None },
         ]);
         let point = |s: &Scene, id: &str| {
             let seat = s.agents.iter().find(|a| a.id == id).unwrap().seat;
@@ -2349,7 +2393,13 @@ mod tests {
     fn one_waiter_has_no_next_and_resolution_preserves_history() {
         let mut scene = Scene::new();
         scene.set_sessions(&[session("a", State::Wait)]);
-        scene.set_details(vec![SessionDetail { id: "a".into(), task: "May I run tests?".into(), target: None }]);
+        scene.set_details(vec![SessionDetail {
+            unread: None,
+            output: None,
+            id: "a".into(),
+            task: "May I run tests?".into(),
+            target: None,
+        }]);
         assert!(scene.next_attention_id().is_none());
         scene.click(450, a::WIN_Y + 30);
         assert!(scene.selected_id().is_none());
@@ -2640,6 +2690,8 @@ mod tests {
         scene.set_details(
             list.iter()
                 .map(|s| SessionDetail {
+                    unread: None,
+                    output: None,
                     id: s.id.clone(),
                     task: String::new(),
                     target: Some(if s.kind == Kind::Codex {
@@ -2727,6 +2779,8 @@ mod tests {
         scene.set_details(
             list.iter()
                 .map(|s| SessionDetail {
+                    unread: None,
+                    output: None,
                     id: s.id.clone(),
                     task: "Same task".into(),
                     target: Some(SessionTarget::Codex(s.id.clone())),
@@ -2832,7 +2886,13 @@ mod tests {
             (Some(SessionTarget::Codex("../bad".into())), None),
             (None, None),
         ] {
-            scene.set_details(vec![SessionDetail { id: "a".into(), task: "Task".into(), target }]);
+            scene.set_details(vec![SessionDetail {
+                unread: None,
+                output: None,
+                id: "a".into(),
+                task: "Task".into(),
+                target,
+            }]);
             scene.click(60, 80);
             assert_eq!(scene.activate_patron(60, 80).as_deref(), expected);
             assert_eq!(scene.selected.as_deref(), Some("a"));
@@ -2846,6 +2906,8 @@ mod tests {
         let mut scene = Scene::new();
         scene.set_sessions(&[session("a", State::Work)]);
         let details = vec![SessionDetail {
+            unread: None,
+            output: None,
             target: None,
             id: "a".into(),
             task: "one two three four five six seven eight nine ten eleven twelve thirteen fourteen".into(),
@@ -2859,7 +2921,13 @@ mod tests {
         assert_eq!(scene.pages["a"].text.as_ptr(), allocation);
         scene.scroll_task_to(-999);
         assert_eq!(scene.task_page, 0);
-        scene.set_details(vec![SessionDetail { target: None, id: "a".into(), task: "Short".into() }]);
+        scene.set_details(vec![SessionDetail {
+            unread: None,
+            output: None,
+            target: None,
+            id: "a".into(),
+            task: "Short".into(),
+        }]);
         scene.scroll_task_to(999);
         assert_eq!(scene.task_page, 0);
         assert_eq!(scene.selected_task_pages(), ["Short"]);
@@ -2883,6 +2951,8 @@ mod tests {
         scene.click(60, 80);
         assert_eq!(scene.selected.as_deref(), Some("0"));
         scene.set_details(vec![SessionDetail {
+            unread: None,
+            output: None,
             target: None,
             id: "0".into(),
             task: "A long request that spans several pages of readable text".into(),
@@ -2907,6 +2977,8 @@ mod tests {
         assert!(scene.selected.is_none());
         scene.set_sessions(&[session("a", State::Work), session("b", State::Idle)]);
         scene.set_details(vec![SessionDetail {
+            unread: None,
+            output: None,
             target: None,
             id: "a".into(),
             task: "One two three four five six seven eight nine ten eleven twelve".into(),
@@ -2934,7 +3006,13 @@ mod tests {
         scene.clear_selection();
         scene.page_task_key(true);
         assert_eq!(scene.task_page, 0);
-        scene.set_details(vec![SessionDetail { target: None, id: "a".into(), task: "Short".into() }]);
+        scene.set_details(vec![SessionDetail {
+            unread: None,
+            output: None,
+            target: None,
+            id: "a".into(),
+            task: "Short".into(),
+        }]);
         scene.page_task_key(true);
         assert_eq!(scene.task_page, 0);
     }
@@ -2944,6 +3022,8 @@ mod tests {
         let mut scene = Scene::new();
         scene.set_sessions(&[session("a", State::Work), session("b", State::Work), session("c", State::Idle)]);
         scene.set_details(vec![SessionDetail {
+            unread: None,
+            output: None,
             target: None,
             id: "b".into(),
             task: "Unique task for patron B".into(),
@@ -2970,8 +3050,7 @@ mod tests {
     fn selection_tracks_identity_and_updates_without_resetting_pages() {
         let mut scene = Scene::new();
         scene.set_sessions(&[session("a", State::Work), session("b", State::Idle)]);
-        scene.set_details(vec![SessionDetail {
-            target: None,
+        scene.set_details(vec![SessionDetail { unread: None, output: None, target: None,
             id: "b".into(),
             task: "A sufficiently long request to require multiple readable pages and preserve the selected page when the session list is refreshed".into(),
         }]);
@@ -2983,7 +3062,13 @@ mod tests {
         scene.set_details(scene.details.clone());
         assert_eq!(scene.selected.as_deref(), Some("b"));
         assert_eq!(scene.task_page, 1);
-        scene.set_details(vec![SessionDetail { target: None, id: "b".into(), task: "New request".into() }]);
+        scene.set_details(vec![SessionDetail {
+            unread: None,
+            output: None,
+            target: None,
+            id: "b".into(),
+            task: "New request".into(),
+        }]);
         assert_eq!(scene.task_page, 0);
         scene.set_sessions(&[session("a", State::Work)]);
         assert!(scene.selected.is_none());

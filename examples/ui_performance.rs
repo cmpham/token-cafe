@@ -73,7 +73,7 @@ fn main() {
     measure("unchanged-session-reconcile-8", 2000, || scene.set_sessions(black_box(&list)));
     measure("animation-tick-8", 2000, || scene.tick(33));
     let task = "mixed é\t\n".repeat(3000);
-    scene.set_details(vec![SessionDetail { id: list[0].id.clone(), task, target: None }]);
+    scene.set_details(vec![SessionDetail { unread: None, output: None, id: list[0].id.clone(), task, target: None }]);
     scene.focus_patron(list[0].id.clone());
     measure("cached-task-anchor-30k", 100, || {
         scene.set_task_anchor(black_box(16000));
@@ -92,7 +92,13 @@ fn main() {
         scene.set_sessions(&list);
         scene.set_details(
             list.iter()
-                .map(|s| SessionDetail { id: s.id.clone(), task: "Synthetic task evidence".repeat(6), target: None })
+                .map(|s| SessionDetail {
+                    unread: None,
+                    output: None,
+                    id: s.id.clone(),
+                    task: "Synthetic task evidence".repeat(6),
+                    target: None,
+                })
                 .collect(),
         );
         let mut store = token_cafe::companion::state::Store::new([1; 16]);

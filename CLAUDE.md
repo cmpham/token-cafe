@@ -29,6 +29,8 @@ Every worktree publishes to the primary repository's `release/Token Café.app`. 
 - P cycles rosters; C chooses a character seat; [ / ] change its character. U opens monthly usage; A changes app/recorded-organization breakdown.
 - macOS: identified iTerm Claude CLI single-click reveals the existing pane; other supported desktop sessions open on double-click. Never guess a terminal or session by project path.
 
+Controller mode design, keypad mapping, status semantics and validation: [docs/controller-mode.md](docs/controller-mode.md). Press M to switch; the bottom keypad row remains independent of this mode.
+
 ## Current behavior to preserve
 
 - Eight seats, Claude on the left and Codex on the right. Active/waiting patrons have seating priority over idle patrons on their own side. Extra sessions wait outside. Selection follows session identity through swaps and refreshes.

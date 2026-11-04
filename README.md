@@ -337,3 +337,9 @@ Build the macOS app with `sh tools/build_macos.sh`; it also packages the native 
 Start with the [keypad setup and recovery guide](docs/pipar-keypad.md) for the layout, both connection architectures, known-good VIA settings, OLED firmware, serial flashing, permissions, and troubleshooting. The former keypad-to-board path is historical, not an automatic fallback.
 
 See the [implementation review](docs/keypad-architecture-review.md) for module ownership and remaining limitations.
+
+### Controller mode
+
+Press **M** to open a six-session touch grid. Tap once to open an identified desktop session; turn the keypad knob to browse, press to open, or use the top keys to switch immediately. Café mode and the bottom-row Dictate / Claude / Codex shortcuts remain available. See the [design and controls](docs/controller-mode.md).
+
+![Controller mode, native 480×272 rendering](docs/controller.png)

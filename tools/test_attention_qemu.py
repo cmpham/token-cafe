@@ -62,8 +62,8 @@ def run(device, qmp, process):
     publish()
     host.advance(10000)
     capture('01-working')
-    idle_until(600000)
-    assert asleep(), 'ten-minute idle did not sleep'
+    idle_until(3600000)
+    assert asleep(), 'sixty-minute idle did not sleep'
     black = capture('02-sleeping')
     assert black == bytes(480 * 272 * 3), 'QEMU panel must be black while asleep'
 
@@ -148,7 +148,7 @@ def run(device, qmp, process):
     capture('09c-current-task')
 
     # New request wakes, survives 59,999ms, then sleeps without touch. Repeated snapshots do not renew it.
-    idle_until(host.time + 601000)
+    idle_until(host.time + 3601000)
     assert asleep()
     sessions[0].status = 3
     sessions[0].waiting_reason = 1

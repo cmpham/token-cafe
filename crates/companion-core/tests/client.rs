@@ -179,12 +179,12 @@ fn journal_failure_never_sends_decision() {
 #[test]
 fn sleep_wake_contact_is_consumed() {
     let (mut c, _, _) = setup();
-    c.tick(610001).unwrap();
+    c.tick(3_610_001).unwrap();
     assert!(c.sleeping);
-    tap(&mut c, 60, 90, 610010);
+    tap(&mut c, 60, 90, 3_610_010);
     assert!(!c.sleeping);
     assert!(actions(&mut c).is_empty());
-    tap(&mut c, 60, 90, 611000);
+    tap(&mut c, 60, 90, 3_611_000);
     assert_eq!(c.scene.selected_id(), Some("claude:test"));
 }
 #[test]
@@ -495,9 +495,9 @@ fn publish_attention_snapshot(c: &mut Client, host: &mut Authority, now: u64) {
 #[test]
 fn new_attention_wakes_for_a_minute_but_refresh_does_not() {
     let (mut c, mut host, _) = setup();
-    c.tick(610_000).unwrap();
+    c.tick(3_610_000).unwrap();
     assert!(c.sleeping);
-    publish_attention_snapshot(&mut c, &mut host, 610_010);
+    publish_attention_snapshot(&mut c, &mut host, 3_610_010);
     assert!(c.sleeping, "same waiting request must not wake repeatedly");
     let mut question = host.model.sessions["claude:test"].clone();
     question.id = "codex:question".into();
@@ -506,13 +506,13 @@ fn new_attention_wakes_for_a_minute_but_refresh_does_not() {
     question.waiting_reason = 2;
     question.approval = None;
     host.model.sessions.insert(question.id.clone(), question);
-    publish_attention_snapshot(&mut c, &mut host, 611_000);
+    publish_attention_snapshot(&mut c, &mut host, 3_611_000);
     assert!(!c.sleeping);
-    assert!(!c.armed(611_001));
-    c.tick(670_999).unwrap();
+    assert!(!c.armed(3_611_001));
+    c.tick(3_670_999).unwrap();
     assert!(!c.sleeping);
-    publish_attention_snapshot(&mut c, &mut host, 670_999);
-    c.tick(671_000).unwrap();
+    publish_attention_snapshot(&mut c, &mut host, 3_670_999);
+    c.tick(3_671_000).unwrap();
     assert!(c.sleeping, "refresh cannot extend attention wake time");
     // A different request identity on the same waiting patron is a new alert.
     let r = host.model.sessions.get_mut("claude:test").unwrap().approval.as_mut().unwrap();
@@ -530,7 +530,7 @@ fn new_attention_wakes_for_a_minute_but_refresh_does_not() {
     )
     .unwrap()
     .to_vec();
-    publish_attention_snapshot(&mut c, &mut host, 672_000);
+    publish_attention_snapshot(&mut c, &mut host, 3_672_000);
     assert!(!c.sleeping);
     assert!(actions(&mut c).iter().all(|a| a.kind != 7));
 }
@@ -1184,10 +1184,10 @@ fn every_keypad_control_wakes_screen_and_restarts_idle_timer() {
                 c.disconnect();
             }
             actions(&mut c);
-            c.tick(600_000).unwrap();
+            c.tick(3_600_000).unwrap();
             assert!(c.sleeping, "fixture must reach actual idle sleep");
 
-            let pressed_at = 600_100;
+            let pressed_at = 3_600_100;
             c.keyboard(command, pressed_at).unwrap();
             assert!(!c.sleeping, "command {command}, connected={connected} must wake immediately");
             if !connected {
@@ -1195,9 +1195,9 @@ fn every_keypad_control_wakes_screen_and_restarts_idle_timer() {
             }
             c.tick(pressed_at + 33).unwrap();
             assert!(!c.sleeping, "the next frame must remain awake");
-            c.tick(pressed_at + 599_999).unwrap();
+            c.tick(pressed_at + 3_599_999).unwrap();
             assert!(!c.sleeping, "every control restarts the full idle interval");
-            c.tick(pressed_at + 600_000).unwrap();
+            c.tick(pressed_at + 3_600_000).unwrap();
             assert!(c.sleeping, "ordinary idle sleep still applies after keypad wake");
         }
     }
@@ -1300,8 +1300,8 @@ fn approval_view_updates_cannot_switch_the_knob_from_browsing_to_scrolling() {
 #[test]
 fn finishing_long_keypad_setup_starts_a_fresh_idle_timer() {
     let mut c = Client::new("qa".into(), vec![1; 16], true, 0);
-    // Calibration can take longer than ten minutes; uptime is not idle time.
-    let completed_at = 2_700_000;
+    // Calibration can take longer than the idle interval; uptime is not idle time.
+    let completed_at = 4_000_000;
     c.sleeping = true;
     c.input_activity(completed_at - 33);
     c.tick(completed_at).unwrap();
@@ -1309,9 +1309,9 @@ fn finishing_long_keypad_setup_starts_a_fresh_idle_timer() {
     c.input_activity(completed_at); // overlay closes after final input
     c.tick(completed_at + 33).unwrap();
     assert!(!c.sleeping, "finishing setup must leave the cafe visible");
-    c.tick(completed_at + 599_999).unwrap();
+    c.tick(completed_at + 3_599_999).unwrap();
     assert!(!c.sleeping);
-    c.tick(completed_at + 600_000).unwrap();
+    c.tick(completed_at + 3_600_000).unwrap();
     assert!(c.sleeping, "ordinary idle sleep still works after setup");
 }
 
@@ -1457,15 +1457,15 @@ fn voice_feedback_reports_failure_without_claiming_recording_started() {
 fn mac_keypad_activity_wakes_board_once_without_replaying_input() {
     let (mut c, _, _) = setup();
     receive(&mut c, Payload::Heartbeat(Heartbeat { keypad_activity: Some(10), ..Default::default() }), 1);
-    c.tick(600_000).unwrap();
+    c.tick(3_600_000).unwrap();
     assert!(c.sleeping);
-    receive(&mut c, Payload::Heartbeat(Heartbeat { keypad_activity: Some(11), ..Default::default() }), 600_100);
+    receive(&mut c, Payload::Heartbeat(Heartbeat { keypad_activity: Some(11), ..Default::default() }), 3_600_100);
     assert!(!c.sleeping);
     assert!(actions(&mut c).is_empty());
-    c.tick(1_200_099).unwrap();
+    c.tick(7_200_099).unwrap();
     assert!(!c.sleeping);
-    receive(&mut c, Payload::Heartbeat(Heartbeat { keypad_activity: Some(11), ..Default::default() }), 1_200_099);
-    c.tick(1_200_100).unwrap();
+    receive(&mut c, Payload::Heartbeat(Heartbeat { keypad_activity: Some(11), ..Default::default() }), 7_200_099);
+    c.tick(7_200_100).unwrap();
     assert!(c.sleeping, "a repeated heartbeat must not extend the idle timer");
 }
 
@@ -1538,4 +1538,136 @@ fn reconnect_retains_pixels_until_ready_or_grace_expires() {
     let refreshed = frame.clone();
     display.render(None, &mut frame, 16_002);
     assert_eq!(frame, refreshed, "a successful sync starts a new grace period");
+}
+
+#[test]
+fn controller_mode_is_replicated_and_touch_requests_desktop_in_one_tap() {
+    let (mut c, mut authority, mut peer) = setup();
+    let a = Action { id: 1, kind: 13, anchor: Some(4), ..Default::default() };
+    let (_, dispatch) = authority.action(&mut peer, &a, 1000, None).unwrap();
+    assert!(dispatch.is_none());
+    assert!(authority.model.view.controller_mode);
+    let frames = sync::snapshot(&authority.model, &[1; 16], &[2; 16]).unwrap();
+    for p in frames {
+        receive(&mut c, p.payload.unwrap(), 2000);
+    }
+    assert!(c.controller_mode());
+    let _ = actions(&mut c);
+    tap(&mut c, 10, 55, 3000);
+    let out = actions(&mut c);
+    assert!(out.iter().any(|a| a.kind == 6 && a.session_id == "claude:test"));
+    assert!(!out.iter().any(|a| a.kind == 7 || a.kind == 2));
+}
+
+#[test]
+fn controller_bottom_row_preserves_selection_and_never_decides() {
+    for (command, kind) in [(6, 12), (7, 8), (8, 9)] {
+        let (mut c, mut authority, _) = setup();
+        authority.model.view.controller_mode = true;
+        authority.model.view.selected_session_id = "claude:test".into();
+        authority.model.revision += 1;
+        for e in sync::snapshot(&authority.model, &[1; 16], &[2; 16]).unwrap() {
+            receive(&mut c, e.payload.unwrap(), 20000);
+        }
+        let _ = actions(&mut c);
+        c.keyboard(command, 20001).unwrap();
+        let out = actions(&mut c);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].kind, kind);
+        assert!(out[0].session_id.is_empty());
+        assert_eq!(c.view().selected_session_id, "claude:test");
+    }
+}
+
+#[test]
+fn controller_actions_validate_filters_and_allow_rapid_exact_session_requests() {
+    let (_, mut a, mut p) = setup();
+    let (bad, d) =
+        a.action(&mut p, &Action { id: 1, kind: 13, anchor: Some(32), ..Default::default() }, 0, None).unwrap();
+    assert_eq!(bad.status, 3);
+    assert!(d.is_none());
+    assert!(!a.model.view.controller_mode);
+    let (ok, d) =
+        a.action(&mut p, &Action { id: 2, kind: 13, anchor: Some(4), ..Default::default() }, 1, None).unwrap();
+    assert_eq!(ok.status, 1);
+    assert!(d.is_none());
+    for id in 3..6 {
+        let (r, d) = a
+            .action(&mut p, &Action { id, kind: 6, session_id: "claude:test".into(), ..Default::default() }, id, None)
+            .unwrap();
+        assert_eq!(r.status, 2);
+        assert!(matches!(d, Some(companion_core::authority::Dispatch::Desktop(_))));
+    }
+    let data = codec::encode(&Envelope {
+        major: 2,
+        connection_epoch: vec![1; 16],
+        authority_epoch: vec![2; 16],
+        payload: Some(Payload::SnapshotBegin(SnapshotBegin {
+            revision: a.model.revision,
+            view: Some(a.model.view.clone()),
+            ..Default::default()
+        })),
+    })
+    .unwrap();
+    assert!(codec::decode(&data, false).is_ok());
+}
+
+#[test]
+fn controller_keypad_browse_open_and_details_are_distinct() {
+    let (mut c, mut a, mut p) = setup();
+    a.action(&mut p, &Action { id: 1, kind: 13, anchor: Some(4), ..Default::default() }, 100, None).unwrap();
+    for e in sync::snapshot(&a.model, &[1; 16], &[2; 16]).unwrap() {
+        receive(&mut c, e.payload.unwrap(), 20000);
+    }
+    let _ = actions(&mut c);
+    c.keyboard(11, 20001).unwrap();
+    let browse = actions(&mut c);
+    assert!(browse.iter().all(|a| a.kind == 1));
+    assert!(!browse.is_empty());
+    c.keyboard(2, 20002).unwrap();
+    let next = actions(&mut c);
+    assert!(next.iter().any(|a| a.kind == 6));
+    assert!(!next.iter().any(|a| a.kind == 2 || a.kind == 7));
+    c.keyboard(3, 20003).unwrap();
+    let details = actions(&mut c);
+    assert!(details.iter().any(|a| a.kind == 13 && a.anchor == Some(12)));
+    let (_, dispatch) =
+        a.action(&mut p, &Action { id: 2, kind: 13, anchor: Some(12), ..Default::default() }, 101, None).unwrap();
+    assert!(dispatch.is_none());
+    assert!(a.model.view.controller_details);
+    assert_eq!(a.model.view.selected_session_id, "claude:test");
+}
+
+#[test]
+fn controller_sort_is_replicated_without_changing_selection_or_dispatching() {
+    let (mut c, mut a, mut p) = setup();
+    a.action(&mut p, &Action { id: 1, kind: 13, anchor: Some(4), ..Default::default() }, 100, None).unwrap();
+    let selected = a.model.view.selected_session_id.clone();
+    let (_, d) =
+        a.action(&mut p, &Action { id: 2, kind: 13, anchor: Some(20), ..Default::default() }, 101, None).unwrap();
+    assert!(d.is_none());
+    assert!(a.model.view.controller_status_order);
+    assert_eq!(a.model.view.selected_session_id, selected);
+    for e in sync::snapshot(&a.model, &[1; 16], &[2; 16]).unwrap() {
+        receive(&mut c, e.payload.unwrap(), 20000);
+    }
+    let _ = actions(&mut c);
+    assert!(c.view().controller_status_order);
+    c.keyboard(3, 20001).unwrap();
+    let details = actions(&mut c);
+    assert!(details.iter().any(|a| a.kind == 13 && a.anchor == Some(28)));
+    c.keyboard(5, 20002).unwrap();
+    let filter = actions(&mut c);
+    assert!(filter.iter().any(|a| a.kind == 13 && a.anchor == Some(21)));
+}
+
+#[test]
+fn display_stays_awake_for_sixty_minutes() {
+    let (mut c, _, _) = setup();
+    c.tick(600_000).unwrap();
+    assert!(!c.sleeping, "old ten-minute timeout must no longer apply");
+    c.tick(3_599_999).unwrap();
+    assert!(!c.sleeping);
+    c.tick(3_600_000).unwrap();
+    assert!(c.sleeping);
 }
