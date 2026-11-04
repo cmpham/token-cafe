@@ -27,6 +27,17 @@ mod oled;
 mod weekly;
 pub use weekly::diagnose;
 
+// The top two physical keys belong to the focused desktop app, independent
+// of the café's selected patron or whether any sessions have been collected.
+#[cfg(any(target_os = "macos", test))]
+fn pinned_direction(command: u8) -> Option<&'static str> {
+    match command {
+        1 => Some("up"),
+        2 => Some("down"),
+        _ => None,
+    }
+}
+
 #[cfg(any(target_os = "macos", test))]
 struct Local {
     client: Client,
@@ -65,6 +76,13 @@ impl Local {
         let e = sync::envelope(&self.client.connection, &self.client.authority, p);
         let raw = codec::encode(&e)?;
         self.client.receive(e, &raw, now)
+    }
+    fn keyboard(&mut self, command: u8, now: u64) -> Result<Option<&'static str>> {
+        if let Some(direction) = pinned_direction(command) {
+            return Ok(Some(direction));
+        }
+        self.client.keyboard(command, now)?;
+        Ok(None)
     }
     fn update(&mut self, store: &Store, now: u64) -> Result<()> {
         let model = &store.authority.model;
@@ -169,7 +187,9 @@ fn run(
         let start = Instant::now();
         let protocol = |e| format!("local keypad protocol: {e:?}");
         let mut local = Local::new(&shared.lock().unwrap().epoch, 0).map_err(protocol)?;
-        let mut pending: Option<(Action, mpsc::Receiver<bool>, Instant)> = None;
+        // None identifies host-only pinned navigation, which must never enter
+        // the shared client's legacy scroll/approval action stream.
+        let mut pending: Option<(Option<Action>, mpsc::Receiver<bool>, Instant)> = None;
         let mut display = None;
         let mut oled = oled::Oled::default();
         loop {
@@ -183,21 +203,34 @@ fn run(
                 && let Some(ok) =
                     rx.try_recv().ok().or_else(|| (at.elapsed() > Duration::from_secs(15)).then_some(false))
             {
-                let r = store.authority.finish(&mut local.peer, a, ok);
-                local.receive(Payload::ActionResult(r), now).map_err(protocol)?;
-                eprintln!("Keypad desktop action={} accepted={ok}", a.kind);
+                if let Some(a) = a {
+                    let r = store.authority.finish(&mut local.peer, a, ok);
+                    local.receive(Payload::ActionResult(r), now).map_err(protocol)?;
+                    eprintln!("Keypad desktop action={} accepted={ok}", a.kind);
+                } else {
+                    eprintln!("Keypad pinned navigation accepted={ok}");
+                }
                 pending = None;
             }
             for (cmd, at) in rx.try_iter().take(32) {
                 if at.elapsed() > Duration::from_millis(500) {
                     continue;
                 }
+                store.keypad_activity = store.keypad_activity.wrapping_add(1);
+                if let Some(direction) = local.keyboard(cmd, now).map_err(protocol)? {
+                    if pending.is_none() {
+                        let (tx, rx) = mpsc::channel();
+                        std::thread::spawn(move || {
+                            let _ = tx.send(super::keypad_desktop(&["pinned-focused", direction]));
+                        });
+                        pending = Some((None, rx, Instant::now()));
+                    }
+                    continue;
+                }
                 oled.input(&store.authority.model, now);
-                if matches!(cmd, 1 | 2 | 4 | 9 | 10 | 11) {
+                if matches!(cmd, 4 | 9 | 10 | 11) {
                     store.navigation_input();
                 }
-                store.keypad_activity = store.keypad_activity.wrapping_add(1);
-                local.client.keyboard(cmd, now).map_err(protocol)?;
             }
             let dispatches = local.drain(&mut store, now).map_err(protocol)?;
             for (a, d) in dispatches {
@@ -222,7 +255,7 @@ fn run(
                     };
                     let _ = tx.send(ok);
                 });
-                pending = Some((a, rx, Instant::now()));
+                pending = Some((Some(a), rx, Instant::now()));
             }
             let weekly = weekly.lock().unwrap();
             let rows = oled.rows(&store.authority.model, now, weekly.remaining(), weekly.dual_claude());
@@ -244,6 +277,37 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn top_keys_route_only_to_focused_pins() {
+        for selected in ["", "claude:elsewhere"] {
+            let mut store = Store::new([1; 16]);
+            if !selected.is_empty() {
+                store.authority.model.sessions.insert(
+                    selected.into(),
+                    Session {
+                        id: selected.into(),
+                        provider: 1,
+                        status: 2,
+                        title: "Unrelated café patron".into(),
+                        ..Default::default()
+                    },
+                );
+            }
+            store.authority.model.view.selected_session_id = selected.into();
+            let mut local = Local::new(&store.epoch, 0).unwrap();
+            local.update(&store, 0).unwrap();
+            local.drain(&mut store, 0).unwrap();
+            let before = store.authority.model.clone();
+            // Emits no scroll, selection, or approval action with either an
+            // empty café or an unrelated selected patron.
+            for (command, direction) in [(1, "up"), (2, "down")] {
+                assert_eq!(local.keyboard(command, 100).unwrap(), Some(direction));
+                assert!(local.drain(&mut store, 100).unwrap().is_empty());
+                assert_eq!(store.authority.model, before);
+                assert_eq!(local.client.view().selected_session_id, selected);
+            }
+        }
+    }
     #[test]
     fn voice_ignores_selection_and_session_navigation() {
         for selected in ["", "cli:unavailable"] {

@@ -327,11 +327,12 @@ rendered scene; update both app and firmware together for the new scrollbar area
 The keypad connects directly to the Mac over USB, with Bluetooth fallback; an optional board mirrors the Mac. The Mac owns session selection and actions.
 
 - **Knob:** browse only the eight visible patrons, in seat order. A single gold outline identifies the current patron across the app and matching board firmware; the OLED shows its name for five seconds after input. Press once to view details and focus the exact supported desktop session. Details return to the café after 30 seconds without navigation input. Desktop banner/Tab navigation still includes overflow sessions.
+- **Top up/down keys:** previous/next pinned session in the focused Claude or Codex app, wrapping in sidebar order. Keep its Pinned section expanded. Café selection is independent.
 - **Idle OLED:** active-session counts above remaining weekly allowances. Separate Claude CLI and Desktop accounts can show two unlabeled percentages, CLI above Desktop, even when their emails match. `--` means unavailable or stale. Quotas refresh every five minutes and expire after ten minutes; they are separate from monthly token estimates.
 - **Bottom-left mic:** start native recording in the currently focused Codex or Claude session, independently of the selected café patron. It preserves app focus and never submits text. macOS Accessibility permission is required; both apps have been physically verified to start with one press.
-- **Other keys:** scroll task pages, cycle character rosters, select details, toggle apps, or open Claude/Codex. Waiting prompts blink the OLED until acknowledged or resolved; keypad controls do not approve requests.
+- **Other keys:** cycle character rosters, select details, toggle apps, or open Claude/Codex. Waiting prompts blink the OLED until acknowledged or resolved; keypad controls do not approve requests.
 
-Build the macOS app with `sh tools/build_macos.sh`; it also packages the native keypad and recording helpers. Start one instance from the stable release bundle. Use `bash tools/run_companion.sh` for an already provisioned optional board. Renderer changes require matching board firmware; changes confined to Mac-side recording logic do not require board or keypad flashing.
+Build the macOS app with `sh tools/build_macos.sh`; it also packages the native keypad and recording helpers. Start one instance from the stable release bundle. Use `bash tools/run_companion.sh` for an already provisioned optional board. Renderer changes require matching board firmware; changes confined to Mac-side recording or pinned-session navigation do not require board or keypad flashing.
 
 Start with the [keypad setup and recovery guide](docs/pipar-keypad.md) for the layout, both connection architectures, known-good VIA settings, OLED firmware, serial flashing, permissions, and troubleshooting. The former keypad-to-board path is historical, not an automatic fallback.
 

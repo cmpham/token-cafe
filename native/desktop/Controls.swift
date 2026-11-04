@@ -86,7 +86,7 @@ func windowContext(_ nodes: [AXUIElement]) -> [String] {
 
 /// Some hosted web controls acknowledge AXPress without delivering a click.
 /// Click only the identified control, and reject overlays or stale geometry.
-func clickRecordingControl(_ control: AXUIElement, root: AXUIElement) -> Bool {
+func clickControl(_ control: AXUIElement, root: AXUIElement, validate: () -> Bool = { true }) -> Bool {
     guard let rawPosition = attribute(control, kAXPositionAttribute),
           let rawSize = attribute(control, kAXSizeAttribute),
           CFGetTypeID(rawPosition) == AXValueGetTypeID(), CFGetTypeID(rawSize) == AXValueGetTypeID() else { return false }
@@ -105,7 +105,7 @@ func clickRecordingControl(_ control: AXUIElement, root: AXUIElement) -> Bool {
         guard let parent = attribute(node, kAXParentAttribute), CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
         hit = unsafeBitCast(parent, to: AXUIElement.self)
     }
-    guard matches,
+    guard matches, validate(),
           let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
           let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { return false }
     down.post(tap: .cghidEventTap)

@@ -32,15 +32,15 @@ OLED at the top; eight keys plus one rotary encoder with a press switch:
 
 | Left | Middle | Right |
 | --- | --- | --- |
-| Scroll up | Scroll down | Knob: turn to browse; press to select |
+| Previous pinned session | Next pinned session | Knob: turn to browse; press to select |
 | Cycle whole café theme | Select, same as knob press | Toggle Claude / Codex |
 | Native recording | Claude app | Codex app |
 
-Turning the knob **browses only patrons assigned to the eight visible seats**, including on an approval/details page. It closes that page and moves in seat order, wrapping at either end. Sessions outside the café are skipped. The gold outline follows the selected seat even while its patron is walking. Press once to open the selected agent's details and focus that exact desktop session. After 30 seconds without navigation input, the app and board return to the café; selection is preserved. Scrolling, selection, knob turns and café keyboard/touch navigation reset the timer. Sessions without a supported desktop link still open details. The two top keys scroll the current task/details page. The theme key cycles humans → dragons → Pokémon → mixed. Fixed app shortcuts preserve the selected agent; Voice starts native recording in the currently focused Codex or Claude window/session, independently of the selected patron, including when none is selected. It never opens a session or changes app focus. Switching apps, windows, or the exposed session context while the helper is waiting cancels the request. Toggle opens Codex when Claude is foreground, otherwise Claude.
+Turning the knob **browses only patrons assigned to the eight visible seats**, including on an approval/details page. It closes that page and moves in seat order, wrapping at either end. Sessions outside the café are skipped. The gold outline follows the selected seat even while its patron is walking. Press once to open the selected agent's details and focus that exact desktop session. After 30 seconds without navigation input, the app and board return to the café; selection is preserved. Scrolling, selection, knob turns and café keyboard/touch navigation reset the timer. Sessions without a supported desktop link still open details. The two top keys move up/down through the expanded **Pinned** sidebar section of the currently focused Claude or Codex app, in sidebar order, wrapping at either end. From an unpinned session, down starts at the first pin and up at the last. All Claude session rows participate even when saved Code metadata is missing or stale. The helper uses current-page identity and a hashed, validated navigation cursor to retain position; changing sessions manually invalidates that cursor. Keep the sidebar and Pinned section visible. A missing/ambiguous list or another focused app does nothing. This is independent of café selection and does not scroll task details or reset the café details timer. The theme key cycles humans → dragons → Pokémon → mixed. Fixed app shortcuts preserve the selected agent; Voice starts native recording in the currently focused Codex or Claude window/session, independently of the selected patron, including when none is selected. It never opens a session or changes app focus. Switching apps, windows, or the exposed session context while the helper is waiting cancels the request. Toggle opens Codex when Claude is foreground, otherwise Claude.
 
 Codex recording targets the session composer's **Dictate** button; Claude uses its native recording control. Control+Shift+V and “Start Voice” can target Codex's pet/global conversation and are deliberately not fallbacks. Neither path submits text.
 
-The helper lets the accessibility tree settle and compares canonical session context so empty or reordered nodes cannot cancel the first press. Both apps receive a click on their uniquely identified recording control after a hit-test rejects overlays. A failed hit-test sends no click and is retried within the same request; a posted click is never retried. Codex confirms the appearance of **Stop dictation**; Claude reports that its click was sent. The user physically confirmed one-press recording in both apps after reloading the Mac app and keypad bridge. No firmware update was needed.
+The helper lets the accessibility tree settle and compares canonical session context so empty or reordered nodes cannot cancel the first press. Both apps receive a click on their uniquely identified recording control after a hit-test rejects overlays. A failed hit-test sends no click and is retried within the same request; a posted click is never retried. Codex confirms the appearance of **Stop dictation**; Claude reports that its click was sent. The user physically confirmed one-press recording in both apps after reloading the Mac app and keypad bridge. No firmware update was needed. The top-row pinned-session mapping is also host-side: the existing command bytes and VIA bindings stay unchanged; rebuild/restart the Mac app and keypad bridge.
 
 ## Known-good VIA bindings: avoid recalibration
 
@@ -48,8 +48,8 @@ The tracked [keymap-reference.json](../firmware/keypad/keymap-reference.json) re
 
 | Position (row,column) | VIA/QMK code, layer 0 | Token Café command |
 | --- | --- | --- |
-| Top left (0,0) | `0x0029` Esc | 1: scroll up |
-| Top middle (0,1) | `0x002c` Space | 2: scroll down |
+| Top left (0,0) | `0x0029` Esc | 1: previous focused-app pin |
+| Top middle (0,1) | `0x002c` Space | 2: next focused-app pin |
 | Knob press (0,2) | `0x0068` F13 | 9: select |
 | Middle left (1,0) | `0x002a` Backspace | 3: theme |
 | Middle middle (1,1) | `0x0052` Up | 4: select |

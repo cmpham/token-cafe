@@ -8,22 +8,31 @@ if args.count == 2 && args[1] == "toggle" {
     guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: target) else { fail("Desktop app unavailable") }
     exit(NSWorkspace.shared.open(url) ? 0 : 1)
 }
-guard args.count == 2, args[1] == "voice-focused" else { fail("Invalid command") }
+let pins = args.count == 3 && args[1] == "pinned-focused" && ["up", "down"].contains(args[2])
+guard pins || (args.count == 2 && args[1] == "voice-focused") else { fail("Invalid command") }
 guard let app = NSWorkspace.shared.frontmostApplication,
       let bundle = app.bundleIdentifier, supportsRecording(bundle) else {
-    fail("Focus Codex or Claude to start native voice")
+    fail("Focus Codex or Claude to use this keypad action")
 }
 let trustOptions = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-guard AXIsProcessTrustedWithOptions(trustOptions) else { fail("Enable Accessibility for Token Café to start native voice") }
+guard AXIsProcessTrustedWithOptions(trustOptions) else { fail("Enable Accessibility for Token Café desktop controls") }
 let root = AXUIElementCreateApplication(app.processIdentifier)
 AXUIElementSetMessagingTimeout(root, 0.5)
 guard let window = focusedWindow(root) else { fail("No focused window") }
 // Expose Electron controls without opening a link or activating another app.
 let result = AXUIElementSetAttributeValue(root, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-fputs("Keypad voice: accessibility=\(result.rawValue) provider=\(bundle == codexBundle ? "codex" : "claude")\n", stderr)
+fputs("Keypad \(pins ? "pins" : "voice"): accessibility=\(result.rawValue) provider=\(bundle == codexBundle ? "codex" : "claude")\n", stderr)
 pauseForAppUpdate()
 guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
       let current = focusedWindow(root), CFEqual(current, window) else { fail("Focus changed") }
+if pins {
+    do {
+        try navigatePinned(window: window, root: root, app: app, bundle: bundle, forward: args[2] == "down")
+        exit(0)
+    } catch {
+        fail("Pinned navigation not confirmed (show the Pinned sidebar section and keep the app focused)")
+    }
+}
 // The hosted accessibility tree may still be hydrating after AX enablement.
 // Wait for a stable tree in this same window before binding its session context.
 let initialWindowContext = windowContext([window])
@@ -70,7 +79,7 @@ while Date() < deadline {
             guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
                   let current = focusedWindow(root), CFEqual(current, window),
                   windowContext(walk(window)) == originalContext else { fail("Focus changed") }
-            let activated = clickRecordingControl(buttons[0], root: root)
+            let activated = clickControl(buttons[0], root: root)
             if !activated {
                 // A failed hit-test posts no events, so refreshing stale geometry
                 // is safe. Keep handling this one physical press until ready.
